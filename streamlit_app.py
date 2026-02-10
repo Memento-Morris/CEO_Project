@@ -325,14 +325,19 @@ st.markdown("""
     }
     
     .stCheckbox > label {
-        color: #333333 !important;
+        color: #000000 !important;
         font-size: 14px !important;
-        font-weight: 500 !important;
+        font-weight: 600 !important;
     }
     
     .stCheckbox > label > div[data-testid="stMarkdownContainer"] > p {
-        color: #333333 !important;
+        color: #000000 !important;
         font-size: 14px !important;
+        font-weight: 600 !important;
+    }
+    
+    .stCheckbox > label span {
+        color: #000000 !important;
     }
     
     /* Checkbox input styling */
@@ -445,6 +450,19 @@ st.markdown("""
     /* Hide default streamlit elements */
     div[data-testid="stDecoration"] {
         display: none;
+    }
+    
+    /* Hide navigation button */
+    button[aria-label="Go to Messages"],
+    button[title="Go to Messages"] {
+        position: absolute;
+        opacity: 0;
+        height: 0;
+        width: 0;
+        padding: 0;
+        margin: 0;
+        border: none;
+        overflow: hidden;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -695,15 +713,7 @@ def show_bottom_nav(active="messages"):
     
     menu_icon = '''<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>'''
     
-    # Add scroll to top script
-    scroll_script = '''
-    <script>
-    window.parent.document.querySelector('section.main').scrollTo(0, 0);
-    </script>
-    '''
-    
     nav_html = f"""
-    {scroll_script}
     <div class="bottom-nav">
         <div class="nav-item {'active' if active == 'home' else ''}" onclick="return false;">
             <div class="nav-icon">{home_icon}</div>
@@ -713,7 +723,7 @@ def show_bottom_nav(active="messages"):
             <div class="nav-icon">{card_icon}</div>
             <div class="nav-label">Bank</div>
         </div>
-        <div class="nav-item {'active' if active == 'messages' else ''}" onclick="return false;">
+        <div class="nav-item {'active' if active == 'messages' else ''}" id="nav-messages-item">
             <div class="nav-icon" style="position: relative;">
                 {message_icon}
                 {unread_badge}
@@ -731,6 +741,45 @@ def show_bottom_nav(active="messages"):
     </div>
     """
     st.markdown(nav_html, unsafe_allow_html=True)
+    
+    # Add hidden button for messages navigation (only if not on messages page)
+    if active != "messages":
+        if st.button("", key=f"nav_to_messages_{active}", help="Go to Messages"):
+            st.session_state.page = 0
+            st.session_state.message_check_count = 0
+            # Scroll to top
+            st.markdown("""
+            <script>
+            setTimeout(function() {
+                window.parent.document.querySelector('section.main').scrollTo({top: 0, behavior: 'smooth'});
+                document.querySelector('section.main').scrollTo({top: 0, behavior: 'smooth'});
+            }, 100);
+            </script>
+            """, unsafe_allow_html=True)
+            st.rerun()
+    
+    # Add JavaScript to handle click on messages nav item
+    st.markdown(f"""
+    <script>
+    document.getElementById('nav-messages-item').addEventListener('click', function() {{
+        // Find and click the hidden button
+        const buttons = window.parent.document.querySelectorAll('button');
+        buttons.forEach(btn => {{
+            if (btn.getAttribute('aria-label') === 'Go to Messages' || btn.title === 'Go to Messages') {{
+                btn.click();
+            }}
+        }});
+        
+        // Also try in current document
+        const localButtons = document.querySelectorAll('button');
+        localButtons.forEach(btn => {{
+            if (btn.getAttribute('aria-label') === 'Go to Messages' || btn.title === 'Go to Messages') {{
+                btn.click();
+            }}
+        }});
+    }});
+    </script>
+    """, unsafe_allow_html=True)
 
 # Page 0: Message Screen
 def show_message_screen():
@@ -800,6 +849,15 @@ def show_message_screen():
     if st.button("View BufferShield Offer", key="msg1_btn", use_container_width=True):
         st.session_state.unread_count = max(0, st.session_state.unread_count - 1)
         st.session_state.page = 1
+        st.markdown("""
+        <script>
+        setTimeout(function() {
+            window.scrollTo({top: 0, behavior: 'instant'});
+            window.parent.document.querySelector('section.main').scrollTo({top: 0, behavior: 'instant'});
+            document.querySelector('section.main').scrollTo({top: 0, behavior: 'instant'});
+        }, 50);
+        </script>
+        """, unsafe_allow_html=True)
         st.rerun()
     
     # Show older messages
@@ -895,6 +953,15 @@ def show_page_1():
     
     if st.button("Continue", key="continue1", use_container_width=True):
         st.session_state.page = 2
+        st.markdown("""
+        <script>
+        setTimeout(function() {
+            window.scrollTo({top: 0, behavior: 'instant'});
+            window.parent.document.querySelector('section.main').scrollTo({top: 0, behavior: 'instant'});
+            document.querySelector('section.main').scrollTo({top: 0, behavior: 'instant'});
+        }, 50);
+        </script>
+        """, unsafe_allow_html=True)
         st.rerun()
     
     if st.button("← Back", key="back1"):
@@ -1014,6 +1081,15 @@ def show_page_2():
     
     if st.button("Continue", key="continue2", use_container_width=True):
         st.session_state.page = 3
+        st.markdown("""
+        <script>
+        setTimeout(function() {
+            window.scrollTo({top: 0, behavior: 'instant'});
+            window.parent.document.querySelector('section.main').scrollTo({top: 0, behavior: 'instant'});
+            document.querySelector('section.main').scrollTo({top: 0, behavior: 'instant'});
+        }, 50);
+        </script>
+        """, unsafe_allow_html=True)
         st.rerun()
     
     if st.button("← Back", key="back2"):
@@ -1091,6 +1167,15 @@ def show_page_3():
     
     if st.button("Review & Confirm", key="continue3", use_container_width=True):
         st.session_state.page = 4
+        st.markdown("""
+        <script>
+        setTimeout(function() {
+            window.scrollTo({top: 0, behavior: 'instant'});
+            window.parent.document.querySelector('section.main').scrollTo({top: 0, behavior: 'instant'});
+            document.querySelector('section.main').scrollTo({top: 0, behavior: 'instant'});
+        }, 50);
+        </script>
+        """, unsafe_allow_html=True)
         st.rerun()
     
     if st.button("← Back", key="back3"):
