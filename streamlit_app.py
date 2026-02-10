@@ -425,8 +425,8 @@ def add_notification():
     import random
     current_time = time.time()
     
-    # Check if 25 seconds have passed
-    if current_time - st.session_state.last_notification_time >= 25:
+    # Check if 5 seconds have passed
+    if current_time - st.session_state.last_notification_time >= 5:
         # Select a random notification template
         template = random.choice(notification_templates)
         
@@ -591,8 +591,8 @@ def show_notification_screen():
             </div>
             """, unsafe_allow_html=True)
     
-    # Auto-refresh every 5 seconds to check for new notifications
-    time.sleep(5)
+    # Auto-refresh every 2 seconds to check for new notifications
+    time.sleep(2)
     st.rerun()
 
 # Page 1: Amount Selection
@@ -833,12 +833,23 @@ def show_page_3():
     st.markdown('<p class="teal-heading">Fee Transparency</p>', unsafe_allow_html=True)
     st.markdown(f"""
     <div class="info-card">
-        <p class="grey-text" style="margin: 0; line-height: 1.6;">
-        Current BufferShield rate: {user_data['interest_rate']}% p.a.<br>
-        Standard overdraft rate: {user_data['standard_rate']}% p.a.<br>
-        Activation fee: R0.00<br>
-        Monthly fee: R0.00<br><br>
-        <strong style="color: #333333;">No hidden costs. Ever.</strong></p>
+        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+            <span class="grey-text">Current BufferShield rate:</span>
+            <span style="color: #333333; font-weight: 600;">{user_data['interest_rate']}% p.a.</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+            <span class="grey-text">Standard overdraft rate:</span>
+            <span style="color: #333333; font-weight: 600;">{user_data['standard_rate']}% p.a.</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+            <span class="grey-text">Activation fee:</span>
+            <span style="color: #333333; font-weight: 600;">R0.00</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
+            <span class="grey-text">Monthly fee:</span>
+            <span style="color: #333333; font-weight: 600;">R0.00</span>
+        </div>
+        <p style="margin: 0; padding-top: 12px; border-top: 1px solid #D0E8F0; color: #333333; font-weight: 600; text-align: center;">No hidden costs. Ever.</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -924,9 +935,16 @@ def show_page_4():
     # Auto-repay
     st.markdown(f"""
     <div class="info-card">
-        <p class="teal-text" style="margin: 0 0 8px 0; font-size: 15px;">Auto-Repay</p>
-        <p class="grey-text" style="margin: 0 0 3px 0;">Date: {user_data['inflow_date'].strftime('%d %B %Y')}</p>
-        <p class="grey-text" style="margin: 0;">Amount: R{cost_details['total']:.2f} from predicted inflow</p>
+        <p class="teal-text" style="margin: 0 0 12px 0; font-size: 15px;">Auto-Repay</p>
+        <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+            <span class="grey-text">Date:</span>
+            <span style="color: #333333; font-weight: 600;">{user_data['inflow_date'].strftime('%d %B %Y')}</span>
+        </div>
+        <div style="display: flex; justify-content: space-between;">
+            <span class="grey-text">Amount:</span>
+            <span style="color: #333333; font-weight: 600;">R{cost_details['total']:.2f}</span>
+        </div>
+        <p class="compact" style="margin: 10px 0 0 0; color: #00A9CE;">Deducted from predicted inflow</p>
     </div>
     """, unsafe_allow_html=True)
     
