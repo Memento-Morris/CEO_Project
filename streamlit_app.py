@@ -1,5 +1,6 @@
 import streamlit as st
 import datetime
+import time
 
 # Page config
 st.set_page_config(
@@ -42,19 +43,20 @@ st.markdown("""
         padding: 25px 20px;
         margin: -1rem -1rem 2rem -1rem;
         border-bottom: 1px solid #E0E0E0;
+        text-align: center;
     }
     
     .fnb-header h1 {
         color: #333333;
         margin: 0;
-        font-size: 24px;
+        font-size: 32px;
         font-weight: 600;
     }
     
     .fnb-header p {
         color: #666666;
         margin: 5px 0 0 0;
-        font-size: 14px;
+        font-size: 16px;
     }
     
     /* White card styling with rounded edges and shadow */
@@ -91,12 +93,30 @@ st.markdown("""
         margin: 25px 0 15px 0;
     }
     
+    /* Centered section header */
+    .centered-header {
+        color: #333333;
+        font-size: 24px;
+        font-weight: 600;
+        margin: 25px 0 15px 0;
+        text-align: center;
+    }
+    
     /* Teal subheadings */
     .teal-heading {
         color: #00A9CE;
         font-size: 16px;
         font-weight: 600;
         margin: 20px 0 10px 0;
+    }
+    
+    /* Centered teal subheading */
+    .centered-teal-heading {
+        color: #00A9CE;
+        font-size: 18px;
+        font-weight: 600;
+        margin: 20px 0 10px 0;
+        text-align: center;
     }
     
     /* Text colors */
@@ -309,13 +329,20 @@ if 'selected_amount' not in st.session_state:
     st.session_state.selected_amount = 1250
 if 'selected_days' not in st.session_state:
     st.session_state.selected_days = 7
+if 'last_notification_time' not in st.session_state:
+    st.session_state.last_notification_time = time.time()
+if 'notifications' not in st.session_state:
+    st.session_state.notifications = []
 
-# User data
+# Get today's actual date
+current_date = datetime.date.today()
+
+# User data - dates calculated relative to today
 user_data = {
     "name": "John Doe",
     "account_number": "****7823",
     "current_balance": 450.00,
-    "inflow_date": datetime.date(2026, 2, 16),
+    "inflow_date": current_date + datetime.timedelta(days=7),  # 7 days from today
     "predicted_inflow": 18500,
     "buffer_limit": 2000,
     "buffer_available": 2000,
@@ -326,15 +353,112 @@ user_data = {
     "grace_days": 3,
     "activation_fee_standard": 35,
     "debit_order_amount": 1250.00,
-    "debit_order_date": datetime.date(2026, 2, 11),
+    "debit_order_date": current_date + datetime.timedelta(days=2),  # 2 days from today
     "debit_order_recipient": "DStv",
     "flagged_reason": "Upcoming debit order",
     "predicted_shortfall": 800.00
 }
 
-current_date = datetime.date(2026, 2, 9)
+# Notification templates
+notification_templates = [
+    {
+        "type": "action",
+        "title": "Action Required: Upcoming Debit Order",
+        "subtitle": "{} • R{:,.2f} on {}",
+        "detail": "Predicted shortfall detected. BufferShield available.",
+        "border_color": "#E31E24"
+    },
+    {
+        "type": "suggestion",
+        "title": "Suggested: Reschedule Debit Order",
+        "subtitle": "{} debit order",
+        "detail": "Move to after your next inflow for better cashflow",
+        "border_color": "#E0E0E0"
+    },
+    {
+        "type": "insight",
+        "title": "Cashflow Insight",
+        "subtitle": "Your spending pattern detected",
+        "detail": "R2,450 spent on groceries this month vs R2,100 last month",
+        "border_color": "#E0E0E0"
+    },
+    {
+        "type": "alert",
+        "title": "Low Balance Alert",
+        "subtitle": "Account balance below R500",
+        "detail": "Consider activating BufferShield for upcoming expenses",
+        "border_color": "#FF9900"
+    },
+    {
+        "type": "tip",
+        "title": "Savings Tip",
+        "subtitle": "Round-up feature available",
+        "detail": "Save R127.50 extra this month with automatic round-ups",
+        "border_color": "#E0E0E0"
+    },
+    {
+        "type": "reminder",
+        "title": "Payment Reminder",
+        "subtitle": "Electricity prepaid running low",
+        "detail": "Current balance: 45 units. Top up recommended.",
+        "border_color": "#00A9CE"
+    },
+    {
+        "type": "achievement",
+        "title": "Milestone Reached!",
+        "subtitle": "You've saved R5,000 this quarter",
+        "detail": "Keep up the great work with your savings goals",
+        "border_color": "#00A651"
+    },
+    {
+        "type": "security",
+        "title": "Security Notice",
+        "subtitle": "New login detected",
+        "detail": "Device: iPhone 14 • Location: Benoni, GP • Just now",
+        "border_color": "#00A9CE"
+    }
+]
 
 # Helper functions
+def add_notification():
+    """Add a new notification from templates"""
+    import random
+    current_time = time.time()
+    
+    # Check if 25 seconds have passed
+    if current_time - st.session_state.last_notification_time >= 25:
+        # Select a random notification template
+        template = random.choice(notification_templates)
+        
+        # Format the notification
+        if template["type"] == "action":
+            subtitle = template["subtitle"].format(
+                user_data['debit_order_recipient'],
+                user_data['debit_order_amount'],
+                user_data['debit_order_date'].strftime('%d %b')
+            )
+        elif template["type"] == "suggestion":
+            subtitle = template["subtitle"].format(user_data['debit_order_recipient'])
+        else:
+            subtitle = template["subtitle"]
+        
+        notification = {
+            "title": template["title"],
+            "subtitle": subtitle,
+            "detail": template["detail"],
+            "border_color": template["border_color"],
+            "timestamp": datetime.datetime.now(),
+            "category": "Today"
+        }
+        
+        # Add to the beginning of notifications list
+        st.session_state.notifications.insert(0, notification)
+        st.session_state.last_notification_time = current_time
+        
+        # Keep only last 10 notifications
+        if len(st.session_state.notifications) > 10:
+            st.session_state.notifications = st.session_state.notifications[:10]
+
 def calculate_interest(amount, days, rate):
     """Calculate simple interest"""
     return amount * (rate / 100) * (days / 365)
@@ -396,6 +520,9 @@ def show_progress_dots(current_step, total_steps=4):
 
 # Page 0: Notification Screen
 def show_notification_screen():
+    # Add new notification if 25 seconds have passed
+    add_notification()
+    
     st.markdown("""
     <div class="fnb-header">
         <h1>Notifications</h1>
@@ -403,9 +530,28 @@ def show_notification_screen():
     </div>
     """, unsafe_allow_html=True)
     
+    # Show dynamic notifications
+    if st.session_state.notifications:
+        st.markdown('<p class="section-header">Recent</p>', unsafe_allow_html=True)
+        
+        for notif in st.session_state.notifications[:3]:  # Show top 3
+            st.markdown(f"""
+            <div class="notification-card" style="border-left: 3px solid {notif['border_color']};">
+                <div style="display: flex; justify-content: space-between; align-items: start;">
+                    <div style="flex: 1;">
+                        <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">{notif['title']}</p>
+                        <p class="grey-text" style="margin: 5px 0 0 0;">{notif['subtitle']}</p>
+                        <p class="compact" style="margin: 5px 0 0 0;">{notif['detail']}</p>
+                        <p class="compact" style="margin: 5px 0 0 0; color: #999999;">{notif['timestamp'].strftime('%H:%M:%S')}</p>
+                    </div>
+                    <span style="color: #00A9CE; font-size: 18px;">→</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+    
     st.markdown('<p class="section-header">Today</p>', unsafe_allow_html=True)
     
-    # Notification 1: Action Required
+    # Primary action notification - always visible
     st.markdown("""
     <div class="notification-card" style="border-left: 3px solid #E31E24;">
         <div style="display: flex; justify-content: space-between; align-items: start;">
@@ -427,33 +573,27 @@ def show_notification_screen():
         st.session_state.page = 1
         st.rerun()
     
-    # Notification 2: Suggestion
-    st.markdown("""
-    <div class="notification-card" style="margin-top: 15px;">
-        <div style="display: flex; justify-content: space-between; align-items: start;">
-            <div style="flex: 1;">
-                <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">Suggested: Reschedule Debit Order</p>
-                <p class="grey-text" style="margin: 5px 0 0 0;">{} debit order</p>
-                <p class="compact" style="margin: 5px 0 0 0;">Move to after your next inflow for better cashflow</p>
+    # Show older notifications if any
+    if st.session_state.notifications and len(st.session_state.notifications) > 3:
+        st.markdown('<p class="section-header" style="margin-top: 30px;">Earlier</p>', unsafe_allow_html=True)
+        
+        for notif in st.session_state.notifications[3:6]:  # Show next 3
+            st.markdown(f"""
+            <div class="notification-card">
+                <div style="display: flex; justify-content: space-between; align-items: start;">
+                    <div style="flex: 1;">
+                        <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">{notif['title']}</p>
+                        <p class="grey-text" style="margin: 5px 0 0 0;">{notif['subtitle']}</p>
+                        <p class="compact" style="margin: 5px 0 0 0;">{notif['detail']}</p>
+                        <p class="compact" style="margin: 5px 0 0 0; color: #999999;">{notif['timestamp'].strftime('%H:%M:%S')}</p>
+                    </div>
+                </div>
             </div>
-        </div>
-    </div>
-    """.format(user_data['debit_order_recipient']), unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
     
-    st.markdown('<p class="section-header" style="margin-top: 30px;">Yesterday</p>', unsafe_allow_html=True)
-    
-    # Notification 3: Insight
-    st.markdown("""
-    <div class="notification-card">
-        <div style="display: flex; justify-content: space-between; align-items: start;">
-            <div style="flex: 1;">
-                <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">Cashflow Insight</p>
-                <p class="grey-text" style="margin: 5px 0 0 0;">Your spending pattern detected</p>
-                <p class="compact" style="margin: 5px 0 0 0;">R2,450 spent on groceries this month vs R2,100 last month</p>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Auto-refresh every 5 seconds to check for new notifications
+    time.sleep(5)
+    st.rerun()
 
 # Page 1: Amount Selection
 def show_page_1():
@@ -474,7 +614,7 @@ def show_page_1():
     """, unsafe_allow_html=True)
     
     # Why you qualify
-    st.markdown('<p class="section-header">Why you qualify</p>', unsafe_allow_html=True)
+    st.markdown('<p class="centered-teal-heading">Why you qualify</p>', unsafe_allow_html=True)
     
     st.markdown(f"""
     <div class="fnb-card">
@@ -483,7 +623,7 @@ def show_page_1():
     </div>
     """, unsafe_allow_html=True)
     
-    st.markdown('<p class="section-header">Bridging amount needed?</p>', unsafe_allow_html=True)
+    st.markdown('<p class="centered-teal-heading">Bridging amount needed?</p>', unsafe_allow_html=True)
     
     # Amount display
     st.markdown(f'<div class="amount-display"><span class="currency">R</span>{st.session_state.selected_amount:,}</div>', unsafe_allow_html=True)
@@ -538,9 +678,9 @@ def show_page_2():
     
     show_progress_dots(2, 4)
     
-    st.markdown("### Expected inflow date?")
-    st.markdown(f"**Bridging amount:** R{st.session_state.selected_amount:,}")
-    st.markdown('<p class="grey-text">When do you expect to receive money? (affects interest)</p>', unsafe_allow_html=True)
+    st.markdown('<p class="centered-header">Expected inflow date?</p>', unsafe_allow_html=True)
+    st.markdown('<p style="text-align: center; color: #333333; font-weight: 600; margin: 10px 0;">Bridging amount: R{:,}</p>'.format(st.session_state.selected_amount), unsafe_allow_html=True)
+    st.markdown('<p class="grey-text" style="text-align: center; margin: 5px 0 20px 0;">Select when you expect to receive funds - this affects your interest cost</p>', unsafe_allow_html=True)
     
     # Period selection
     periods = [
@@ -657,8 +797,8 @@ def show_page_3():
     
     show_progress_dots(3, 4)
     
-    st.markdown('<p class="section-header">What if things go wrong?</p>', unsafe_allow_html=True)
-    st.markdown('<p class="grey-text">We\'ve got you covered with transparent processes</p>', unsafe_allow_html=True)
+    st.markdown('<p class="centered-header">What if things go wrong?</p>', unsafe_allow_html=True)
+    st.markdown('<p class="grey-text" style="text-align: center; margin: 5px 0 20px 0;">We\'ve got you covered with transparent processes</p>', unsafe_allow_html=True)
     
     # Grace Period
     st.markdown('<p class="teal-heading">Grace Period</p>', unsafe_allow_html=True)
