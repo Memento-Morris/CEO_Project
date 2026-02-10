@@ -95,12 +95,9 @@ st.markdown("""
         margin: 0;
     }
     
-    /* Unread badge */
+    /* Unread badge - orange circle */
     .unread-badge {
-        position: absolute;
-        top: 18px;
-        right: 18px;
-        background: #E31E24;
+        background: #FF9900;
         color: white;
         width: 22px;
         height: 22px;
@@ -110,6 +107,7 @@ st.markdown("""
         justify-content: center;
         font-size: 11px;
         font-weight: 700;
+        flex-shrink: 0;
     }
     
     /* Section headers - OUTSIDE cards */
@@ -697,7 +695,15 @@ def show_bottom_nav(active="messages"):
     
     menu_icon = '''<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>'''
     
+    # Add scroll to top script
+    scroll_script = '''
+    <script>
+    window.parent.document.querySelector('section.main').scrollTo(0, 0);
+    </script>
+    '''
+    
     nav_html = f"""
+    {scroll_script}
     <div class="bottom-nav">
         <div class="nav-item {'active' if active == 'home' else ''}" onclick="return false;">
             <div class="nav-icon">{home_icon}</div>
@@ -751,17 +757,17 @@ def show_message_screen():
             
             st.markdown(f"""
             <div class="message-card" style="border-left: 3px solid {msg['border_color']};">
-                {unread_badge}
                 <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px;">
+                    <div style="flex-shrink: 0;">
+                        {msg_icon}
+                    </div>
                     <div style="flex: 1;">
                         <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">{msg['title']}</p>
                         <p class="grey-text" style="margin: 5px 0 0 0;">{msg['subtitle']}</p>
                         <p class="compact" style="margin: 5px 0 0 0;">{msg['detail']}</p>
                         <p class="compact" style="margin: 5px 0 0 0; color: #999999;">{msg['timestamp'].strftime('%H:%M:%S')}</p>
                     </div>
-                    <div style="flex-shrink: 0;">
-                        {msg_icon}
-                    </div>
+                    {unread_badge}
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -777,16 +783,16 @@ def show_message_screen():
     
     st.markdown(f"""
     <div class="message-card" style="border-left: 3px solid #E31E24;">
-        {unread_badge_main}
         <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px;">
+            <div style="flex-shrink: 0;">
+                {action_icon}
+            </div>
             <div style="flex: 1;">
                 <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">Action Required: Upcoming Debit Order</p>
                 <p class="grey-text" style="margin: 5px 0 0 0;">{user_data['debit_order_recipient']} • R{user_data['debit_order_amount']:,.2f} on {user_data['debit_order_date'].strftime('%d %b')}</p>
                 <p class="compact" style="margin: 5px 0 0 0;">Predicted shortfall detected. BufferShield available.</p>
             </div>
-            <div style="flex-shrink: 0;">
-                {action_icon}
-            </div>
+            {unread_badge_main}
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -806,14 +812,14 @@ def show_message_screen():
             st.markdown(f"""
             <div class="message-card">
                 <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px;">
+                    <div style="flex-shrink: 0;">
+                        {msg_icon}
+                    </div>
                     <div style="flex: 1;">
                         <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">{msg['title']}</p>
                         <p class="grey-text" style="margin: 5px 0 0 0;">{msg['subtitle']}</p>
                         <p class="compact" style="margin: 5px 0 0 0;">{msg['detail']}</p>
                         <p class="compact" style="margin: 5px 0 0 0; color: #999999;">{msg['timestamp'].strftime('%H:%M:%S')}</p>
-                    </div>
-                    <div style="flex-shrink: 0;">
-                        {msg_icon}
                     </div>
                 </div>
             </div>
