@@ -746,26 +746,26 @@ def show_bottom_nav(active="messages"):
     
     nav_html = f"""
     <div class="bottom-nav">
-        <div class="nav-item {'active' if active == 'home' else ''}" onclick="return false;">
+        <div class="nav-item {'active' if active == 'home' else ''}">
             <div class="nav-icon">{home_icon}</div>
             <div class="nav-label">Home</div>
         </div>
-        <div class="nav-item {'active' if active == 'bank' else ''}" onclick="return false;">
+        <div class="nav-item {'active' if active == 'bank' else ''}">
             <div class="nav-icon">{card_icon}</div>
             <div class="nav-label">Bank</div>
         </div>
-        <div class="nav-item {'active' if active == 'messages' else ''}" id="nav-messages-item">
+        <div class="nav-item {'active' if active == 'messages' else ''}" id="nav-messages-btn">
             <div class="nav-icon" style="position: relative;">
                 {message_icon}
                 {unread_badge}
             </div>
             <div class="nav-label">Messages</div>
         </div>
-        <div class="nav-item {'active' if active == 'profile' else ''}" onclick="return false;">
+        <div class="nav-item {'active' if active == 'profile' else ''}">
             <div class="nav-icon">{profile_icon}</div>
             <div class="nav-label">My Profile</div>
         </div>
-        <div class="nav-item {'active' if active == 'menu' else ''}" onclick="return false;">
+        <div class="nav-item {'active' if active == 'menu' else ''}">
             <div class="nav-icon">{menu_icon}</div>
             <div class="nav-label">Menu</div>
         </div>
@@ -773,36 +773,16 @@ def show_bottom_nav(active="messages"):
     """
     st.markdown(nav_html, unsafe_allow_html=True)
     
-    # Add hidden button for messages navigation (only if not on messages page)
+    # Only add clickable navigation if not already on messages page
     if active != "messages":
-        if st.button("", key=f"nav_to_messages_{active}", help="Go to Messages"):
-            st.session_state.page = 0
-            st.session_state.message_check_count = 0
-            scroll_to_top()
-            st.rerun()
-    
-    # Add JavaScript to handle click on messages nav item
-    st.markdown(f"""
-    <script>
-    document.getElementById('nav-messages-item').addEventListener('click', function() {{
-        // Find and click the hidden button
-        const buttons = window.parent.document.querySelectorAll('button');
-        buttons.forEach(btn => {{
-            if (btn.getAttribute('aria-label') === 'Go to Messages' || btn.title === 'Go to Messages') {{
-                btn.click();
-            }}
-        }});
-        
-        // Also try in current document
-        const localButtons = document.querySelectorAll('button');
-        localButtons.forEach(btn => {{
-            if (btn.getAttribute('aria-label') === 'Go to Messages' || btn.title === 'Go to Messages') {{
-                btn.click();
-            }}
-        }});
-    }});
-    </script>
-    """, unsafe_allow_html=True)
+        # Create invisible container for the button
+        cols = st.columns([1, 1, 1, 1, 1])
+        with cols[2]:  # Messages is the 3rd column
+            if st.button("📧", key=f"goto_messages_{active}", help="Go to Messages", label_visibility="hidden"):
+                st.session_state.page = 0
+                st.session_state.message_check_count = 0
+                scroll_to_top()
+                st.rerun()
 
 # Page 0: Message Screen
 def show_message_screen():
