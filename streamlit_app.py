@@ -1,4 +1,4 @@
-import streamlit as st
+why doesntit go to the top of the page when i press next or go back.import streamlit as st
 import datetime
 import time
 import math
@@ -697,37 +697,6 @@ def show_progress_dots(current_step, total_steps=4):
     dots_html += '</div>'
     st.markdown(dots_html, unsafe_allow_html=True)
 
-def scroll_to_top():
-    """Force scroll to top of page"""
-    st.markdown("""
-    <script>
-    function scrollToTop() {
-        // Multiple approaches to ensure scrolling works
-        window.parent.document.querySelector('section.main').scrollTop = 0;
-        document.querySelector('section.main').scrollTop = 0;
-        window.scrollTo({top: 0, behavior: 'instant'});
-        
-        // Target Streamlit specific containers
-        const containers = [
-            '[data-testid="stAppViewContainer"]',
-            '[data-testid="stAppViewBlockContainer"]',
-            '.main',
-            'section[data-testid="stSidebar"] + div'
-        ];
-        
-        containers.forEach(selector => {
-            const el = window.parent.document.querySelector(selector);
-            if (el) el.scrollTop = 0;
-        });
-    }
-    
-    // Execute immediately and after a short delay
-    scrollToTop();
-    setTimeout(scrollToTop, 100);
-    setTimeout(scrollToTop, 300);
-    </script>
-    """, unsafe_allow_html=True)
-
 def show_bottom_nav(active="messages"):
     """Display bottom navigation bar with minimal black line art icons"""
     unread_badge = f'<span class="nav-badge">{st.session_state.unread_count}</span>' if st.session_state.unread_count > 0 else ''
@@ -746,26 +715,26 @@ def show_bottom_nav(active="messages"):
     
     nav_html = f"""
     <div class="bottom-nav">
-        <div class="nav-item {'active' if active == 'home' else ''}">
+        <div class="nav-item {'active' if active == 'home' else ''}" onclick="return false;">
             <div class="nav-icon">{home_icon}</div>
             <div class="nav-label">Home</div>
         </div>
-        <div class="nav-item {'active' if active == 'bank' else ''}">
+        <div class="nav-item {'active' if active == 'bank' else ''}" onclick="return false;">
             <div class="nav-icon">{card_icon}</div>
             <div class="nav-label">Bank</div>
         </div>
-        <div class="nav-item {'active' if active == 'messages' else ''}" id="nav-messages-btn">
+        <div class="nav-item {'active' if active == 'messages' else ''}" id="nav-messages-item">
             <div class="nav-icon" style="position: relative;">
                 {message_icon}
                 {unread_badge}
             </div>
             <div class="nav-label">Messages</div>
         </div>
-        <div class="nav-item {'active' if active == 'profile' else ''}">
+        <div class="nav-item {'active' if active == 'profile' else ''}" onclick="return false;">
             <div class="nav-icon">{profile_icon}</div>
             <div class="nav-label">My Profile</div>
         </div>
-        <div class="nav-item {'active' if active == 'menu' else ''}">
+        <div class="nav-item {'active' if active == 'menu' else ''}" onclick="return false;">
             <div class="nav-icon">{menu_icon}</div>
             <div class="nav-label">Menu</div>
         </div>
@@ -773,16 +742,44 @@ def show_bottom_nav(active="messages"):
     """
     st.markdown(nav_html, unsafe_allow_html=True)
     
-    # Only add clickable navigation if not already on messages page
+    # Add hidden button for messages navigation (only if not on messages page)
     if active != "messages":
-        # Create invisible container for the button
-        cols = st.columns([1, 1, 1, 1, 1])
-        with cols[2]:  # Messages is the 3rd column
-            if st.button("📧", key=f"goto_messages_{active}", help="Go to Messages", label_visibility="hidden"):
-                st.session_state.page = 0
-                st.session_state.message_check_count = 0
-                scroll_to_top()
-                st.rerun()
+        if st.button("", key=f"nav_to_messages_{active}", help="Go to Messages"):
+            st.session_state.page = 0
+            st.session_state.message_check_count = 0
+            # Scroll to top
+            st.markdown("""
+            <script>
+            setTimeout(function() {
+                window.parent.document.querySelector('section.main').scrollTo({top: 0, behavior: 'smooth'});
+                document.querySelector('section.main').scrollTo({top: 0, behavior: 'smooth'});
+            }, 100);
+            </script>
+            """, unsafe_allow_html=True)
+            st.rerun()
+    
+    # Add JavaScript to handle click on messages nav item
+    st.markdown(f"""
+    <script>
+    document.getElementById('nav-messages-item').addEventListener('click', function() {{
+        // Find and click the hidden button
+        const buttons = window.parent.document.querySelectorAll('button');
+        buttons.forEach(btn => {{
+            if (btn.getAttribute('aria-label') === 'Go to Messages' || btn.title === 'Go to Messages') {{
+                btn.click();
+            }}
+        }});
+        
+        // Also try in current document
+        const localButtons = document.querySelectorAll('button');
+        localButtons.forEach(btn => {{
+            if (btn.getAttribute('aria-label') === 'Go to Messages' || btn.title === 'Go to Messages') {{
+                btn.click();
+            }}
+        }});
+    }});
+    </script>
+    """, unsafe_allow_html=True)
 
 # Page 0: Message Screen
 def show_message_screen():
@@ -852,7 +849,15 @@ def show_message_screen():
     if st.button("View BufferShield Offer", key="msg1_btn", use_container_width=True):
         st.session_state.unread_count = max(0, st.session_state.unread_count - 1)
         st.session_state.page = 1
-        scroll_to_top()
+        st.markdown("""
+        <script>
+        setTimeout(function() {
+            window.scrollTo({top: 0, behavior: 'instant'});
+            window.parent.document.querySelector('section.main').scrollTo({top: 0, behavior: 'instant'});
+            document.querySelector('section.main').scrollTo({top: 0, behavior: 'instant'});
+        }, 50);
+        </script>
+        """, unsafe_allow_html=True)
         st.rerun()
     
     # Show older messages
@@ -948,13 +953,20 @@ def show_page_1():
     
     if st.button("Continue", key="continue1", use_container_width=True):
         st.session_state.page = 2
-        scroll_to_top()
+        st.markdown("""
+        <script>
+        setTimeout(function() {
+            window.scrollTo({top: 0, behavior: 'instant'});
+            window.parent.document.querySelector('section.main').scrollTo({top: 0, behavior: 'instant'});
+            document.querySelector('section.main').scrollTo({top: 0, behavior: 'instant'});
+        }, 50);
+        </script>
+        """, unsafe_allow_html=True)
         st.rerun()
     
     if st.button("← Back", key="back1"):
         st.session_state.page = 0
         st.session_state.message_check_count = 0  # Reset counter
-        scroll_to_top()
         st.rerun()
     
     show_bottom_nav(active="messages")
@@ -1086,12 +1098,19 @@ def show_page_2():
     
     if st.button("Continue", key="continue2", use_container_width=True):
         st.session_state.page = 3
-        scroll_to_top()
+        st.markdown("""
+        <script>
+        setTimeout(function() {
+            window.scrollTo({top: 0, behavior: 'instant'});
+            window.parent.document.querySelector('section.main').scrollTo({top: 0, behavior: 'instant'});
+            document.querySelector('section.main').scrollTo({top: 0, behavior: 'instant'});
+        }, 50);
+        </script>
+        """, unsafe_allow_html=True)
         st.rerun()
     
     if st.button("← Back", key="back2"):
         st.session_state.page = 1
-        scroll_to_top()
         st.rerun()
     
     show_bottom_nav(active="messages")
@@ -1165,12 +1184,19 @@ def show_page_3():
     
     if st.button("Review & Confirm", key="continue3", use_container_width=True):
         st.session_state.page = 4
-        scroll_to_top()
+        st.markdown("""
+        <script>
+        setTimeout(function() {
+            window.scrollTo({top: 0, behavior: 'instant'});
+            window.parent.document.querySelector('section.main').scrollTo({top: 0, behavior: 'instant'});
+            document.querySelector('section.main').scrollTo({top: 0, behavior: 'instant'});
+        }, 50);
+        </script>
+        """, unsafe_allow_html=True)
         st.rerun()
     
     if st.button("← Back", key="back3"):
         st.session_state.page = 2
-        scroll_to_top()
         st.rerun()
     
     show_bottom_nav(active="messages")
@@ -1295,12 +1321,10 @@ def show_page_4():
             st.info("Offer declined. You can access BufferShield anytime from Messages.")
             st.session_state.page = 0
             st.session_state.message_check_count = 0
-            scroll_to_top()
             st.rerun()
     
     if st.button("← Back", key="back4"):
         st.session_state.page = 3
-        scroll_to_top()
         st.rerun()
     
     show_bottom_nav(active="messages")
