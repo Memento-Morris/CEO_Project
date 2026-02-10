@@ -85,10 +85,18 @@ st.markdown("""
     
     /* Section headers - OUTSIDE cards */
     .section-header {
-        color: #333333;
+        color: #00A9CE;
         font-size: 18px;
         font-weight: 600;
         margin: 25px 0 15px 0;
+    }
+    
+    /* Teal subheadings */
+    .teal-heading {
+        color: #00A9CE;
+        font-size: 16px;
+        font-weight: 600;
+        margin: 20px 0 10px 0;
     }
     
     /* Text colors */
@@ -612,26 +620,11 @@ def show_page_2():
             label += " (Escalated)"
         
         if is_escalated:
-            comparison_html += f'''
-            <div class="cost-row" style="border-bottom: 1px solid #F0F0F0;">
-                <span style="color: #666666; {'font-weight: 600;' if is_selected else ''}">{label}</span>
-                <span style="color: #E31E24; font-weight: 600;">R{scenario['total']:.2f}</span>
-            </div>
-            '''
+            comparison_html += f'<div class="cost-row" style="border-bottom: 1px solid #F0F0F0;"><span style="color: #666666; {"font-weight: 600;" if is_selected else ""}">{label}</span><span style="color: #E31E24; font-weight: 600;">R{scenario["total"]:.2f}</span></div>'
         elif is_selected:
-            comparison_html += f'''
-            <div class="cost-row" style="border-bottom: 1px solid #F0F0F0;">
-                <span style="color: #333333; font-weight: 600;">{label}</span>
-                <span style="color: #00A9CE; font-weight: 600;">R{scenario['total']:.2f}</span>
-            </div>
-            '''
+            comparison_html += f'<div class="cost-row" style="border-bottom: 1px solid #F0F0F0;"><span style="color: #333333; font-weight: 600;">{label}</span><span style="color: #00A9CE; font-weight: 600;">R{scenario["total"]:.2f}</span></div>'
         else:
-            comparison_html += f'''
-            <div class="cost-row" style="border-bottom: 1px solid #F0F0F0;">
-                <span style="color: #666666;">{label}</span>
-                <span style="color: #666666;">R{scenario['total']:.2f}</span>
-            </div>
-            '''
+            comparison_html += f'<div class="cost-row" style="border-bottom: 1px solid #F0F0F0;"><span style="color: #666666;">{label}</span><span style="color: #666666;">R{scenario["total"]:.2f}</span></div>'
     
     comparison_html += '</div><p class="compact" style="margin: 10px 0 0 0;">Escalated = Standard overdraft with activation fee</p></div>'
     st.markdown(comparison_html, unsafe_allow_html=True)
@@ -668,7 +661,7 @@ def show_page_3():
     st.markdown('<p class="grey-text">We\'ve got you covered with transparent processes</p>', unsafe_allow_html=True)
     
     # Grace Period
-    st.markdown('<p style="font-weight: 600; color: #333333; font-size: 16px; margin: 20px 0 10px 0;">Grace Period</p>', unsafe_allow_html=True)
+    st.markdown('<p class="teal-heading">Grace Period</p>', unsafe_allow_html=True)
     st.markdown(f"""
     <div class="fnb-card">
         <p class="grey-text" style="margin: 0; line-height: 1.6;">If your predicted inflow doesn't arrive on time, you get an automatic 3-day grace period with no additional fees. We understand that salary dates can shift.</p>
@@ -676,7 +669,7 @@ def show_page_3():
     """, unsafe_allow_html=True)
     
     # Escalation
-    st.markdown('<p style="font-weight: 600; color: #333333; font-size: 16px; margin: 20px 0 10px 0;">Escalation to Standard Overdraft</p>', unsafe_allow_html=True)
+    st.markdown('<p class="teal-heading">Escalation to Standard Overdraft</p>', unsafe_allow_html=True)
     st.markdown(f"""
     <div class="fnb-card">
         <p class="grey-text" style="margin: 0; line-height: 1.6;">After the grace period, if still unpaid, BufferShield converts to a standard overdraft facility at {user_data['standard_rate']}% p.a. No surprise fees—you'll know exactly what changes.</p>
@@ -684,7 +677,7 @@ def show_page_3():
     """, unsafe_allow_html=True)
     
     # Communication
-    st.markdown('<p style="font-weight: 600; color: #333333; font-size: 16px; margin: 20px 0 10px 0;">Proactive Communication</p>', unsafe_allow_html=True)
+    st.markdown('<p class="teal-heading">Proactive Communication</p>', unsafe_allow_html=True)
     st.markdown("""
     <div class="fnb-card">
         <p class="grey-text" style="margin: 0; line-height: 1.6;">We'll notify you:<br>
@@ -697,7 +690,7 @@ def show_page_3():
     """, unsafe_allow_html=True)
     
     # Fee Transparency - info card style
-    st.markdown('<p style="font-weight: 600; color: #333333; font-size: 16px; margin: 20px 0 10px 0;">Fee Transparency</p>', unsafe_allow_html=True)
+    st.markdown('<p class="teal-heading">Fee Transparency</p>', unsafe_allow_html=True)
     st.markdown(f"""
     <div class="info-card">
         <p class="grey-text" style="margin: 0; line-height: 1.6;">
@@ -771,22 +764,12 @@ def show_page_4():
     for i, (label, value, is_warning) in enumerate(items):
         color = "#E31E24" if is_warning else "#666666"
         value_color = "#E31E24" if is_warning else "#333333"
-        border = 'border-bottom: 1px solid #F0F0F0;' if i < len(items) - 1 else ''
-        cost_html += f'''
-        <div class="cost-row" style="{border}">
-            <span style="color: {color};">{label}</span>
-            <span style="font-weight: 600; color: {value_color};">{value}</span>
-        </div>
-        '''
+        border = 'border-bottom: 1px solid #F0F0F0;' if i < len(items) else ''
+        cost_html += f'<div class="cost-row" style="{border}"><span style="color: {color};">{label}</span><span style="font-weight: 600; color: {value_color};">{value}</span></div>'
     
     # Add total row
     total_color = "#E31E24" if cost_details['scenario'] == 'escalated' else "#333333"
-    cost_html += f'''
-    <div class="cost-row" style="border-top: 2px solid #333333; border-bottom: none; margin-top: 10px; padding-top: 12px;">
-        <span style="font-weight: 600; color: #333333;">Total repayment</span>
-        <span style="font-weight: 700; color: {total_color}; font-size: 18px;">R{cost_details['total']:.2f}</span>
-    </div>
-    '''
+    cost_html += f'<div class="cost-row" style="border-top: 2px solid #333333; border-bottom: none; margin-top: 10px; padding-top: 12px;"><span style="font-weight: 600; color: #333333;">Total repayment</span><span style="font-weight: 700; color: {total_color}; font-size: 18px;">R{cost_details["total"]:.2f}</span></div>'
     
     cost_html += '</div>'  # Close cost-table
     
