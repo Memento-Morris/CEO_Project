@@ -448,6 +448,17 @@ st.markdown("""
     div[data-testid="stDecoration"] {
         display: none;
     }
+    
+    /* Hide navigation buttons visually but keep them functional */
+    button[title="Go to Messages"] {
+        opacity: 0;
+        height: 0;
+        padding: 0;
+        margin: 0;
+        border: none;
+        position: absolute;
+        pointer-events: none;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -561,6 +572,28 @@ message_templates = [
 ]
 
 # Helper functions
+def get_message_icon(message_type):
+    """Get SVG icon for message type with teal circle background"""
+    icons = {
+        "action": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><path d="M20 10 L20 22 L26 16" stroke="#005557" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="20" cy="27" r="1.5" fill="#005557"/></svg>''',
+        
+        "suggestion": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><path d="M15 20 L20 15 L25 20" stroke="#005557" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 15 L20 28" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/></svg>''',
+        
+        "insight": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><path d="M20 12 L20 20 L26 20" stroke="#005557" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="20" cy="20" r="7" stroke="#005557" stroke-width="2.5" fill="none"/></svg>''',
+        
+        "alert": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><path d="M20 13 L20 21" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/><circle cx="20" cy="26" r="1.5" fill="#005557"/><circle cx="20" cy="20" r="9" stroke="#005557" stroke-width="2.5" fill="none"/></svg>''',
+        
+        "tip": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><path d="M17 23 L20 20 L27 13" stroke="#005557" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 19 L17 23" stroke="#005557" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>''',
+        
+        "reminder": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><circle cx="20" cy="18" r="7" stroke="#005557" stroke-width="2.5" fill="none"/><path d="M20 18 L20 14" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/><path d="M20 18 L23 20" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/><path d="M17 26 L23 26" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/></svg>''',
+        
+        "achievement": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><circle cx="20" cy="18" r="6" stroke="#005557" stroke-width="2.5" fill="none"/><path d="M20 24 L20 28" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/><path d="M16 28 L24 28" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/><path d="M18 28 L18 30" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/><path d="M22 28 L22 30" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/></svg>''',
+        
+        "security": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><path d="M20 12 L20 12 C23 12 26 14 26 17 L26 22 C26 25 23 27 20 27 C17 27 14 25 14 22 L14 17 C14 14 17 12 20 12 Z" stroke="#005557" stroke-width="2.5" fill="none" stroke-linejoin="round"/><circle cx="20" cy="20" r="2" fill="#005557"/><path d="M20 22 L20 24" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/></svg>'''
+    }
+    
+    return icons.get(message_type, icons["insight"])
+
 def add_message():
     """Add a new message from templates"""
     import random
@@ -678,32 +711,61 @@ def show_bottom_nav(active="messages"):
     
     nav_html = f"""
     <div class="bottom-nav">
-        <div class="nav-item {'active' if active == 'home' else ''}">
+        <div class="nav-item {'active' if active == 'home' else ''}" onclick="return false;">
             <div class="nav-icon">{home_icon}</div>
             <div class="nav-label">Home</div>
         </div>
-        <div class="nav-item {'active' if active == 'bank' else ''}">
+        <div class="nav-item {'active' if active == 'bank' else ''}" onclick="return false;">
             <div class="nav-icon">{bank_icon}</div>
             <div class="nav-label">Bank</div>
         </div>
-        <div class="nav-item {'active' if active == 'messages' else ''}">
+        <div class="nav-item {'active' if active == 'messages' else ''}" id="messages-nav-btn" onclick="handleMessagesClick()">
             <div class="nav-icon" style="position: relative;">
                 {message_icon}
                 {unread_badge}
             </div>
             <div class="nav-label">Messages</div>
         </div>
-        <div class="nav-item {'active' if active == 'profile' else ''}">
+        <div class="nav-item {'active' if active == 'profile' else ''}" onclick="return false;">
             <div class="nav-icon">{profile_icon}</div>
             <div class="nav-label">My Profile</div>
         </div>
-        <div class="nav-item {'active' if active == 'menu' else ''}">
+        <div class="nav-item {'active' if active == 'menu' else ''}" onclick="return false;">
             <div class="nav-icon">{menu_icon}</div>
             <div class="nav-label">Menu</div>
         </div>
     </div>
+    <script>
+    function handleMessagesClick() {{
+        const iframe = window.parent.document.querySelector('iframe');
+        if (iframe) {{
+            const buttons = iframe.contentWindow.document.querySelectorAll('button');
+            buttons.forEach(btn => {{
+                if (btn.getAttribute('title') === 'Go to Messages') {{
+                    btn.click();
+                }}
+            }});
+        }}
+        // Also try in current document
+        const buttons = document.querySelectorAll('button');
+        buttons.forEach(btn => {{
+            if (btn.getAttribute('title') === 'Go to Messages') {{
+                btn.click();
+            }}
+        }});
+    }}
+    </script>
     """
     st.markdown(nav_html, unsafe_allow_html=True)
+    
+    # Add clickable navigation button for messages (only if not on messages page)
+    if active != "messages":
+        # Create 5 columns matching the nav layout
+        cols = st.columns(5)
+        with cols[2]:  # Messages is the 3rd item (index 2)
+            if st.button("", key=f"nav_messages_{active}", help="Go to Messages", label_visibility="collapsed"):
+                st.session_state.page = 0
+                st.rerun()
 
 # Page 0: Message Screen
 def show_message_screen():
@@ -724,17 +786,21 @@ def show_message_screen():
         for idx, msg in enumerate(st.session_state.messages[:3]):  # Show top 3
             # Message card
             unread_badge = '<div class="unread-badge">1</div>' if not msg['is_read'] else ''
+            msg_icon = get_message_icon(msg['type'])
+            
             st.markdown(f"""
             <div class="message-card" style="border-left: 3px solid {msg['border_color']};">
                 {unread_badge}
-                <div style="display: flex; justify-content: space-between; align-items: start;">
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px;">
                     <div style="flex: 1;">
                         <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">{msg['title']}</p>
                         <p class="grey-text" style="margin: 5px 0 0 0;">{msg['subtitle']}</p>
                         <p class="compact" style="margin: 5px 0 0 0;">{msg['detail']}</p>
                         <p class="compact" style="margin: 5px 0 0 0; color: #999999;">{msg['timestamp'].strftime('%H:%M:%S')}</p>
                     </div>
-                    <span style="color: #007c7f; font-size: 18px;">→</span>
+                    <div style="flex-shrink: 0;">
+                        {msg_icon}
+                    </div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -747,16 +813,20 @@ def show_message_screen():
     
     # Primary action message - always visible
     unread_badge_main = '<div class="unread-badge">1</div>' if st.session_state.unread_count > 0 else ''
+    action_icon = get_message_icon("action")
+    
     st.markdown(f"""
     <div class="message-card" style="border-left: 3px solid #E31E24;">
         {unread_badge_main}
-        <div style="display: flex; justify-content: space-between; align-items: start;">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px;">
             <div style="flex: 1;">
                 <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">Action Required: Upcoming Debit Order</p>
                 <p class="grey-text" style="margin: 5px 0 0 0;">{user_data['debit_order_recipient']} • R{user_data['debit_order_amount']:,.2f} on {user_data['debit_order_date'].strftime('%d %b')}</p>
                 <p class="compact" style="margin: 5px 0 0 0;">Predicted shortfall detected. BufferShield available.</p>
             </div>
-            <span style="color: #007c7f; font-size: 18px;">→</span>
+            <div style="flex-shrink: 0;">
+                {action_icon}
+            </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -772,14 +842,19 @@ def show_message_screen():
         st.markdown('<p class="section-header" style="margin-top: 30px;">Earlier</p>', unsafe_allow_html=True)
         
         for idx, msg in enumerate(st.session_state.messages[3:6]):  # Show next 3
+            msg_icon = get_message_icon(msg.get('type', 'insight'))
+            
             st.markdown(f"""
             <div class="message-card">
-                <div style="display: flex; justify-content: space-between; align-items: start;">
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px;">
                     <div style="flex: 1;">
                         <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">{msg['title']}</p>
                         <p class="grey-text" style="margin: 5px 0 0 0;">{msg['subtitle']}</p>
                         <p class="compact" style="margin: 5px 0 0 0;">{msg['detail']}</p>
                         <p class="compact" style="margin: 5px 0 0 0; color: #999999;">{msg['timestamp'].strftime('%H:%M:%S')}</p>
+                    </div>
+                    <div style="flex-shrink: 0;">
+                        {msg_icon}
                     </div>
                 </div>
             </div>
