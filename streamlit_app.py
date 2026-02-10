@@ -321,33 +321,6 @@ st.markdown("""
         line-height: 1.5;
     }
     
-    /* Checkbox styling */
-    .stCheckbox {
-        padding: 15px 0;
-    }
-    
-    .stCheckbox > label {
-        color: #333333 !important;
-        font-size: 14px !important;
-        font-weight: 500 !important;
-    }
-    
-    .stCheckbox > label > div[data-testid="stMarkdownContainer"] > p {
-        color: #333333 !important;
-        font-size: 14px !important;
-    }
-    
-    /* Checkbox input styling */
-    input[type="checkbox"] {
-        width: 20px !important;
-        height: 20px !important;
-        cursor: pointer !important;
-    }
-    
-    input[type="checkbox"]:checked {
-        accent-color: #007c7f !important;
-    }
-    
     /* Table styling */
     .cost-table {
         width: 100%;
@@ -407,17 +380,8 @@ st.markdown("""
     }
     
     .nav-icon {
-        width: 24px;
-        height: 24px;
+        font-size: 24px;
         position: relative;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-    
-    .nav-icon svg {
-        width: 24px;
-        height: 24px;
     }
     
     .nav-label {
@@ -428,8 +392,8 @@ st.markdown("""
     /* Message badge on nav icon */
     .nav-badge {
         position: absolute;
-        top: -6px;
-        right: -6px;
+        top: -4px;
+        right: -8px;
         background: #E31E24;
         color: white;
         width: 18px;
@@ -441,23 +405,11 @@ st.markdown("""
         font-size: 10px;
         font-weight: 700;
         border: 2px solid white;
-        z-index: 10;
     }
     
     /* Hide default streamlit elements */
     div[data-testid="stDecoration"] {
         display: none;
-    }
-    
-    /* Hide navigation buttons visually but keep them functional */
-    button[title="Go to Messages"] {
-        opacity: 0;
-        height: 0;
-        padding: 0;
-        margin: 0;
-        border: none;
-        position: absolute;
-        pointer-events: none;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -475,8 +427,6 @@ if 'messages' not in st.session_state:
     st.session_state.messages = []
 if 'unread_count' not in st.session_state:
     st.session_state.unread_count = 1  # Start with 1 unread (the debit order message)
-if 'terms_accepted' not in st.session_state:
-    st.session_state.terms_accepted = False
 
 # Get today's actual date
 current_date = datetime.date.today()
@@ -572,28 +522,6 @@ message_templates = [
 ]
 
 # Helper functions
-def get_message_icon(message_type):
-    """Get SVG icon for message type with teal circle background"""
-    icons = {
-        "action": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><path d="M20 10 L20 22 L26 16" stroke="#005557" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="20" cy="27" r="1.5" fill="#005557"/></svg>''',
-        
-        "suggestion": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><path d="M15 20 L20 15 L25 20" stroke="#005557" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 15 L20 28" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/></svg>''',
-        
-        "insight": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><path d="M20 12 L20 20 L26 20" stroke="#005557" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="20" cy="20" r="7" stroke="#005557" stroke-width="2.5" fill="none"/></svg>''',
-        
-        "alert": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><path d="M20 13 L20 21" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/><circle cx="20" cy="26" r="1.5" fill="#005557"/><circle cx="20" cy="20" r="9" stroke="#005557" stroke-width="2.5" fill="none"/></svg>''',
-        
-        "tip": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><path d="M17 23 L20 20 L27 13" stroke="#005557" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 19 L17 23" stroke="#005557" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>''',
-        
-        "reminder": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><circle cx="20" cy="18" r="7" stroke="#005557" stroke-width="2.5" fill="none"/><path d="M20 18 L20 14" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/><path d="M20 18 L23 20" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/><path d="M17 26 L23 26" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/></svg>''',
-        
-        "achievement": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><circle cx="20" cy="18" r="6" stroke="#005557" stroke-width="2.5" fill="none"/><path d="M20 24 L20 28" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/><path d="M16 28 L24 28" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/><path d="M18 28 L18 30" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/><path d="M22 28 L22 30" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/></svg>''',
-        
-        "security": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><path d="M20 12 L20 12 C23 12 26 14 26 17 L26 22 C26 25 23 27 20 27 C17 27 14 25 14 22 L14 17 C14 14 17 12 20 12 Z" stroke="#005557" stroke-width="2.5" fill="none" stroke-linejoin="round"/><circle cx="20" cy="20" r="2" fill="#005557"/><path d="M20 22 L20 24" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/></svg>'''
-    }
-    
-    return icons.get(message_type, icons["insight"])
-
 def add_message():
     """Add a new message from templates"""
     import random
@@ -694,78 +622,38 @@ def show_progress_dots(current_step, total_steps=4):
     st.markdown(dots_html, unsafe_allow_html=True)
 
 def show_bottom_nav(active="messages"):
-    """Display bottom navigation bar with minimal line art icons"""
+    """Display bottom navigation bar"""
     # Count unread messages
     unread_badge = f'<span class="nav-badge">{st.session_state.unread_count}</span>' if st.session_state.unread_count > 0 else ''
     
-    # Minimal line art SVG icons
-    home_icon = '''<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>'''
-    
-    bank_icon = '''<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect><line x1="1" y1="10" x2="23" y2="10"></line></svg>'''
-    
-    message_icon = '''<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>'''
-    
-    profile_icon = '''<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>'''
-    
-    menu_icon = '''<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>'''
-    
     nav_html = f"""
     <div class="bottom-nav">
-        <div class="nav-item {'active' if active == 'home' else ''}" onclick="return false;">
-            <div class="nav-icon">{home_icon}</div>
+        <div class="nav-item {'active' if active == 'home' else ''}">
+            <div class="nav-icon">🏠</div>
             <div class="nav-label">Home</div>
         </div>
-        <div class="nav-item {'active' if active == 'bank' else ''}" onclick="return false;">
-            <div class="nav-icon">{bank_icon}</div>
+        <div class="nav-item {'active' if active == 'bank' else ''}">
+            <div class="nav-icon">🏦</div>
             <div class="nav-label">Bank</div>
         </div>
-        <div class="nav-item {'active' if active == 'messages' else ''}" id="messages-nav-btn" onclick="handleMessagesClick()">
-            <div class="nav-icon" style="position: relative;">
-                {message_icon}
+        <div class="nav-item {'active' if active == 'messages' else ''}">
+            <div class="nav-icon">
+                💬
                 {unread_badge}
             </div>
             <div class="nav-label">Messages</div>
         </div>
-        <div class="nav-item {'active' if active == 'profile' else ''}" onclick="return false;">
-            <div class="nav-icon">{profile_icon}</div>
+        <div class="nav-item {'active' if active == 'profile' else ''}">
+            <div class="nav-icon">👤</div>
             <div class="nav-label">My Profile</div>
         </div>
-        <div class="nav-item {'active' if active == 'menu' else ''}" onclick="return false;">
-            <div class="nav-icon">{menu_icon}</div>
+        <div class="nav-item {'active' if active == 'menu' else ''}">
+            <div class="nav-icon">☰</div>
             <div class="nav-label">Menu</div>
         </div>
     </div>
-    <script>
-    function handleMessagesClick() {{
-        const iframe = window.parent.document.querySelector('iframe');
-        if (iframe) {{
-            const buttons = iframe.contentWindow.document.querySelectorAll('button');
-            buttons.forEach(btn => {{
-                if (btn.getAttribute('title') === 'Go to Messages') {{
-                    btn.click();
-                }}
-            }});
-        }}
-        // Also try in current document
-        const buttons = document.querySelectorAll('button');
-        buttons.forEach(btn => {{
-            if (btn.getAttribute('title') === 'Go to Messages') {{
-                btn.click();
-            }}
-        }});
-    }}
-    </script>
     """
     st.markdown(nav_html, unsafe_allow_html=True)
-    
-    # Add clickable navigation button for messages (only if not on messages page)
-    if active != "messages":
-        # Create 5 columns matching the nav layout
-        cols = st.columns(5)
-        with cols[2]:  # Messages is the 3rd item (index 2)
-            if st.button("", key=f"nav_messages_{active}", help="Go to Messages", label_visibility="collapsed"):
-                st.session_state.page = 0
-                st.rerun()
 
 # Page 0: Message Screen
 def show_message_screen():
@@ -786,21 +674,17 @@ def show_message_screen():
         for idx, msg in enumerate(st.session_state.messages[:3]):  # Show top 3
             # Message card
             unread_badge = '<div class="unread-badge">1</div>' if not msg['is_read'] else ''
-            msg_icon = get_message_icon(msg['type'])
-            
             st.markdown(f"""
             <div class="message-card" style="border-left: 3px solid {msg['border_color']};">
                 {unread_badge}
-                <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px;">
+                <div style="display: flex; justify-content: space-between; align-items: start;">
                     <div style="flex: 1;">
                         <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">{msg['title']}</p>
                         <p class="grey-text" style="margin: 5px 0 0 0;">{msg['subtitle']}</p>
                         <p class="compact" style="margin: 5px 0 0 0;">{msg['detail']}</p>
                         <p class="compact" style="margin: 5px 0 0 0; color: #999999;">{msg['timestamp'].strftime('%H:%M:%S')}</p>
                     </div>
-                    <div style="flex-shrink: 0;">
-                        {msg_icon}
-                    </div>
+                    <span style="color: #007c7f; font-size: 18px;">→</span>
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -813,20 +697,16 @@ def show_message_screen():
     
     # Primary action message - always visible
     unread_badge_main = '<div class="unread-badge">1</div>' if st.session_state.unread_count > 0 else ''
-    action_icon = get_message_icon("action")
-    
     st.markdown(f"""
     <div class="message-card" style="border-left: 3px solid #E31E24;">
         {unread_badge_main}
-        <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px;">
+        <div style="display: flex; justify-content: space-between; align-items: start;">
             <div style="flex: 1;">
                 <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">Action Required: Upcoming Debit Order</p>
                 <p class="grey-text" style="margin: 5px 0 0 0;">{user_data['debit_order_recipient']} • R{user_data['debit_order_amount']:,.2f} on {user_data['debit_order_date'].strftime('%d %b')}</p>
                 <p class="compact" style="margin: 5px 0 0 0;">Predicted shortfall detected. BufferShield available.</p>
             </div>
-            <div style="flex-shrink: 0;">
-                {action_icon}
-            </div>
+            <span style="color: #007c7f; font-size: 18px;">→</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -842,19 +722,14 @@ def show_message_screen():
         st.markdown('<p class="section-header" style="margin-top: 30px;">Earlier</p>', unsafe_allow_html=True)
         
         for idx, msg in enumerate(st.session_state.messages[3:6]):  # Show next 3
-            msg_icon = get_message_icon(msg.get('type', 'insight'))
-            
             st.markdown(f"""
             <div class="message-card">
-                <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px;">
+                <div style="display: flex; justify-content: space-between; align-items: start;">
                     <div style="flex: 1;">
                         <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">{msg['title']}</p>
                         <p class="grey-text" style="margin: 5px 0 0 0;">{msg['subtitle']}</p>
                         <p class="compact" style="margin: 5px 0 0 0;">{msg['detail']}</p>
                         <p class="compact" style="margin: 5px 0 0 0; color: #999999;">{msg['timestamp'].strftime('%H:%M:%S')}</p>
-                    </div>
-                    <div style="flex-shrink: 0;">
-                        {msg_icon}
                     </div>
                 </div>
             </div>
@@ -867,9 +742,8 @@ def show_message_screen():
     # Show bottom navigation
     show_bottom_nav(active="messages")
     
-    # Use Streamlit's auto-refresh only on messages page
-    # Refresh every 3 seconds instead of using time.sleep
-    time.sleep(3)
+    # Auto-refresh every 2 seconds to check for new messages
+    time.sleep(2)
     st.rerun()
 
 # Page 1: Amount Selection
@@ -1240,23 +1114,14 @@ def show_page_4():
     """, unsafe_allow_html=True)
     
     # Terms
-    st.markdown('<p class="compact" style="text-align: center; margin-bottom: 20px;">Funds available immediately after confirmation.</p>', unsafe_allow_html=True)
-    
-    # Terms and Conditions Checkbox
-    terms_accepted = st.checkbox(
-        "I accept the BufferShield Terms and Conditions",
-        key="terms_checkbox",
-        help="You must accept the terms and conditions to activate BufferShield"
-    )
+    st.markdown('<p class="compact" style="text-align: center;">By activating, you agree to BufferShield terms.<br>Funds available immediately after confirmation.</p>', unsafe_allow_html=True)
     
     # Action buttons
     col1, col2 = st.columns(2)
     
     with col1:
-        if st.button("✓ Activate BufferShield", key="activate", type="primary", use_container_width=True, disabled=not terms_accepted):
-            if not terms_accepted:
-                st.warning("⚠️ Please accept the Terms and Conditions to proceed")
-            elif user_data['activations_used'] >= user_data['activations_limit']:
+        if st.button("✓ Activate BufferShield", key="activate", type="primary", use_container_width=True):
+            if user_data['activations_used'] >= user_data['activations_limit']:
                 st.error(f"❌ Usage Limit\n\nNot available if used twice in 30 days.\n\nCurrent usage: {user_data['activations_used']}/{user_data['activations_limit']}")
             else:
                 st.success(f"""
