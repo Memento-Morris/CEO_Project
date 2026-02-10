@@ -321,6 +321,33 @@ st.markdown("""
         line-height: 1.5;
     }
     
+    /* Checkbox styling */
+    .stCheckbox {
+        padding: 15px 0;
+    }
+    
+    .stCheckbox > label {
+        color: #333333 !important;
+        font-size: 14px !important;
+        font-weight: 500 !important;
+    }
+    
+    .stCheckbox > label > div[data-testid="stMarkdownContainer"] > p {
+        color: #333333 !important;
+        font-size: 14px !important;
+    }
+    
+    /* Checkbox input styling */
+    input[type="checkbox"] {
+        width: 20px !important;
+        height: 20px !important;
+        cursor: pointer !important;
+    }
+    
+    input[type="checkbox"]:checked {
+        accent-color: #007c7f !important;
+    }
+    
     /* Table styling */
     .cost-table {
         width: 100%;
@@ -380,8 +407,17 @@ st.markdown("""
     }
     
     .nav-icon {
-        font-size: 24px;
+        width: 24px;
+        height: 24px;
         position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    .nav-icon svg {
+        width: 24px;
+        height: 24px;
     }
     
     .nav-label {
@@ -392,8 +428,8 @@ st.markdown("""
     /* Message badge on nav icon */
     .nav-badge {
         position: absolute;
-        top: -4px;
-        right: -8px;
+        top: -6px;
+        right: -6px;
         background: #E31E24;
         color: white;
         width: 18px;
@@ -405,6 +441,7 @@ st.markdown("""
         font-size: 10px;
         font-weight: 700;
         border: 2px solid white;
+        z-index: 10;
     }
     
     /* Hide default streamlit elements */
@@ -427,6 +464,8 @@ if 'messages' not in st.session_state:
     st.session_state.messages = []
 if 'unread_count' not in st.session_state:
     st.session_state.unread_count = 1  # Start with 1 unread (the debit order message)
+if 'terms_accepted' not in st.session_state:
+    st.session_state.terms_accepted = False
 
 # Get today's actual date
 current_date = datetime.date.today()
@@ -622,33 +661,44 @@ def show_progress_dots(current_step, total_steps=4):
     st.markdown(dots_html, unsafe_allow_html=True)
 
 def show_bottom_nav(active="messages"):
-    """Display bottom navigation bar"""
+    """Display bottom navigation bar with minimal line art icons"""
     # Count unread messages
     unread_badge = f'<span class="nav-badge">{st.session_state.unread_count}</span>' if st.session_state.unread_count > 0 else ''
+    
+    # Minimal line art SVG icons
+    home_icon = '''<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>'''
+    
+    bank_icon = '''<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect><line x1="1" y1="10" x2="23" y2="10"></line></svg>'''
+    
+    message_icon = '''<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>'''
+    
+    profile_icon = '''<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>'''
+    
+    menu_icon = '''<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>'''
     
     nav_html = f"""
     <div class="bottom-nav">
         <div class="nav-item {'active' if active == 'home' else ''}">
-            <div class="nav-icon">🏠</div>
+            <div class="nav-icon">{home_icon}</div>
             <div class="nav-label">Home</div>
         </div>
         <div class="nav-item {'active' if active == 'bank' else ''}">
-            <div class="nav-icon">🏦</div>
+            <div class="nav-icon">{bank_icon}</div>
             <div class="nav-label">Bank</div>
         </div>
         <div class="nav-item {'active' if active == 'messages' else ''}">
-            <div class="nav-icon">
-                💬
+            <div class="nav-icon" style="position: relative;">
+                {message_icon}
                 {unread_badge}
             </div>
             <div class="nav-label">Messages</div>
         </div>
         <div class="nav-item {'active' if active == 'profile' else ''}">
-            <div class="nav-icon">👤</div>
+            <div class="nav-icon">{profile_icon}</div>
             <div class="nav-label">My Profile</div>
         </div>
         <div class="nav-item {'active' if active == 'menu' else ''}">
-            <div class="nav-icon">☰</div>
+            <div class="nav-icon">{menu_icon}</div>
             <div class="nav-label">Menu</div>
         </div>
     </div>
@@ -742,8 +792,9 @@ def show_message_screen():
     # Show bottom navigation
     show_bottom_nav(active="messages")
     
-    # Auto-refresh every 2 seconds to check for new messages
-    time.sleep(2)
+    # Use Streamlit's auto-refresh only on messages page
+    # Refresh every 3 seconds instead of using time.sleep
+    time.sleep(3)
     st.rerun()
 
 # Page 1: Amount Selection
@@ -1114,14 +1165,23 @@ def show_page_4():
     """, unsafe_allow_html=True)
     
     # Terms
-    st.markdown('<p class="compact" style="text-align: center;">By activating, you agree to BufferShield terms.<br>Funds available immediately after confirmation.</p>', unsafe_allow_html=True)
+    st.markdown('<p class="compact" style="text-align: center; margin-bottom: 20px;">Funds available immediately after confirmation.</p>', unsafe_allow_html=True)
+    
+    # Terms and Conditions Checkbox
+    terms_accepted = st.checkbox(
+        "I accept the BufferShield Terms and Conditions",
+        key="terms_checkbox",
+        help="You must accept the terms and conditions to activate BufferShield"
+    )
     
     # Action buttons
     col1, col2 = st.columns(2)
     
     with col1:
-        if st.button("✓ Activate BufferShield", key="activate", type="primary", use_container_width=True):
-            if user_data['activations_used'] >= user_data['activations_limit']:
+        if st.button("✓ Activate BufferShield", key="activate", type="primary", use_container_width=True, disabled=not terms_accepted):
+            if not terms_accepted:
+                st.warning("⚠️ Please accept the Terms and Conditions to proceed")
+            elif user_data['activations_used'] >= user_data['activations_limit']:
                 st.error(f"❌ Usage Limit\n\nNot available if used twice in 30 days.\n\nCurrent usage: {user_data['activations_used']}/{user_data['activations_limit']}")
             else:
                 st.success(f"""
