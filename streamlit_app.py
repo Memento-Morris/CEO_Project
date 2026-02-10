@@ -463,9 +463,11 @@ if 'last_message_time' not in st.session_state:
 if 'messages' not in st.session_state:
     st.session_state.messages = []
 if 'unread_count' not in st.session_state:
-    st.session_state.unread_count = 1  # Start with 1 unread (the debit order message)
+    st.session_state.unread_count = 1
 if 'terms_accepted' not in st.session_state:
     st.session_state.terms_accepted = False
+if 'message_check_count' not in st.session_state:
+    st.session_state.message_check_count = 0
 
 # Get today's actual date
 current_date = datetime.date.today()
@@ -475,7 +477,7 @@ user_data = {
     "name": "John Doe",
     "account_number": "****7823",
     "current_balance": 450.00,
-    "inflow_date": current_date + datetime.timedelta(days=7),  # 7 days from today
+    "inflow_date": current_date + datetime.timedelta(days=7),
     "predicted_inflow": 18500,
     "buffer_limit": 2000,
     "buffer_available": 2000,
@@ -486,7 +488,7 @@ user_data = {
     "grace_days": 3,
     "activation_fee_standard": 35,
     "debit_order_amount": 1250.00,
-    "debit_order_date": current_date + datetime.timedelta(days=2),  # 2 days from today
+    "debit_order_date": current_date + datetime.timedelta(days=2),
     "debit_order_recipient": "DStv",
     "flagged_reason": "Upcoming debit order",
     "predicted_shortfall": 800.00
@@ -561,10 +563,36 @@ message_templates = [
 ]
 
 # Helper functions
+def get_message_icon(message_type):
+    """Get minimal SVG icon for message type with teal circle background"""
+    icons = {
+        "action": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><path d="M20 10 L20 22 L26 16" stroke="#005557" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="20" cy="27" r="1.5" fill="#005557"/></svg>''',
+        
+        "suggestion": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><path d="M15 20 L20 15 L25 20" stroke="#005557" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 15 L20 28" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/></svg>''',
+        
+        "insight": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><path d="M20 12 L20 20 L26 20" stroke="#005557" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="20" cy="20" r="7" stroke="#005557" stroke-width="2.5" fill="none"/></svg>''',
+        
+        "alert": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><path d="M20 13 L20 21" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/><circle cx="20" cy="26" r="1.5" fill="#005557"/><circle cx="20" cy="20" r="9" stroke="#005557" stroke-width="2.5" fill="none"/></svg>''',
+        
+        "tip": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><path d="M17 23 L20 20 L27 13" stroke="#005557" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 19 L17 23" stroke="#005557" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>''',
+        
+        "reminder": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><circle cx="20" cy="18" r="7" stroke="#005557" stroke-width="2.5" fill="none"/><path d="M20 18 L20 14" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/><path d="M20 18 L23 20" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/><path d="M17 26 L23 26" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/></svg>''',
+        
+        "achievement": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><circle cx="20" cy="18" r="6" stroke="#005557" stroke-width="2.5" fill="none"/><path d="M20 24 L20 28" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/><path d="M16 28 L24 28" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/><path d="M18 28 L18 30" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/><path d="M22 28 L22 30" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/></svg>''',
+        
+        "security": '''<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#e6f5f5"/><path d="M20 12 L20 12 C23 12 26 14 26 17 L26 22 C26 25 23 27 20 27 C17 27 14 25 14 22 L14 17 C14 14 17 12 20 12 Z" stroke="#005557" stroke-width="2.5" fill="none" stroke-linejoin="round"/><circle cx="20" cy="20" r="2" fill="#005557"/><path d="M20 22 L20 24" stroke="#005557" stroke-width="2.5" stroke-linecap="round"/></svg>'''
+    }
+    
+    return icons.get(message_type, icons["insight"])
+
 def add_message():
-    """Add a new message from templates"""
+    """Add a new message from templates - with limit to prevent crashes"""
     import random
     current_time = time.time()
+    
+    # Limit total messages to 15 max to prevent memory issues
+    if len(st.session_state.messages) >= 15:
+        return
     
     # Check if 5 seconds have passed
     if current_time - st.session_state.last_message_time >= 5:
@@ -578,6 +606,7 @@ def add_message():
             subtitle = template["subtitle"]
         
         message = {
+            "type": template["type"],
             "title": template["title"],
             "subtitle": subtitle,
             "detail": template["detail"],
@@ -591,16 +620,10 @@ def add_message():
         st.session_state.messages.insert(0, message)
         st.session_state.last_message_time = current_time
         st.session_state.unread_count += 1
-        
-        # Keep only last 10 messages
-        if len(st.session_state.messages) > 10:
-            st.session_state.messages = st.session_state.messages[:10]
 
 def calculate_compound_interest(principal, rate, days):
     """Calculate compound interest (daily compounding)"""
-    # Daily interest rate
     daily_rate = rate / 100 / 365
-    # Compound formula: A = P(1 + r)^t
     amount = principal * math.pow(1 + daily_rate, days)
     interest = amount - principal
     return interest
@@ -610,7 +633,6 @@ def calculate_full_cost(amount, expected_days):
     inflow_days = (user_data['inflow_date'] - current_date).days
     
     if expected_days <= inflow_days + user_data['grace_days']:
-        # On time or within grace
         interest = calculate_compound_interest(amount, user_data['interest_rate'], expected_days)
         return {
             'scenario': 'on_time',
@@ -623,7 +645,6 @@ def calculate_full_cost(amount, expected_days):
             'grace_used': max(0, expected_days - inflow_days)
         }
     else:
-        # Escalated
         interest = calculate_compound_interest(amount, user_data['standard_rate'], expected_days)
         activation_fee = user_data['activation_fee_standard']
         grace_end = inflow_days + user_data['grace_days']
@@ -661,14 +682,14 @@ def show_progress_dots(current_step, total_steps=4):
     st.markdown(dots_html, unsafe_allow_html=True)
 
 def show_bottom_nav(active="messages"):
-    """Display bottom navigation bar with minimal line art icons"""
-    # Count unread messages
+    """Display bottom navigation bar with minimal black line art icons"""
     unread_badge = f'<span class="nav-badge">{st.session_state.unread_count}</span>' if st.session_state.unread_count > 0 else ''
     
-    # Minimal line art SVG icons
+    # Minimal black line art SVG icons
     home_icon = '''<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>'''
     
-    bank_icon = '''<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect><line x1="1" y1="10" x2="23" y2="10"></line></svg>'''
+    # Card icon for bank
+    card_icon = '''<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect><line x1="1" y1="10" x2="23" y2="10"></line></svg>'''
     
     message_icon = '''<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>'''
     
@@ -678,26 +699,26 @@ def show_bottom_nav(active="messages"):
     
     nav_html = f"""
     <div class="bottom-nav">
-        <div class="nav-item {'active' if active == 'home' else ''}">
+        <div class="nav-item {'active' if active == 'home' else ''}" onclick="return false;">
             <div class="nav-icon">{home_icon}</div>
             <div class="nav-label">Home</div>
         </div>
-        <div class="nav-item {'active' if active == 'bank' else ''}">
-            <div class="nav-icon">{bank_icon}</div>
+        <div class="nav-item {'active' if active == 'bank' else ''}" onclick="return false;">
+            <div class="nav-icon">{card_icon}</div>
             <div class="nav-label">Bank</div>
         </div>
-        <div class="nav-item {'active' if active == 'messages' else ''}">
+        <div class="nav-item {'active' if active == 'messages' else ''}" onclick="return false;">
             <div class="nav-icon" style="position: relative;">
                 {message_icon}
                 {unread_badge}
             </div>
             <div class="nav-label">Messages</div>
         </div>
-        <div class="nav-item {'active' if active == 'profile' else ''}">
+        <div class="nav-item {'active' if active == 'profile' else ''}" onclick="return false;">
             <div class="nav-icon">{profile_icon}</div>
             <div class="nav-label">My Profile</div>
         </div>
-        <div class="nav-item {'active' if active == 'menu' else ''}">
+        <div class="nav-item {'active' if active == 'menu' else ''}" onclick="return false;">
             <div class="nav-icon">{menu_icon}</div>
             <div class="nav-label">Menu</div>
         </div>
@@ -707,8 +728,11 @@ def show_bottom_nav(active="messages"):
 
 # Page 0: Message Screen
 def show_message_screen():
-    # Add new message if 5 seconds have passed
-    add_message()
+    # Increment check counter and add message periodically (max 3 checks to prevent crashes)
+    st.session_state.message_check_count = st.session_state.get('message_check_count', 0) + 1
+    
+    if st.session_state.message_check_count <= 3:
+        add_message()
     
     st.markdown("""
     <div class="fnb-header">
@@ -721,81 +745,89 @@ def show_message_screen():
     if st.session_state.messages:
         st.markdown('<p class="section-header">Recent</p>', unsafe_allow_html=True)
         
-        for idx, msg in enumerate(st.session_state.messages[:3]):  # Show top 3
-            # Message card
+        for idx, msg in enumerate(st.session_state.messages[:3]):
             unread_badge = '<div class="unread-badge">1</div>' if not msg['is_read'] else ''
+            msg_icon = get_message_icon(msg['type'])
+            
             st.markdown(f"""
             <div class="message-card" style="border-left: 3px solid {msg['border_color']};">
                 {unread_badge}
-                <div style="display: flex; justify-content: space-between; align-items: start;">
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px;">
                     <div style="flex: 1;">
                         <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">{msg['title']}</p>
                         <p class="grey-text" style="margin: 5px 0 0 0;">{msg['subtitle']}</p>
                         <p class="compact" style="margin: 5px 0 0 0;">{msg['detail']}</p>
                         <p class="compact" style="margin: 5px 0 0 0; color: #999999;">{msg['timestamp'].strftime('%H:%M:%S')}</p>
                     </div>
-                    <span style="color: #007c7f; font-size: 18px;">→</span>
+                    <div style="flex-shrink: 0;">
+                        {msg_icon}
+                    </div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
             
-            # Add separator line between messages (but not after the last one)
             if idx < min(2, len(st.session_state.messages[:3]) - 1):
                 st.markdown('<div class="message-separator"></div>', unsafe_allow_html=True)
     
     st.markdown('<p class="section-header">Today</p>', unsafe_allow_html=True)
     
-    # Primary action message - always visible
+    # Primary action message
     unread_badge_main = '<div class="unread-badge">1</div>' if st.session_state.unread_count > 0 else ''
+    action_icon = get_message_icon("action")
+    
     st.markdown(f"""
     <div class="message-card" style="border-left: 3px solid #E31E24;">
         {unread_badge_main}
-        <div style="display: flex; justify-content: space-between; align-items: start;">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px;">
             <div style="flex: 1;">
                 <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">Action Required: Upcoming Debit Order</p>
                 <p class="grey-text" style="margin: 5px 0 0 0;">{user_data['debit_order_recipient']} • R{user_data['debit_order_amount']:,.2f} on {user_data['debit_order_date'].strftime('%d %b')}</p>
                 <p class="compact" style="margin: 5px 0 0 0;">Predicted shortfall detected. BufferShield available.</p>
             </div>
-            <span style="color: #007c7f; font-size: 18px;">→</span>
+            <div style="flex-shrink: 0;">
+                {action_icon}
+            </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
     
     if st.button("View BufferShield Offer", key="msg1_btn", use_container_width=True):
-        # Mark as read when clicked
         st.session_state.unread_count = max(0, st.session_state.unread_count - 1)
         st.session_state.page = 1
         st.rerun()
     
-    # Show older messages if any with separators
+    # Show older messages
     if st.session_state.messages and len(st.session_state.messages) > 3:
         st.markdown('<p class="section-header" style="margin-top: 30px;">Earlier</p>', unsafe_allow_html=True)
         
-        for idx, msg in enumerate(st.session_state.messages[3:6]):  # Show next 3
+        for idx, msg in enumerate(st.session_state.messages[3:6]):
+            msg_icon = get_message_icon(msg.get('type', 'insight'))
+            
             st.markdown(f"""
             <div class="message-card">
-                <div style="display: flex; justify-content: space-between; align-items: start;">
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px;">
                     <div style="flex: 1;">
                         <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">{msg['title']}</p>
                         <p class="grey-text" style="margin: 5px 0 0 0;">{msg['subtitle']}</p>
                         <p class="compact" style="margin: 5px 0 0 0;">{msg['detail']}</p>
                         <p class="compact" style="margin: 5px 0 0 0; color: #999999;">{msg['timestamp'].strftime('%H:%M:%S')}</p>
                     </div>
+                    <div style="flex-shrink: 0;">
+                        {msg_icon}
+                    </div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
             
-            # Add separator line between messages
             if idx < min(2, len(st.session_state.messages[3:6]) - 1):
                 st.markdown('<div class="message-separator"></div>', unsafe_allow_html=True)
     
-    # Show bottom navigation
     show_bottom_nav(active="messages")
     
-    # Use Streamlit's auto-refresh only on messages page
-    # Refresh every 3 seconds instead of using time.sleep
-    time.sleep(3)
-    st.rerun()
+    # Only refresh if we haven't exceeded check limit
+    if st.session_state.message_check_count <= 3:
+        time.sleep(5)
+        st.rerun()
 
 # Page 1: Amount Selection
 def show_page_1():
@@ -808,14 +840,12 @@ def show_page_1():
     
     show_progress_dots(1, 4)
     
-    # Usage limit
     st.markdown(f"""
     <div class="fnb-card" style="background: #F5F5F5;">
         <p class="compact" style="margin: 0;">Not available if used twice in 30 days • Currently: {user_data['activations_used']}/2</p>
     </div>
     """, unsafe_allow_html=True)
     
-    # Why you qualify
     st.markdown('<p class="centered-teal-heading">Why you qualify</p>', unsafe_allow_html=True)
     
     st.markdown(f"""
@@ -827,10 +857,8 @@ def show_page_1():
     
     st.markdown('<p class="centered-teal-heading">Bridging amount needed?</p>', unsafe_allow_html=True)
     
-    # Amount display
     st.markdown(f'<div class="amount-display"><span class="currency">R</span>{st.session_state.selected_amount:,}</div>', unsafe_allow_html=True)
     
-    # Slider
     st.session_state.selected_amount = st.slider(
         "Select amount",
         min_value=100,
@@ -840,7 +868,6 @@ def show_page_1():
         label_visibility="collapsed"
     )
     
-    # Quick select buttons
     st.markdown("**Quick select:**")
     cols = st.columns(4)
     amounts = [int(user_data['debit_order_amount']), 1000, 1500, 2000]
@@ -852,7 +879,6 @@ def show_page_1():
                 st.session_state.selected_amount = amount
                 st.rerun()
     
-    # Next inflow info - FNB card style
     st.markdown(f"""
     <div class="fnb-card" style="text-align: center; background: #F0FFF4;">
         <p class="grey-text" style="margin: 0 0 5px 0;">Next expected inflow</p>
@@ -867,9 +893,9 @@ def show_page_1():
     
     if st.button("← Back", key="back1"):
         st.session_state.page = 0
+        st.session_state.message_check_count = 0  # Reset counter
         st.rerun()
     
-    # Show bottom navigation
     show_bottom_nav(active="messages")
 
 # Page 2: Expected Inflow Date
@@ -887,7 +913,6 @@ def show_page_2():
     st.markdown('<p style="text-align: center; color: #333333; font-weight: 600; margin: 10px 0;">Bridging amount: R{:,}</p>'.format(st.session_state.selected_amount), unsafe_allow_html=True)
     st.markdown('<p class="grey-text" style="text-align: center; margin: 5px 0 20px 0;">Select when you expect to receive funds - this affects your interest cost</p>', unsafe_allow_html=True)
     
-    # Period selection
     periods = [
         (3, "3 Days", "Lowest interest"),
         (7, "7 Days", "Recommended"),
@@ -900,7 +925,6 @@ def show_page_2():
             st.session_state.selected_days = days
             st.rerun()
     
-    # Show current selection and cost
     cost_details = calculate_full_cost(st.session_state.selected_amount, st.session_state.selected_days)
     inflow_days = (user_data['inflow_date'] - current_date).days
     grace_end_days = inflow_days + user_data['grace_days']
@@ -950,7 +974,6 @@ def show_page_2():
         </div>
         """, unsafe_allow_html=True)
     
-    # Comparison scenarios - IN A CARD with separators
     st.markdown('<p class="section-header">Compare scenarios</p>', unsafe_allow_html=True)
     
     comparison_html = '<div class="fnb-card"><div class="cost-table">'
@@ -975,7 +998,6 @@ def show_page_2():
     comparison_html += '</div><p class="compact" style="margin: 10px 0 0 0;">Escalated = Standard overdraft with activation fee. Interest compounded daily.</p></div>'
     st.markdown(comparison_html, unsafe_allow_html=True)
     
-    # Predicted inflow
     days_until = (user_data['inflow_date'] - current_date).days
     st.markdown(f"""
     <div class="info-card">
@@ -992,7 +1014,6 @@ def show_page_2():
         st.session_state.page = 1
         st.rerun()
     
-    # Show bottom navigation
     show_bottom_nav(active="messages")
 
 # Page 3: What if things go wrong?
@@ -1009,7 +1030,6 @@ def show_page_3():
     st.markdown('<p class="centered-header">What if things go wrong?</p>', unsafe_allow_html=True)
     st.markdown('<p class="grey-text" style="text-align: center; margin: 5px 0 20px 0;">We\'ve got you covered with transparent processes</p>', unsafe_allow_html=True)
     
-    # Grace Period
     st.markdown('<p class="teal-heading">Grace Period</p>', unsafe_allow_html=True)
     st.markdown(f"""
     <div class="fnb-card">
@@ -1017,7 +1037,6 @@ def show_page_3():
     </div>
     """, unsafe_allow_html=True)
     
-    # Escalation
     st.markdown('<p class="teal-heading">Escalation to Standard Overdraft</p>', unsafe_allow_html=True)
     st.markdown(f"""
     <div class="fnb-card">
@@ -1025,7 +1044,6 @@ def show_page_3():
     </div>
     """, unsafe_allow_html=True)
     
-    # Communication
     st.markdown('<p class="teal-heading">Proactive Communication</p>', unsafe_allow_html=True)
     st.markdown("""
     <div class="fnb-card">
@@ -1038,7 +1056,6 @@ def show_page_3():
     </div>
     """, unsafe_allow_html=True)
     
-    # Fee Transparency - info card style
     st.markdown('<p class="teal-heading">Fee Transparency</p>', unsafe_allow_html=True)
     st.markdown(f"""
     <div class="info-card">
@@ -1074,7 +1091,6 @@ def show_page_3():
         st.session_state.page = 2
         st.rerun()
     
-    # Show bottom navigation
     show_bottom_nav(active="messages")
 
 # Page 4: Review & Confirm
@@ -1090,7 +1106,6 @@ def show_page_4():
     
     st.markdown('<p class="section-header">Review Details</p>', unsafe_allow_html=True)
     
-    # Summary card - teal theme
     st.markdown(f"""
     <div class="fnb-card" style="background: #F5F5F5; text-align: center; padding: 30px 20px; border-left: 3px solid #007c7f;">
         <p style="color: #666666; margin: 0 0 10px 0; font-size: 14px;">Bridging amount</p>
@@ -1100,12 +1115,10 @@ def show_page_4():
     </div>
     """, unsafe_allow_html=True)
     
-    # Cost breakdown
     st.markdown('<p class="section-header">Total cost breakdown</p>', unsafe_allow_html=True)
     
     cost_details = calculate_full_cost(st.session_state.selected_amount, st.session_state.selected_days)
     
-    # Build the cost breakdown in HTML
     cost_html = '<div class="fnb-card"><div class="cost-table">'
     
     if cost_details['scenario'] == 'on_time':
@@ -1127,28 +1140,24 @@ def show_page_4():
             ("Grace period exceeded", f"by {cost_details['days_beyond_grace']} day(s)", True)
         ]
     
-    # Add each row
     for i, (label, value, is_warning) in enumerate(items):
         color = "#E31E24" if is_warning else "#666666"
         value_color = "#E31E24" if is_warning else "#333333"
         border = 'border-bottom: 1px solid #F0F0F0;' if i < len(items) else ''
         cost_html += f'<div class="cost-row" style="{border}"><span style="color: {color};">{label}</span><span style="font-weight: 600; color: {value_color};">{value}</span></div>'
     
-    # Add total row
     total_color = "#E31E24" if cost_details['scenario'] == 'escalated' else "#333333"
     cost_html += f'<div class="cost-row" style="border-top: 2px solid #333333; border-bottom: none; margin-top: 10px; padding-top: 12px;"><span style="font-weight: 600; color: #333333;">Total repayment</span><span style="font-weight: 700; color: {total_color}; font-size: 18px;">R{cost_details["total"]:.2f}</span></div>'
     
-    cost_html += '</div>'  # Close cost-table
+    cost_html += '</div>'
     
-    # Escalation warning if applicable
     if cost_details['scenario'] == 'escalated':
         cost_html += f'<p class="red-text compact" style="margin: 12px 0 0 0;">⚠️ Escalates to standard overdraft on {cost_details["escalation_date"].strftime("%d %b")}</p>'
     
-    cost_html += '</div>'  # Close fnb-card
+    cost_html += '</div>'
     
     st.markdown(cost_html, unsafe_allow_html=True)
     
-    # Auto-repay
     st.markdown(f"""
     <div class="info-card">
         <p class="teal-text" style="margin: 0 0 12px 0; font-size: 15px;">Auto-Repay</p>
@@ -1164,17 +1173,18 @@ def show_page_4():
     </div>
     """, unsafe_allow_html=True)
     
-    # Terms
     st.markdown('<p class="compact" style="text-align: center; margin-bottom: 20px;">Funds available immediately after confirmation.</p>', unsafe_allow_html=True)
     
     # Terms and Conditions Checkbox
     terms_accepted = st.checkbox(
         "I accept the BufferShield Terms and Conditions",
         key="terms_checkbox",
+        value=st.session_state.terms_accepted,
         help="You must accept the terms and conditions to activate BufferShield"
     )
     
-    # Action buttons
+    st.session_state.terms_accepted = terms_accepted
+    
     col1, col2 = st.columns(2)
     
     with col1:
@@ -1202,13 +1212,13 @@ def show_page_4():
         if st.button("Decline Offer", key="decline", use_container_width=True):
             st.info("Offer declined. You can access BufferShield anytime from Messages.")
             st.session_state.page = 0
+            st.session_state.message_check_count = 0
             st.rerun()
     
     if st.button("← Back", key="back4"):
         st.session_state.page = 3
         st.rerun()
     
-    # Show bottom navigation
     show_bottom_nav(active="messages")
 
 # Main app routing
