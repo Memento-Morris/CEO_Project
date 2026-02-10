@@ -986,6 +986,21 @@ def show_page_2():
     st.markdown('<p style="text-align: center; color: #333333; font-weight: 600; margin: 10px 0;">Bridging amount: R{:,}</p>'.format(st.session_state.selected_amount), unsafe_allow_html=True)
     st.markdown('<p class="grey-text" style="text-align: center; margin: 5px 0 20px 0;">Select when you expect to receive funds - this affects your interest cost</p>', unsafe_allow_html=True)
     
+    # Days display and slider
+    st.markdown('<p style="text-align: center; color: #007c7f; font-weight: 600; font-size: 18px; margin: 20px 0 10px 0;">{} Days</p>'.format(st.session_state.selected_days), unsafe_allow_html=True)
+    
+    st.session_state.selected_days = st.slider(
+        "Select days",
+        min_value=3,
+        max_value=30,
+        value=st.session_state.selected_days,
+        step=1,
+        label_visibility="collapsed"
+    )
+    
+    # Quick select buttons
+    st.markdown("**Quick select:**")
+    
     periods = [
         (3, "3 Days", "Lowest interest"),
         (7, "7 Days", "Recommended"),
@@ -993,10 +1008,12 @@ def show_page_2():
         (30, "30 Days", "Maximum")
     ]
     
-    for days, label, sublabel in periods:
-        if st.button(f"**{label}** • {sublabel}", key=f"period_{days}", use_container_width=True):
-            st.session_state.selected_days = days
-            st.rerun()
+    cols = st.columns(4)
+    for col, (days, label, sublabel) in zip(cols, periods):
+        with col:
+            if st.button(f"{days}d", key=f"period_{days}", use_container_width=True, help=f"{label} • {sublabel}"):
+                st.session_state.selected_days = days
+                st.rerun()
     
     cost_details = calculate_full_cost(st.session_state.selected_amount, st.session_state.selected_days)
     inflow_days = (user_data['inflow_date'] - current_date).days
