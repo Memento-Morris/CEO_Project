@@ -57,31 +57,33 @@ st.markdown("""
         font-size: 14px;
     }
     
-    /* White card styling */
+    /* White card styling with rounded edges and shadow */
     .fnb-card {
         background: white;
         padding: 20px;
-        border-radius: 2px;
+        border-radius: 12px;
         border: 1px solid #E0E0E0;
         margin: 15px 0;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
     }
     
     .notification-card {
         background: white;
         padding: 18px;
-        border-radius: 2px;
+        border-radius: 12px;
         border: 1px solid #E0E0E0;
         margin: 12px 0;
         cursor: pointer;
         transition: all 0.2s ease;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
     }
     
     .notification-card:hover {
         border-color: #00A9CE;
-        box-shadow: 0 1px 3px rgba(0,169,206,0.1);
+        box-shadow: 0 4px 12px rgba(0, 169, 206, 0.15);
     }
     
-    /* Section headers */
+    /* Section headers - OUTSIDE cards */
     .section-header {
         color: #333333;
         font-size: 18px;
@@ -158,22 +160,30 @@ st.markdown("""
         opacity: 0.5;
     }
     
-    /* Buttons - teal primary */
+    /* Buttons - light gray with black text and rounded edges */
     .stButton > button {
         width: 100%;
-        background: #00A9CE;
-        color: white;
-        border: none;
+        background: #F5F5F5;
+        color: #333333;
+        border: 1px solid #E0E0E0;
         padding: 14px 24px;
         font-size: 15px;
         font-weight: 600;
-        border-radius: 2px;
+        border-radius: 12px;
         cursor: pointer;
         transition: all 0.2s ease;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
     }
     
     .stButton > button:hover {
-        background: #0096B8;
+        background: #EEEEEE;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
+        border-color: #D0D0D0;
+    }
+    
+    .stButton > button:active {
+        background: #E8E8E8;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     }
     
     /* Amount display */
@@ -195,27 +205,30 @@ st.markdown("""
     .warning-card {
         background: #FFF5F5;
         padding: 18px;
-        border-radius: 2px;
+        border-radius: 12px;
         border-left: 3px solid #E31E24;
         margin: 15px 0;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
     }
     
     /* Info card */
     .info-card {
         background: #F0FAFF;
         padding: 18px;
-        border-radius: 2px;
+        border-radius: 12px;
         border-left: 3px solid #00A9CE;
         margin: 15px 0;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
     }
     
     /* Success card */
     .success-card {
         background: #F0FFF4;
         padding: 18px;
-        border-radius: 2px;
+        border-radius: 12px;
         border-left: 3px solid #00A651;
         margin: 15px 0;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
     }
     
     /* Slider */
@@ -517,10 +530,11 @@ def show_page_2():
     
     st.markdown("---")
     
+    st.markdown('<p class="section-header">Cost for selected period</p>', unsafe_allow_html=True)
+    
     if cost_details['scenario'] == 'on_time':
         st.markdown(f"""
         <div class="fnb-card">
-            <p style="font-weight: 600; color: #333333; margin: 0 0 12px 0;">Cost for selected period</p>
             <div class="cost-table">
                 <div class="cost-row" style="border: none;">
                     <span class="grey-text">{st.session_state.selected_days} days:</span>
@@ -559,10 +573,9 @@ def show_page_2():
         </div>
         """, unsafe_allow_html=True)
     
-    # Comparison table - Using streamlit to avoid HTML rendering issues
-    st.markdown('<p style="font-weight: 600; color: #333333; margin: 20px 0 10px 0;">Compare scenarios:</p>', unsafe_allow_html=True)
+    # Comparison scenarios - NOW IN A CARD
+    st.markdown('<p class="section-header">Compare scenarios</p>', unsafe_allow_html=True)
     
-    # Create comparison card container
     st.markdown('<div class="fnb-card">', unsafe_allow_html=True)
     
     for days in [3, 7, 14, 30]:
@@ -620,7 +633,7 @@ def show_page_3():
     
     show_progress_dots(3, 4)
     
-    st.markdown("### What if things go wrong?")
+    st.markdown('<p class="section-header">What if things go wrong?</p>', unsafe_allow_html=True)
     st.markdown('<p class="grey-text">We\'ve got you covered with transparent processes</p>', unsafe_allow_html=True)
     
     # Grace Period
@@ -684,7 +697,7 @@ def show_page_4():
     
     show_progress_dots(4, 4)
     
-    st.markdown("### Review Details")
+    st.markdown('<p class="section-header">Review Details</p>', unsafe_allow_html=True)
     
     # Summary card - teal theme
     st.markdown(f"""
@@ -697,9 +710,11 @@ def show_page_4():
     """, unsafe_allow_html=True)
     
     # Cost breakdown
+    st.markdown('<p class="section-header">Total cost breakdown</p>', unsafe_allow_html=True)
+    
     cost_details = calculate_full_cost(st.session_state.selected_amount, st.session_state.selected_days)
     
-    cost_html = '<div class="fnb-card"><p style="font-weight: 600; color: #333333; margin: 0 0 15px 0;">Total cost breakdown</p>'
+    cost_html = '<div class="fnb-card">'
     cost_html += '<div class="cost-table">'
     
     if cost_details['scenario'] == 'on_time':
