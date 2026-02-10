@@ -186,6 +186,29 @@ st.markdown("""
         box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     }
     
+    /* Primary button - teal */
+    .stButton > button[kind="primary"],
+    .stButton > button.primary-button {
+        background: #00A9CE;
+        color: white;
+        border: none;
+    }
+    
+    .stButton > button[kind="primary"]:hover,
+    .stButton > button.primary-button:hover {
+        background: #0096B8;
+    }
+    
+    .stButton > button[kind="primary"]:active,
+    .stButton > button.primary-button:active {
+        background: #008CAD;
+    }
+    
+    /* Full width button container */
+    div[data-testid="column"] > div > div > div > button {
+        width: 100%;
+    }
+    
     /* Amount display */
     .amount-display {
         text-align: center;
@@ -443,9 +466,10 @@ def show_page_1():
     """, unsafe_allow_html=True)
     
     # Why you qualify
+    st.markdown('<p class="section-header">Why you qualify</p>', unsafe_allow_html=True)
+    
     st.markdown(f"""
     <div class="fnb-card">
-        <p class="teal-text" style="margin: 0 0 8px 0; font-size: 15px;">Why you qualify</p>
         <p class="grey-text" style="margin: 0 0 5px 0;">{user_data['flagged_reason']}: {user_data['debit_order_recipient']} R{user_data['debit_order_amount']:,.2f} on {user_data['debit_order_date'].strftime('%d %b')}</p>
         <p class="red-text compact" style="margin: 0;">Predicted shortfall: R{user_data['predicted_shortfall']:,.2f}</p>
     </div>
@@ -576,34 +600,41 @@ def show_page_2():
     # Comparison scenarios - NOW IN A CARD
     st.markdown('<p class="section-header">Compare scenarios</p>', unsafe_allow_html=True)
     
-    st.markdown('<div class="fnb-card">', unsafe_allow_html=True)
+    comparison_html = '<div class="fnb-card"><div class="cost-table">'
     
     for days in [3, 7, 14, 30]:
         scenario = calculate_full_cost(st.session_state.selected_amount, days)
         is_selected = days == st.session_state.selected_days
         is_escalated = scenario['scenario'] == 'escalated'
         
-        cols = st.columns([3, 1])
-        with cols[0]:
-            label = f"→ {days} days" if is_selected else f"{days} days"
-            if is_escalated:
-                label += " (Escalated)"
-            
-            if is_selected:
-                st.markdown(f"**{label}**")
-            else:
-                st.markdown(label)
+        label = f"→ {days} days" if is_selected else f"{days} days"
+        if is_escalated:
+            label += " (Escalated)"
         
-        with cols[1]:
-            if is_escalated:
-                st.markdown(f"<span style='color: #E31E24; font-weight: 600; float: right;'>R{scenario['total']:.2f}</span>", unsafe_allow_html=True)
-            elif is_selected:
-                st.markdown(f"<span style='color: #00A9CE; font-weight: 600; float: right;'>R{scenario['total']:.2f}</span>", unsafe_allow_html=True)
-            else:
-                st.markdown(f"<span style='color: #666666; float: right;'>R{scenario['total']:.2f}</span>", unsafe_allow_html=True)
+        if is_escalated:
+            comparison_html += f'''
+            <div class="cost-row" style="border-bottom: 1px solid #F0F0F0;">
+                <span style="color: #666666; {'font-weight: 600;' if is_selected else ''}">{label}</span>
+                <span style="color: #E31E24; font-weight: 600;">R{scenario['total']:.2f}</span>
+            </div>
+            '''
+        elif is_selected:
+            comparison_html += f'''
+            <div class="cost-row" style="border-bottom: 1px solid #F0F0F0;">
+                <span style="color: #333333; font-weight: 600;">{label}</span>
+                <span style="color: #00A9CE; font-weight: 600;">R{scenario['total']:.2f}</span>
+            </div>
+            '''
+        else:
+            comparison_html += f'''
+            <div class="cost-row" style="border-bottom: 1px solid #F0F0F0;">
+                <span style="color: #666666;">{label}</span>
+                <span style="color: #666666;">R{scenario['total']:.2f}</span>
+            </div>
+            '''
     
-    st.markdown('<p class="compact" style="margin: 10px 0 0 0;">Escalated = Standard overdraft with activation fee</p>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    comparison_html += '</div><p class="compact" style="margin: 10px 0 0 0;">Escalated = Standard overdraft with activation fee</p></div>'
+    st.markdown(comparison_html, unsafe_allow_html=True)
     
     # Predicted inflow
     days_until = (user_data['inflow_date'] - current_date).days
@@ -637,25 +668,25 @@ def show_page_3():
     st.markdown('<p class="grey-text">We\'ve got you covered with transparent processes</p>', unsafe_allow_html=True)
     
     # Grace Period
+    st.markdown('<p style="font-weight: 600; color: #333333; font-size: 16px; margin: 20px 0 10px 0;">Grace Period</p>', unsafe_allow_html=True)
     st.markdown(f"""
     <div class="fnb-card">
-        <p class="teal-text" style="font-size: 16px; margin: 0 0 10px 0;">Grace Period</p>
         <p class="grey-text" style="margin: 0; line-height: 1.6;">If your predicted inflow doesn't arrive on time, you get an automatic 3-day grace period with no additional fees. We understand that salary dates can shift.</p>
     </div>
     """, unsafe_allow_html=True)
     
     # Escalation
+    st.markdown('<p style="font-weight: 600; color: #333333; font-size: 16px; margin: 20px 0 10px 0;">Escalation to Standard Overdraft</p>', unsafe_allow_html=True)
     st.markdown(f"""
     <div class="fnb-card">
-        <p class="teal-text" style="font-size: 16px; margin: 0 0 10px 0;">Escalation to Standard Overdraft</p>
         <p class="grey-text" style="margin: 0; line-height: 1.6;">After the grace period, if still unpaid, BufferShield converts to a standard overdraft facility at {user_data['standard_rate']}% p.a. No surprise fees—you'll know exactly what changes.</p>
     </div>
     """, unsafe_allow_html=True)
     
     # Communication
+    st.markdown('<p style="font-weight: 600; color: #333333; font-size: 16px; margin: 20px 0 10px 0;">Proactive Communication</p>', unsafe_allow_html=True)
     st.markdown("""
     <div class="fnb-card">
-        <p class="teal-text" style="font-size: 16px; margin: 0 0 10px 0;">Proactive Communication</p>
         <p class="grey-text" style="margin: 0; line-height: 1.6;">We'll notify you:<br>
         • 2 days before expected repayment<br>
         • On repayment day<br>
@@ -666,9 +697,9 @@ def show_page_3():
     """, unsafe_allow_html=True)
     
     # Fee Transparency - info card style
+    st.markdown('<p style="font-weight: 600; color: #333333; font-size: 16px; margin: 20px 0 10px 0;">Fee Transparency</p>', unsafe_allow_html=True)
     st.markdown(f"""
     <div class="info-card">
-        <p class="teal-text" style="font-size: 16px; margin: 0 0 10px 0;">Fee Transparency</p>
         <p class="grey-text" style="margin: 0; line-height: 1.6;">
         Current BufferShield rate: {user_data['interest_rate']}% p.a.<br>
         Standard overdraft rate: {user_data['standard_rate']}% p.a.<br>
@@ -714,8 +745,8 @@ def show_page_4():
     
     cost_details = calculate_full_cost(st.session_state.selected_amount, st.session_state.selected_days)
     
-    cost_html = '<div class="fnb-card">'
-    cost_html += '<div class="cost-table">'
+    # Build the cost breakdown in HTML
+    cost_html = '<div class="fnb-card"><div class="cost-table">'
     
     if cost_details['scenario'] == 'on_time':
         items = [
@@ -736,17 +767,19 @@ def show_page_4():
             ("Grace period exceeded", f"by {cost_details['days_beyond_grace']} day(s)", True)
         ]
     
-    for label, value, is_warning in items:
+    # Add each row
+    for i, (label, value, is_warning) in enumerate(items):
         color = "#E31E24" if is_warning else "#666666"
         value_color = "#E31E24" if is_warning else "#333333"
+        border = 'border-bottom: 1px solid #F0F0F0;' if i < len(items) - 1 else ''
         cost_html += f'''
-        <div class="cost-row" style="border-bottom: 1px solid #F0F0F0;">
+        <div class="cost-row" style="{border}">
             <span style="color: {color};">{label}</span>
             <span style="font-weight: 600; color: {value_color};">{value}</span>
         </div>
         '''
     
-    # Total
+    # Add total row
     total_color = "#E31E24" if cost_details['scenario'] == 'escalated' else "#333333"
     cost_html += f'''
     <div class="cost-row" style="border-top: 2px solid #333333; border-bottom: none; margin-top: 10px; padding-top: 12px;">
@@ -778,28 +811,32 @@ def show_page_4():
     st.markdown('<p class="compact" style="text-align: center;">By activating, you agree to BufferShield terms.<br>Funds available immediately after confirmation.</p>', unsafe_allow_html=True)
     
     # Action buttons
-    if st.button("✓ Activate BufferShield", key="activate", use_container_width=True):
-        if user_data['activations_used'] >= user_data['activations_limit']:
-            st.error(f"❌ Usage Limit\n\nNot available if used twice in 30 days.\n\nCurrent usage: {user_data['activations_used']}/{user_data['activations_limit']}")
-        else:
-            st.success(f"""
-            ✅ **BufferShield Activated!**
-            
-            New balance: R{user_data['current_balance'] + st.session_state.selected_amount:,.2f}
-            
-            Repayment: {user_data['inflow_date'].strftime('%d %B')}
-            
-            Amount: R{cost_details['total']:.2f}
-            
-            Usage: {user_data['activations_used'] + 1}/{user_data['activations_limit']} this month
-            
-            {f"⚠️ Will escalate to standard OD on {cost_details['escalation_date'].strftime('%d %B')}" if cost_details['scenario'] == 'escalated' else ''}
-            """)
+    col1, col2 = st.columns(2)
     
-    if st.button("Decline Offer", key="decline"):
-        st.info("Offer declined. You can access BufferShield anytime from Notifications.")
-        st.session_state.page = 0
-        st.rerun()
+    with col1:
+        if st.button("✓ Activate BufferShield", key="activate", type="primary", use_container_width=True):
+            if user_data['activations_used'] >= user_data['activations_limit']:
+                st.error(f"❌ Usage Limit\n\nNot available if used twice in 30 days.\n\nCurrent usage: {user_data['activations_used']}/{user_data['activations_limit']}")
+            else:
+                st.success(f"""
+                ✅ **BufferShield Activated!**
+                
+                New balance: R{user_data['current_balance'] + st.session_state.selected_amount:,.2f}
+                
+                Repayment: {user_data['inflow_date'].strftime('%d %B')}
+                
+                Amount: R{cost_details['total']:.2f}
+                
+                Usage: {user_data['activations_used'] + 1}/{user_data['activations_limit']} this month
+                
+                {f"⚠️ Will escalate to standard OD on {cost_details['escalation_date'].strftime('%d %B')}" if cost_details['scenario'] == 'escalated' else ''}
+                """)
+    
+    with col2:
+        if st.button("Decline Offer", key="decline", use_container_width=True):
+            st.info("Offer declined. You can access BufferShield anytime from Notifications.")
+            st.session_state.page = 0
+            st.rerun()
     
     if st.button("← Back", key="back4"):
         st.session_state.page = 3
