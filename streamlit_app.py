@@ -1,4 +1,4 @@
-why doesntit go to the top of the page when i press next or go back.import streamlit as st
+import streamlit as st
 import datetime
 import time
 import math
@@ -1340,3 +1340,4 @@ elif st.session_state.page == 3:
     show_page_3()
 elif st.session_state.page == 4:
     show_page_4()
+
