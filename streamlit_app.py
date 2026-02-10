@@ -48,15 +48,16 @@ st.markdown("""
     
     /* Card styling */
     .card {
-        background: white;
+        background: #F9FAFB;
         padding: 15px;
         border-radius: 8px;
         border: 1px solid #D1D5DB;
         margin: 10px 0;
+        color: #1F2937;
     }
     
     .notification-card {
-        background: white;
+        background: #F9FAFB;
         padding: 15px;
         border-radius: 8px;
         border: 1px solid #D1D5DB;
@@ -71,7 +72,7 @@ st.markdown("""
     
     /* Warning card */
     .warning-card {
-        background: white;
+        background: #FEF2F2;
         padding: 15px;
         border-radius: 8px;
         border: 2px solid #EF4444;
@@ -154,6 +155,26 @@ st.markdown("""
     .compact {
         font-size: 12px;
         color: #6B7280;
+    }
+    
+    /* Info card with light background */
+    .info-card {
+        background: #EFF6FF;
+        padding: 15px;
+        border-radius: 8px;
+        border: 1px solid #BFDBFE;
+        margin: 10px 0;
+        color: #1E40AF;
+    }
+    
+    /* Success card */
+    .success-card {
+        background: #F0FDF4;
+        padding: 15px;
+        border-radius: 8px;
+        border: 1px solid #BBF7D0;
+        margin: 10px 0;
+        color: #166534;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -303,9 +324,9 @@ def show_page_1():
     
     # Why you qualify
     st.markdown(f"""
-    <div class="card">
-        <p class="teal-text">🔮 Why you qualify</p>
-        <p class="grey-text">{user_data['flagged_reason']}: {user_data['debit_order_recipient']} R{user_data['debit_order_amount']:,.2f} on {user_data['debit_order_date'].strftime('%d %b')}</p>
+    <div class="info-card">
+        <p style="font-weight: bold; color: #1E40AF;">🔮 Why you qualify</p>
+        <p style="color: #1E40AF;">{user_data['flagged_reason']}: {user_data['debit_order_recipient']} R{user_data['debit_order_amount']:,.2f} on {user_data['debit_order_date'].strftime('%d %b')}</p>
         <p class="danger-text compact">Predicted shortfall: R{user_data['predicted_shortfall']:,.2f}</p>
     </div>
     """, unsafe_allow_html=True)
@@ -339,10 +360,10 @@ def show_page_1():
     
     # Next inflow info
     st.markdown(f"""
-    <div class="card">
-        <p class="grey-text" style="text-align: center;">Next expected inflow</p>
-        <p style="text-align: center; font-size: 18px; font-weight: bold; color: #10B981;">R{user_data['predicted_inflow']:,}</p>
-        <p class="grey-text" style="text-align: center;">{user_data['inflow_date'].strftime('%d %B %Y')}</p>
+    <div class="success-card">
+        <p style="color: #166534; text-align: center; font-weight: bold;">Next expected inflow</p>
+        <p style="text-align: center; font-size: 18px; font-weight: bold; color: #15803D;">R{user_data['predicted_inflow']:,}</p>
+        <p style="text-align: center; color: #166534;">{user_data['inflow_date'].strftime('%d %B %Y')}</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -392,9 +413,9 @@ def show_page_2():
     if cost_details['scenario'] == 'on_time':
         st.markdown(f"""
         <div class="card">
-            <p style="font-weight: bold;">💰 Cost for selected period</p>
-            <p>{st.session_state.selected_days} days: <span class="orange-text">R{cost_details['interest']:.2f}</span></p>
-            <p>Total to repay: <span style="font-weight: bold;">R{cost_details['total']:.2f}</span></p>
+            <p style="font-weight: bold; color: #1F2937;">💰 Cost for selected period</p>
+            <p style="color: #1F2937;">{st.session_state.selected_days} days: <span class="orange-text">R{cost_details['interest']:.2f}</span></p>
+            <p style="color: #1F2937;">Total to repay: <span style="font-weight: bold;">R{cost_details['total']:.2f}</span></p>
             {f'<p class="teal-text compact">ℹ️ Using {cost_details["grace_used"]} grace day(s)</p>' if cost_details['grace_used'] > 0 else ''}
         </div>
         """, unsafe_allow_html=True)
@@ -402,13 +423,13 @@ def show_page_2():
         st.markdown(f"""
         <div class="warning-card">
             <p class="danger-text">⚠️ Escalation Scenario</p>
-            <p class="grey-text">Your expected inflow is on {user_data['inflow_date'].strftime('%d %b')} (day {inflow_days}).<br>
+            <p style="color: #991B1B;">Your expected inflow is on {user_data['inflow_date'].strftime('%d %b')} (day {inflow_days}).<br>
             Grace period ends day {grace_end_days} ({(current_date + datetime.timedelta(days=grace_end_days)).strftime('%d %b')}).</p>
-            <p style="font-weight: bold; margin-top: 10px;">Since {st.session_state.selected_days} days exceeds grace period:</p>
-            <p class="grey-text">Interest (Standard OD rate): <span class="danger-text">R{cost_details['interest']:.2f}</span></p>
-            <p class="grey-text">Activation fee: <span class="danger-text">R{cost_details['activation_fee']:.2f}</span></p>
+            <p style="font-weight: bold; margin-top: 10px; color: #991B1B;">Since {st.session_state.selected_days} days exceeds grace period:</p>
+            <p style="color: #991B1B;">Interest (Standard OD rate): <span class="danger-text">R{cost_details['interest']:.2f}</span></p>
+            <p style="color: #991B1B;">Activation fee: <span class="danger-text">R{cost_details['activation_fee']:.2f}</span></p>
             <hr>
-            <p style="font-weight: bold;">Total cost: <span class="danger-text">R{cost_details['total']:.2f}</span></p>
+            <p style="font-weight: bold; color: #991B1B;">Total cost: <span class="danger-text">R{cost_details['total']:.2f}</span></p>
             <p class="danger-text compact">⚠️ At {cost_details['rate']:.2f}% p.a. (Standard overdraft)</p>
         </div>
         """, unsafe_allow_html=True)
@@ -435,9 +456,9 @@ def show_page_2():
     # Predicted inflow
     days_until = (user_data['inflow_date'] - current_date).days
     st.markdown(f"""
-    <div class="card">
-        <p class="teal-text">📅 Next predicted inflow: {user_data['inflow_date'].strftime('%d %B')}</p>
-        <p class="grey-text">in {days_until} days • We'll auto-repay from this</p>
+    <div class="info-card">
+        <p style="font-weight: bold; color: #1E40AF;">📅 Next predicted inflow: {user_data['inflow_date'].strftime('%d %B')}</p>
+        <p style="color: #1E40AF;">in {days_until} days • We'll auto-repay from this</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -466,7 +487,7 @@ def show_page_3():
     # Grace Period
     st.markdown(f"""
     <div class="card">
-        <p style="font-size: 18px;">🕐 <span class="teal-text">Grace Period</span></p>
+        <p style="font-size: 18px; color: #1F2937;">🕐 <span class="teal-text">Grace Period</span></p>
         <p class="grey-text">If your predicted inflow doesn't arrive on time, you get an automatic 3-day grace period with no additional fees. We understand that salary dates can shift.</p>
     </div>
     """, unsafe_allow_html=True)
@@ -474,7 +495,7 @@ def show_page_3():
     # Escalation
     st.markdown(f"""
     <div class="card">
-        <p style="font-size: 18px;">📊 <span class="orange-text">Escalation to Standard Overdraft</span></p>
+        <p style="font-size: 18px; color: #1F2937;">📊 <span class="orange-text">Escalation to Standard Overdraft</span></p>
         <p class="grey-text">After the grace period, if still unpaid, BufferShield converts to a standard overdraft facility at {user_data['standard_rate']}% p.a. No surprise fees—you'll know exactly what changes.</p>
     </div>
     """, unsafe_allow_html=True)
@@ -482,7 +503,7 @@ def show_page_3():
     # Communication
     st.markdown("""
     <div class="card">
-        <p style="font-size: 18px;">💬 <span style="color: #10B981; font-weight: bold;">Proactive Communication</span></p>
+        <p style="font-size: 18px; color: #1F2937;">💬 <span style="color: #15803D; font-weight: bold;">Proactive Communication</span></p>
         <p class="grey-text">We'll notify you:<br>
         • 2 days before expected repayment<br>
         • On repayment day<br>
@@ -494,9 +515,9 @@ def show_page_3():
     
     # Fee Transparency
     st.markdown(f"""
-    <div class="card" style="background: #2C3E50; color: white;">
-        <p style="font-size: 18px; color: white;">💵 <span style="color: #F9A01B; font-weight: bold;">Fee Transparency</span></p>
-        <p style="color: #E0E3E8;">Current BufferShield rate: {user_data['interest_rate']}% p.a.<br>
+    <div class="info-card">
+        <p style="font-size: 18px; color: #1E40AF;">💵 <span style="font-weight: bold;">Fee Transparency</span></p>
+        <p style="color: #1E40AF;">Current BufferShield rate: {user_data['interest_rate']}% p.a.<br>
         Standard overdraft rate: {user_data['standard_rate']}% p.a.<br>
         Activation fee: R0.00<br>
         Monthly fee: R0.00<br><br>
@@ -527,7 +548,7 @@ def show_page_4():
     
     # Summary card
     st.markdown(f"""
-    <div class="card" style="background: #2C3E50; color: white; text-align: center;">
+    <div class="card" style="background: #2C3E50; text-align: center;">
         <p style="color: #F9A01B;">Bridging amount</p>
         <h1 style="color: white; margin: 10px 0;">R{st.session_state.selected_amount:,}</h1>
         <hr style="border-color: #F9A01B;">
@@ -538,7 +559,7 @@ def show_page_4():
     # Cost breakdown
     cost_details = calculate_full_cost(st.session_state.selected_amount, st.session_state.selected_days)
     
-    cost_html = '<div class="card"><p style="font-weight: bold;">💰 Total cost breakdown</p><br>'
+    cost_html = '<div class="card"><p style="font-weight: bold; color: #1F2937;">💰 Total cost breakdown</p><br>'
     
     if cost_details['scenario'] == 'on_time':
         cost_html += f'<p class="grey-text">Bridging amount <span style="float: right; color: #1F2937; font-weight: bold;">R{st.session_state.selected_amount:,.2f}</span></p>'
@@ -558,7 +579,7 @@ def show_page_4():
     cost_html += '<hr>'
     
     total_color = "#EF4444" if cost_details['scenario'] == 'escalated' else "#2C3E50"
-    cost_html += f'<p style="font-size: 18px; font-weight: bold;">Total repayment <span style="float: right; color: {total_color};">R{cost_details["total"]:.2f}</span></p>'
+    cost_html += f'<p style="font-size: 18px; font-weight: bold; color: #1F2937;">Total repayment <span style="float: right; color: {total_color};">R{cost_details["total"]:.2f}</span></p>'
     
     if cost_details['scenario'] == 'escalated':
         cost_html += f'<p class="danger-text compact">⚠️ Escalates to standard overdraft on {cost_details["escalation_date"].strftime("%d %b")}</p>'
@@ -569,10 +590,10 @@ def show_page_4():
     
     # Auto-repay
     st.markdown(f"""
-    <div class="card">
-        <p class="teal-text">🔄 Auto-Repay</p>
-        <p class="grey-text">Date: {user_data['inflow_date'].strftime('%d %B %Y')}</p>
-        <p class="grey-text">Amount: R{cost_details['total']:.2f} from predicted inflow</p>
+    <div class="info-card">
+        <p style="font-weight: bold; color: #1E40AF;">🔄 Auto-Repay</p>
+        <p style="color: #1E40AF;">Date: {user_data['inflow_date'].strftime('%d %B %Y')}</p>
+        <p style="color: #1E40AF;">Amount: R{cost_details['total']:.2f} from predicted inflow</p>
     </div>
     """, unsafe_allow_html=True)
     
