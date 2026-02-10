@@ -1,6 +1,7 @@
 import streamlit as st
 import datetime
 import time
+import math
 
 # Page config
 st.set_page_config(
@@ -10,12 +11,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom CSS for FNB branding - light grey theme with teal accents
+# Custom CSS for FNB branding - light grey theme with correct teal accents
 st.markdown("""
 <style>
     /* FNB Actual Colors - subdued palette */
     :root {
-        --fnb-teal: #00A9CE;        /* Primary accent - teal */
+        --fnb-teal: #007c7f;        /* PRIMARY ACCENT - CORRECT TEAL */
         --fnb-orange: #FF9900;      /* Secondary accent - use sparingly */
         --fnb-dark: #333333;        /* Dark text */
         --fnb-grey: #666666;        /* Medium grey */
@@ -35,6 +36,7 @@ st.markdown("""
     /* Overall page styling - light grey background */
     .stApp {
         background-color: #FAFAFA;
+        padding-bottom: 80px; /* Space for bottom nav */
     }
     
     /* Custom FNB header - subdued grey */
@@ -69,25 +71,50 @@ st.markdown("""
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
     }
     
-    .notification-card {
+    .message-card {
         background: white;
         padding: 18px;
         border-radius: 12px;
         border: 1px solid #E0E0E0;
-        margin: 12px 0;
+        margin: 0;
         cursor: pointer;
         transition: all 0.2s ease;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        position: relative;
     }
     
-    .notification-card:hover {
-        border-color: #00A9CE;
-        box-shadow: 0 4px 12px rgba(0, 169, 206, 0.15);
+    .message-card:hover {
+        border-color: #007c7f;
+        box-shadow: 0 4px 12px rgba(0, 124, 127, 0.15);
+    }
+    
+    /* Message separator line */
+    .message-separator {
+        height: 1px;
+        background: #E0E0E0;
+        margin: 0;
+    }
+    
+    /* Unread badge */
+    .unread-badge {
+        position: absolute;
+        top: 18px;
+        right: 18px;
+        background: #E31E24;
+        color: white;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        font-weight: 700;
     }
     
     /* Section headers - OUTSIDE cards */
     .section-header {
-        color: #00A9CE;
+        color: #007c7f;
         font-size: 18px;
         font-weight: 600;
         margin: 25px 0 15px 0;
@@ -104,7 +131,7 @@ st.markdown("""
     
     /* Teal subheadings */
     .teal-heading {
-        color: #00A9CE;
+        color: #007c7f;
         font-size: 16px;
         font-weight: 600;
         margin: 20px 0 10px 0;
@@ -112,7 +139,7 @@ st.markdown("""
     
     /* Centered teal subheading */
     .centered-teal-heading {
-        color: #00A9CE;
+        color: #007c7f;
         font-size: 18px;
         font-weight: 600;
         margin: 20px 0 10px 0;
@@ -121,7 +148,7 @@ st.markdown("""
     
     /* Text colors */
     .teal-text {
-        color: #00A9CE;
+        color: #007c7f;
         font-weight: 600;
     }
     
@@ -167,13 +194,13 @@ st.markdown("""
     }
     
     .dot.active {
-        background: #00A9CE;
+        background: #007c7f;
         width: 10px;
         height: 10px;
     }
     
     .dot.completed {
-        background: #00A9CE;
+        background: #007c7f;
         opacity: 0.5;
     }
     
@@ -184,7 +211,7 @@ st.markdown("""
     }
     
     .dot-line.completed {
-        background: #00A9CE;
+        background: #007c7f;
         opacity: 0.5;
     }
     
@@ -217,19 +244,19 @@ st.markdown("""
     /* Primary button - teal */
     .stButton > button[kind="primary"],
     .stButton > button.primary-button {
-        background: #00A9CE;
+        background: #007c7f;
         color: white;
         border: none;
     }
     
     .stButton > button[kind="primary"]:hover,
     .stButton > button.primary-button:hover {
-        background: #0096B8;
+        background: #006a6d;
     }
     
     .stButton > button[kind="primary"]:active,
     .stButton > button.primary-button:active {
-        background: #008CAD;
+        background: #005a5d;
     }
     
     /* Full width button container */
@@ -267,7 +294,7 @@ st.markdown("""
         background: #F0FAFF;
         padding: 18px;
         border-radius: 12px;
-        border-left: 3px solid #00A9CE;
+        border-left: 3px solid #007c7f;
         margin: 15px 0;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
     }
@@ -284,7 +311,7 @@ st.markdown("""
     
     /* Slider */
     .stSlider > div > div > div {
-        background: #00A9CE;
+        background: #007c7f;
     }
     
     /* Compact text */
@@ -315,6 +342,71 @@ st.markdown("""
         font-weight: 600;
     }
     
+    /* Bottom Navigation Bar */
+    .bottom-nav {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: white;
+        border-top: 1px solid #E0E0E0;
+        padding: 8px 0 8px 0;
+        display: flex;
+        justify-content: space-around;
+        align-items: center;
+        box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
+        z-index: 1000;
+    }
+    
+    .nav-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        padding: 8px 16px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        text-decoration: none;
+        color: #666666;
+        position: relative;
+    }
+    
+    .nav-item:hover {
+        color: #007c7f;
+    }
+    
+    .nav-item.active {
+        color: #007c7f;
+    }
+    
+    .nav-icon {
+        font-size: 24px;
+        position: relative;
+    }
+    
+    .nav-label {
+        font-size: 11px;
+        font-weight: 500;
+    }
+    
+    /* Message badge on nav icon */
+    .nav-badge {
+        position: absolute;
+        top: -4px;
+        right: -8px;
+        background: #E31E24;
+        color: white;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 10px;
+        font-weight: 700;
+        border: 2px solid white;
+    }
+    
     /* Hide default streamlit elements */
     div[data-testid="stDecoration"] {
         display: none;
@@ -329,10 +421,12 @@ if 'selected_amount' not in st.session_state:
     st.session_state.selected_amount = 1250
 if 'selected_days' not in st.session_state:
     st.session_state.selected_days = 7
-if 'last_notification_time' not in st.session_state:
-    st.session_state.last_notification_time = time.time()
-if 'notifications' not in st.session_state:
-    st.session_state.notifications = []
+if 'last_message_time' not in st.session_state:
+    st.session_state.last_message_time = time.time()
+if 'messages' not in st.session_state:
+    st.session_state.messages = []
+if 'unread_count' not in st.session_state:
+    st.session_state.unread_count = 1  # Start with 1 unread (the debit order message)
 
 # Get today's actual date
 current_date = datetime.date.today()
@@ -359,109 +453,118 @@ user_data = {
     "predicted_shortfall": 800.00
 }
 
-# Notification templates
-notification_templates = [
+# Message templates
+message_templates = [
     {
         "type": "action",
         "title": "Action Required: Upcoming Debit Order",
         "subtitle": "{} • R{:,.2f} on {}",
         "detail": "Predicted shortfall detected. BufferShield available.",
-        "border_color": "#E31E24"
+        "border_color": "#E31E24",
+        "is_read": False
     },
     {
         "type": "suggestion",
         "title": "Suggested: Reschedule Debit Order",
         "subtitle": "{} debit order",
         "detail": "Move to after your next inflow for better cashflow",
-        "border_color": "#E0E0E0"
+        "border_color": "#E0E0E0",
+        "is_read": True
     },
     {
         "type": "insight",
         "title": "Cashflow Insight",
         "subtitle": "Your spending pattern detected",
         "detail": "R2,450 spent on groceries this month vs R2,100 last month",
-        "border_color": "#E0E0E0"
+        "border_color": "#E0E0E0",
+        "is_read": True
     },
     {
         "type": "alert",
         "title": "Low Balance Alert",
         "subtitle": "Account balance below R500",
         "detail": "Consider activating BufferShield for upcoming expenses",
-        "border_color": "#FF9900"
+        "border_color": "#FF9900",
+        "is_read": True
     },
     {
         "type": "tip",
         "title": "Savings Tip",
         "subtitle": "Round-up feature available",
         "detail": "Save R127.50 extra this month with automatic round-ups",
-        "border_color": "#E0E0E0"
+        "border_color": "#E0E0E0",
+        "is_read": True
     },
     {
         "type": "reminder",
         "title": "Payment Reminder",
         "subtitle": "Electricity prepaid running low",
         "detail": "Current balance: 45 units. Top up recommended.",
-        "border_color": "#00A9CE"
+        "border_color": "#007c7f",
+        "is_read": True
     },
     {
         "type": "achievement",
         "title": "Milestone Reached!",
         "subtitle": "You've saved R5,000 this quarter",
         "detail": "Keep up the great work with your savings goals",
-        "border_color": "#00A651"
+        "border_color": "#00A651",
+        "is_read": True
     },
     {
         "type": "security",
         "title": "Security Notice",
         "subtitle": "New login detected",
         "detail": "Device: iPhone 14 • Location: Benoni, GP • Just now",
-        "border_color": "#00A9CE"
+        "border_color": "#007c7f",
+        "is_read": True
     }
 ]
 
 # Helper functions
-def add_notification():
-    """Add a new notification from templates"""
+def add_message():
+    """Add a new message from templates"""
     import random
     current_time = time.time()
     
     # Check if 5 seconds have passed
-    if current_time - st.session_state.last_notification_time >= 5:
-        # Select a random notification template
-        template = random.choice(notification_templates)
+    if current_time - st.session_state.last_message_time >= 5:
+        # Select a random message template (skip the first one as it's always shown)
+        template = random.choice(message_templates[1:])
         
-        # Format the notification
-        if template["type"] == "action":
-            subtitle = template["subtitle"].format(
-                user_data['debit_order_recipient'],
-                user_data['debit_order_amount'],
-                user_data['debit_order_date'].strftime('%d %b')
-            )
-        elif template["type"] == "suggestion":
+        # Format the message
+        if template["type"] == "suggestion":
             subtitle = template["subtitle"].format(user_data['debit_order_recipient'])
         else:
             subtitle = template["subtitle"]
         
-        notification = {
+        message = {
             "title": template["title"],
             "subtitle": subtitle,
             "detail": template["detail"],
             "border_color": template["border_color"],
             "timestamp": datetime.datetime.now(),
-            "category": "Today"
+            "category": "Today",
+            "is_read": False
         }
         
-        # Add to the beginning of notifications list
-        st.session_state.notifications.insert(0, notification)
-        st.session_state.last_notification_time = current_time
+        # Add to the beginning of messages list
+        st.session_state.messages.insert(0, message)
+        st.session_state.last_message_time = current_time
+        st.session_state.unread_count += 1
         
-        # Keep only last 10 notifications
-        if len(st.session_state.notifications) > 10:
-            st.session_state.notifications = st.session_state.notifications[:10]
+        # Keep only last 10 messages
+        if len(st.session_state.messages) > 10:
+            st.session_state.messages = st.session_state.messages[:10]
 
-def calculate_interest(amount, days, rate):
-    """Calculate simple interest"""
-    return amount * (rate / 100) * (days / 365)
+def calculate_compound_interest(principal, rate, days):
+    """Calculate compound interest (daily compounding)"""
+    # Daily interest rate
+    daily_rate = rate / 100 / 365
+    # Compound formula: A = P(1 + r)^t
+    amount = principal * math.pow(1 + daily_rate, days)
+    interest = amount - principal
+    return interest
 
 def calculate_full_cost(amount, expected_days):
     """Calculate full cost including grace period and escalation"""
@@ -469,7 +572,7 @@ def calculate_full_cost(amount, expected_days):
     
     if expected_days <= inflow_days + user_data['grace_days']:
         # On time or within grace
-        interest = calculate_interest(amount, expected_days, user_data['interest_rate'])
+        interest = calculate_compound_interest(amount, user_data['interest_rate'], expected_days)
         return {
             'scenario': 'on_time',
             'interest': interest,
@@ -482,7 +585,7 @@ def calculate_full_cost(amount, expected_days):
         }
     else:
         # Escalated
-        interest = calculate_interest(amount, expected_days, user_data['standard_rate'])
+        interest = calculate_compound_interest(amount, user_data['standard_rate'], expected_days)
         activation_fee = user_data['activation_fee_standard']
         grace_end = inflow_days + user_data['grace_days']
         days_beyond_grace = expected_days - grace_end
@@ -518,80 +621,128 @@ def show_progress_dots(current_step, total_steps=4):
     dots_html += '</div>'
     st.markdown(dots_html, unsafe_allow_html=True)
 
-# Page 0: Notification Screen
-def show_notification_screen():
-    # Add new notification if 25 seconds have passed
-    add_notification()
+def show_bottom_nav(active="messages"):
+    """Display bottom navigation bar"""
+    # Count unread messages
+    unread_badge = f'<span class="nav-badge">{st.session_state.unread_count}</span>' if st.session_state.unread_count > 0 else ''
+    
+    nav_html = f"""
+    <div class="bottom-nav">
+        <div class="nav-item {'active' if active == 'home' else ''}">
+            <div class="nav-icon">🏠</div>
+            <div class="nav-label">Home</div>
+        </div>
+        <div class="nav-item {'active' if active == 'bank' else ''}">
+            <div class="nav-icon">🏦</div>
+            <div class="nav-label">Bank</div>
+        </div>
+        <div class="nav-item {'active' if active == 'messages' else ''}">
+            <div class="nav-icon">
+                💬
+                {unread_badge}
+            </div>
+            <div class="nav-label">Messages</div>
+        </div>
+        <div class="nav-item {'active' if active == 'profile' else ''}">
+            <div class="nav-icon">👤</div>
+            <div class="nav-label">My Profile</div>
+        </div>
+        <div class="nav-item {'active' if active == 'menu' else ''}">
+            <div class="nav-icon">☰</div>
+            <div class="nav-label">Menu</div>
+        </div>
+    </div>
+    """
+    st.markdown(nav_html, unsafe_allow_html=True)
+
+# Page 0: Message Screen
+def show_message_screen():
+    # Add new message if 5 seconds have passed
+    add_message()
     
     st.markdown("""
     <div class="fnb-header">
-        <h1>Notifications</h1>
+        <h1>Messages</h1>
         <p>Important updates for you</p>
     </div>
     """, unsafe_allow_html=True)
     
-    # Show dynamic notifications
-    if st.session_state.notifications:
+    # Show dynamic messages with separators
+    if st.session_state.messages:
         st.markdown('<p class="section-header">Recent</p>', unsafe_allow_html=True)
         
-        for notif in st.session_state.notifications[:3]:  # Show top 3
+        for idx, msg in enumerate(st.session_state.messages[:3]):  # Show top 3
+            # Message card
+            unread_badge = '<div class="unread-badge">1</div>' if not msg['is_read'] else ''
             st.markdown(f"""
-            <div class="notification-card" style="border-left: 3px solid {notif['border_color']};">
+            <div class="message-card" style="border-left: 3px solid {msg['border_color']};">
+                {unread_badge}
                 <div style="display: flex; justify-content: space-between; align-items: start;">
                     <div style="flex: 1;">
-                        <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">{notif['title']}</p>
-                        <p class="grey-text" style="margin: 5px 0 0 0;">{notif['subtitle']}</p>
-                        <p class="compact" style="margin: 5px 0 0 0;">{notif['detail']}</p>
-                        <p class="compact" style="margin: 5px 0 0 0; color: #999999;">{notif['timestamp'].strftime('%H:%M:%S')}</p>
+                        <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">{msg['title']}</p>
+                        <p class="grey-text" style="margin: 5px 0 0 0;">{msg['subtitle']}</p>
+                        <p class="compact" style="margin: 5px 0 0 0;">{msg['detail']}</p>
+                        <p class="compact" style="margin: 5px 0 0 0; color: #999999;">{msg['timestamp'].strftime('%H:%M:%S')}</p>
                     </div>
-                    <span style="color: #00A9CE; font-size: 18px;">→</span>
+                    <span style="color: #007c7f; font-size: 18px;">→</span>
                 </div>
             </div>
             """, unsafe_allow_html=True)
+            
+            # Add separator line between messages (but not after the last one)
+            if idx < min(2, len(st.session_state.messages[:3]) - 1):
+                st.markdown('<div class="message-separator"></div>', unsafe_allow_html=True)
     
     st.markdown('<p class="section-header">Today</p>', unsafe_allow_html=True)
     
-    # Primary action notification - always visible
-    st.markdown("""
-    <div class="notification-card" style="border-left: 3px solid #E31E24;">
+    # Primary action message - always visible
+    unread_badge_main = '<div class="unread-badge">1</div>' if st.session_state.unread_count > 0 else ''
+    st.markdown(f"""
+    <div class="message-card" style="border-left: 3px solid #E31E24;">
+        {unread_badge_main}
         <div style="display: flex; justify-content: space-between; align-items: start;">
             <div style="flex: 1;">
                 <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">Action Required: Upcoming Debit Order</p>
-                <p class="grey-text" style="margin: 5px 0 0 0;">{} • R{:,.2f} on {}</p>
+                <p class="grey-text" style="margin: 5px 0 0 0;">{user_data['debit_order_recipient']} • R{user_data['debit_order_amount']:,.2f} on {user_data['debit_order_date'].strftime('%d %b')}</p>
                 <p class="compact" style="margin: 5px 0 0 0;">Predicted shortfall detected. BufferShield available.</p>
             </div>
-            <span style="color: #00A9CE; font-size: 18px;">→</span>
+            <span style="color: #007c7f; font-size: 18px;">→</span>
         </div>
     </div>
-    """.format(
-        user_data['debit_order_recipient'],
-        user_data['debit_order_amount'],
-        user_data['debit_order_date'].strftime('%d %b')
-    ), unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
     
-    if st.button("View BufferShield Offer", key="notif1_btn", use_container_width=True):
+    if st.button("View BufferShield Offer", key="msg1_btn", use_container_width=True):
+        # Mark as read when clicked
+        st.session_state.unread_count = max(0, st.session_state.unread_count - 1)
         st.session_state.page = 1
         st.rerun()
     
-    # Show older notifications if any
-    if st.session_state.notifications and len(st.session_state.notifications) > 3:
+    # Show older messages if any with separators
+    if st.session_state.messages and len(st.session_state.messages) > 3:
         st.markdown('<p class="section-header" style="margin-top: 30px;">Earlier</p>', unsafe_allow_html=True)
         
-        for notif in st.session_state.notifications[3:6]:  # Show next 3
+        for idx, msg in enumerate(st.session_state.messages[3:6]):  # Show next 3
             st.markdown(f"""
-            <div class="notification-card">
+            <div class="message-card">
                 <div style="display: flex; justify-content: space-between; align-items: start;">
                     <div style="flex: 1;">
-                        <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">{notif['title']}</p>
-                        <p class="grey-text" style="margin: 5px 0 0 0;">{notif['subtitle']}</p>
-                        <p class="compact" style="margin: 5px 0 0 0;">{notif['detail']}</p>
-                        <p class="compact" style="margin: 5px 0 0 0; color: #999999;">{notif['timestamp'].strftime('%H:%M:%S')}</p>
+                        <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">{msg['title']}</p>
+                        <p class="grey-text" style="margin: 5px 0 0 0;">{msg['subtitle']}</p>
+                        <p class="compact" style="margin: 5px 0 0 0;">{msg['detail']}</p>
+                        <p class="compact" style="margin: 5px 0 0 0; color: #999999;">{msg['timestamp'].strftime('%H:%M:%S')}</p>
                     </div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
+            
+            # Add separator line between messages
+            if idx < min(2, len(st.session_state.messages[3:6]) - 1):
+                st.markdown('<div class="message-separator"></div>', unsafe_allow_html=True)
     
-    # Auto-refresh every 2 seconds to check for new notifications
+    # Show bottom navigation
+    show_bottom_nav(active="messages")
+    
+    # Auto-refresh every 2 seconds to check for new messages
     time.sleep(2)
     st.rerun()
 
@@ -666,6 +817,9 @@ def show_page_1():
     if st.button("← Back", key="back1"):
         st.session_state.page = 0
         st.rerun()
+    
+    # Show bottom navigation
+    show_bottom_nav(active="messages")
 
 # Page 2: Expected Inflow Date
 def show_page_2():
@@ -709,7 +863,7 @@ def show_page_2():
         <div class="fnb-card">
             <div class="cost-table">
                 <div class="cost-row" style="border: none;">
-                    <span class="grey-text">{st.session_state.selected_days} days:</span>
+                    <span class="grey-text">{st.session_state.selected_days} days (compound):</span>
                     <span class="teal-text">R{cost_details['interest']:.2f}</span>
                 </div>
                 <div class="cost-row">
@@ -729,7 +883,7 @@ def show_page_2():
             <p style="font-weight: 600; margin: 10px 0; color: #333333;">Since {st.session_state.selected_days} days exceeds grace period:</p>
             <div class="cost-table">
                 <div class="cost-row" style="border: none;">
-                    <span class="grey-text">Interest (Standard OD):</span>
+                    <span class="grey-text">Interest (Compound, Standard OD):</span>
                     <span class="red-text">R{cost_details['interest']:.2f}</span>
                 </div>
                 <div class="cost-row" style="border: none;">
@@ -741,16 +895,17 @@ def show_page_2():
                     <span style="font-weight: 600; color: #E31E24;">R{cost_details['total']:.2f}</span>
                 </div>
             </div>
-            <p class="red-text compact" style="margin: 10px 0 0 0;">At {cost_details['rate']:.2f}% p.a. (Standard overdraft)</p>
+            <p class="red-text compact" style="margin: 10px 0 0 0;">At {cost_details['rate']:.2f}% p.a. (Standard overdraft, compounded daily)</p>
         </div>
         """, unsafe_allow_html=True)
     
-    # Comparison scenarios - NOW IN A CARD
+    # Comparison scenarios - IN A CARD with separators
     st.markdown('<p class="section-header">Compare scenarios</p>', unsafe_allow_html=True)
     
     comparison_html = '<div class="fnb-card"><div class="cost-table">'
     
-    for days in [3, 7, 14, 30]:
+    scenarios_to_compare = [3, 7, 14, 30]
+    for idx, days in enumerate(scenarios_to_compare):
         scenario = calculate_full_cost(st.session_state.selected_amount, days)
         is_selected = days == st.session_state.selected_days
         is_escalated = scenario['scenario'] == 'escalated'
@@ -762,11 +917,11 @@ def show_page_2():
         if is_escalated:
             comparison_html += f'<div class="cost-row" style="border-bottom: 1px solid #F0F0F0;"><span style="color: #666666; {"font-weight: 600;" if is_selected else ""}">{label}</span><span style="color: #E31E24; font-weight: 600;">R{scenario["total"]:.2f}</span></div>'
         elif is_selected:
-            comparison_html += f'<div class="cost-row" style="border-bottom: 1px solid #F0F0F0;"><span style="color: #333333; font-weight: 600;">{label}</span><span style="color: #00A9CE; font-weight: 600;">R{scenario["total"]:.2f}</span></div>'
+            comparison_html += f'<div class="cost-row" style="border-bottom: 1px solid #F0F0F0;"><span style="color: #333333; font-weight: 600;">{label}</span><span style="color: #007c7f; font-weight: 600;">R{scenario["total"]:.2f}</span></div>'
         else:
             comparison_html += f'<div class="cost-row" style="border-bottom: 1px solid #F0F0F0;"><span style="color: #666666;">{label}</span><span style="color: #666666;">R{scenario["total"]:.2f}</span></div>'
     
-    comparison_html += '</div><p class="compact" style="margin: 10px 0 0 0;">Escalated = Standard overdraft with activation fee</p></div>'
+    comparison_html += '</div><p class="compact" style="margin: 10px 0 0 0;">Escalated = Standard overdraft with activation fee. Interest compounded daily.</p></div>'
     st.markdown(comparison_html, unsafe_allow_html=True)
     
     # Predicted inflow
@@ -785,6 +940,9 @@ def show_page_2():
     if st.button("← Back", key="back2"):
         st.session_state.page = 1
         st.rerun()
+    
+    # Show bottom navigation
+    show_bottom_nav(active="messages")
 
 # Page 3: What if things go wrong?
 def show_page_3():
@@ -812,7 +970,7 @@ def show_page_3():
     st.markdown('<p class="teal-heading">Escalation to Standard Overdraft</p>', unsafe_allow_html=True)
     st.markdown(f"""
     <div class="fnb-card">
-        <p class="grey-text" style="margin: 0; line-height: 1.6;">After the grace period, if still unpaid, BufferShield converts to a standard overdraft facility at {user_data['standard_rate']}% p.a. No surprise fees—you'll know exactly what changes.</p>
+        <p class="grey-text" style="margin: 0; line-height: 1.6;">After the grace period, if still unpaid, BufferShield converts to a standard overdraft facility at {user_data['standard_rate']}% p.a. (compounded daily). No surprise fees—you'll know exactly what changes.</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -842,6 +1000,10 @@ def show_page_3():
             <span style="color: #333333; font-weight: 600;">{user_data['standard_rate']}% p.a.</span>
         </div>
         <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+            <span class="grey-text">Interest compounding:</span>
+            <span style="color: #333333; font-weight: 600;">Daily</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
             <span class="grey-text">Activation fee:</span>
             <span style="color: #333333; font-weight: 600;">R0.00</span>
         </div>
@@ -860,6 +1022,9 @@ def show_page_3():
     if st.button("← Back", key="back3"):
         st.session_state.page = 2
         st.rerun()
+    
+    # Show bottom navigation
+    show_bottom_nav(active="messages")
 
 # Page 4: Review & Confirm
 def show_page_4():
@@ -876,10 +1041,10 @@ def show_page_4():
     
     # Summary card - teal theme
     st.markdown(f"""
-    <div class="fnb-card" style="background: #F5F5F5; text-align: center; padding: 30px 20px; border-left: 3px solid #00A9CE;">
+    <div class="fnb-card" style="background: #F5F5F5; text-align: center; padding: 30px 20px; border-left: 3px solid #007c7f;">
         <p style="color: #666666; margin: 0 0 10px 0; font-size: 14px;">Bridging amount</p>
         <h1 style="color: #333333; margin: 10px 0 20px 0; font-size: 42px; font-weight: 700;">R{st.session_state.selected_amount:,}</h1>
-        <div style="height: 2px; background: #00A9CE; margin: 20px auto; width: 80px;"></div>
+        <div style="height: 2px; background: #007c7f; margin: 20px auto; width: 80px;"></div>
         <p style="color: #666666; margin: 10px 0 0 0; font-size: 15px;">Expected repay: <strong style="color: #333333;">{st.session_state.selected_days} days</strong></p>
     </div>
     """, unsafe_allow_html=True)
@@ -895,7 +1060,7 @@ def show_page_4():
     if cost_details['scenario'] == 'on_time':
         items = [
             ("Bridging amount", f"R{st.session_state.selected_amount:,.2f}", False),
-            ("Interest charge", f"R{cost_details['interest']:.2f}", False),
+            ("Interest charge (compound)", f"R{cost_details['interest']:.2f}", False),
             ("Rate", f"{cost_details['rate']:.2f}% p.a. (BufferShield)", False),
             ("Activation fee", "R0.00", False),
             ("Monthly fee", "R0.00", False)
@@ -905,7 +1070,7 @@ def show_page_4():
     else:
         items = [
             ("Bridging amount", f"R{st.session_state.selected_amount:,.2f}", False),
-            ("Interest charge", f"R{cost_details['interest']:.2f}", True),
+            ("Interest charge (compound)", f"R{cost_details['interest']:.2f}", True),
             ("Rate", f"{cost_details['rate']:.2f}% p.a. (Standard OD)", True),
             ("Activation fee", f"R{cost_details['activation_fee']:.2f}", True),
             ("Grace period exceeded", f"by {cost_details['days_beyond_grace']} day(s)", True)
@@ -944,7 +1109,7 @@ def show_page_4():
             <span class="grey-text">Amount:</span>
             <span style="color: #333333; font-weight: 600;">R{cost_details['total']:.2f}</span>
         </div>
-        <p class="compact" style="margin: 10px 0 0 0; color: #00A9CE;">Deducted from predicted inflow</p>
+        <p class="compact" style="margin: 10px 0 0 0; color: #007c7f;">Deducted from predicted inflow</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -975,17 +1140,20 @@ def show_page_4():
     
     with col2:
         if st.button("Decline Offer", key="decline", use_container_width=True):
-            st.info("Offer declined. You can access BufferShield anytime from Notifications.")
+            st.info("Offer declined. You can access BufferShield anytime from Messages.")
             st.session_state.page = 0
             st.rerun()
     
     if st.button("← Back", key="back4"):
         st.session_state.page = 3
         st.rerun()
+    
+    # Show bottom navigation
+    show_bottom_nav(active="messages")
 
 # Main app routing
 if st.session_state.page == 0:
-    show_notification_screen()
+    show_message_screen()
 elif st.session_state.page == 1:
     show_page_1()
 elif st.session_state.page == 2:
