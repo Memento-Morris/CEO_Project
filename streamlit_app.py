@@ -9,15 +9,19 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom CSS for FNB branding
+# Custom CSS for FNB branding matching actual website
 st.markdown("""
 <style>
-    /* FNB Colors */
+    /* FNB Actual Colors from website */
     :root {
-        --fnb-dark-grey: #2C3E50;
-        --fnb-orange: #FF6B00;
-        --fnb-teal: #00A9CE;
-        --fnb-gold: #F9A01B;
+        --fnb-gold: #FF9900;        /* Primary FNB Orange/Gold */
+        --fnb-dark: #333333;        /* Dark text */
+        --fnb-grey: #666666;        /* Medium grey */
+        --fnb-light-grey: #F5F5F5;  /* Light backgrounds */
+        --fnb-border: #DDDDDD;      /* Borders */
+        --fnb-white: #FFFFFF;
+        --fnb-green: #00A651;       /* Success green */
+        --fnb-red: #E31E24;         /* Error red */
     }
     
     /* Hide Streamlit branding */
@@ -25,156 +29,280 @@ st.markdown("""
     footer {visibility: hidden;}
     header {visibility: hidden;}
     
-    /* Custom header */
+    /* Overall page styling */
+    .stApp {
+        background-color: #F5F5F5;
+    }
+    
+    /* Custom FNB header */
     .fnb-header {
-        background-color: var(--fnb-dark-grey);
-        padding: 20px;
-        border-radius: 10px;
-        margin-bottom: 20px;
-        text-align: center;
+        background: linear-gradient(to right, #FF9900 0%, #FF9900 100%);
+        padding: 25px 20px;
+        margin: -1rem -1rem 2rem -1rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
     
     .fnb-header h1 {
         color: white;
         margin: 0;
-        font-size: 24px;
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
     }
     
     .fnb-header p {
-        color: var(--fnb-gold);
+        color: white;
         margin: 5px 0 0 0;
-        font-size: 14px;
+        font-size: 13px;
+        opacity: 0.95;
     }
     
-    /* Card styling */
-    .card {
-        background: #F9FAFB;
-        padding: 15px;
-        border-radius: 8px;
-        border: 1px solid #D1D5DB;
-        margin: 10px 0;
-        color: #1F2937;
+    /* White card styling - matching FNB website */
+    .fnb-card {
+        background: white;
+        padding: 20px;
+        border-radius: 4px;
+        border: 1px solid #DDDDDD;
+        margin: 15px 0;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
     
     .notification-card {
-        background: #F9FAFB;
-        padding: 15px;
-        border-radius: 8px;
-        border: 1px solid #D1D5DB;
-        margin: 10px 0;
+        background: white;
+        padding: 18px;
+        border-radius: 4px;
+        border: 1px solid #DDDDDD;
+        margin: 12px 0;
         cursor: pointer;
-        transition: box-shadow 0.3s;
+        transition: all 0.2s ease;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
     }
     
     .notification-card:hover {
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        border-color: #FF9900;
+        box-shadow: 0 2px 6px rgba(255,153,0,0.15);
+        transform: translateY(-1px);
     }
     
-    /* Warning card */
-    .warning-card {
-        background: #FEF2F2;
-        padding: 15px;
-        border-radius: 8px;
-        border: 2px solid #EF4444;
-        margin: 15px 0;
+    /* Section headers */
+    .section-header {
+        color: #333333;
+        font-size: 18px;
+        font-weight: 600;
+        margin: 25px 0 15px 0;
+        padding-bottom: 8px;
+        border-bottom: 2px solid #FF9900;
     }
     
-    /* Text colors */
-    .orange-text {
-        color: var(--fnb-orange);
-        font-weight: bold;
+    /* Text colors matching FNB */
+    .gold-text {
+        color: #FF9900;
+        font-weight: 600;
     }
     
-    .teal-text {
-        color: var(--fnb-teal);
-        font-weight: bold;
+    .green-text {
+        color: #00A651;
+        font-weight: 600;
     }
     
-    .danger-text {
-        color: #EF4444;
-        font-weight: bold;
+    .red-text {
+        color: #E31E24;
+        font-weight: 600;
     }
     
     .grey-text {
-        color: #6B7280;
+        color: #666666;
         font-size: 14px;
     }
     
-    /* Progress dots */
+    .dark-text {
+        color: #333333;
+        font-weight: 600;
+    }
+    
+    /* Progress dots - FNB style */
     .progress-dots {
         display: flex;
         justify-content: center;
         align-items: center;
         margin: 20px 0;
-        gap: 8px;
+        gap: 10px;
     }
     
     .dot {
         width: 10px;
         height: 10px;
         border-radius: 50%;
-        background: #E0E3E8;
+        background: #DDDDDD;
     }
     
     .dot.active {
-        background: var(--fnb-dark-grey);
+        background: #FF9900;
         width: 12px;
         height: 12px;
     }
     
     .dot.completed {
-        background: var(--fnb-gold);
+        background: #FF9900;
+        opacity: 0.6;
     }
     
-    /* Buttons */
+    .dot-line {
+        width: 30px;
+        height: 2px;
+        background: #DDDDDD;
+    }
+    
+    .dot-line.completed {
+        background: #FF9900;
+        opacity: 0.6;
+    }
+    
+    /* Buttons - FNB style */
     .stButton > button {
         width: 100%;
-        background-color: var(--fnb-dark-grey);
+        background: linear-gradient(to bottom, #FF9900 0%, #FF8800 100%);
         color: white;
         border: none;
-        padding: 15px;
-        font-size: 16px;
-        font-weight: bold;
-        border-radius: 8px;
+        padding: 14px 24px;
+        font-size: 15px;
+        font-weight: 600;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        text-transform: none;
+        letter-spacing: 0.3px;
     }
     
     .stButton > button:hover {
-        background-color: #1a252f;
+        background: linear-gradient(to bottom, #FF8800 0%, #FF7700 100%);
+        box-shadow: 0 2px 8px rgba(255,153,0,0.3);
+        transform: translateY(-1px);
     }
     
-    /* Amount display */
+    /* Secondary buttons */
+    div[data-testid="column"] .stButton > button {
+        background: white;
+        color: #FF9900;
+        border: 2px solid #FF9900;
+    }
+    
+    div[data-testid="column"] .stButton > button:hover {
+        background: #FFF5E6;
+        border-color: #FF8800;
+    }
+    
+    /* Amount display - large and prominent */
     .amount-display {
         text-align: center;
-        font-size: 48px;
-        font-weight: bold;
-        color: var(--fnb-dark-grey);
-        margin: 20px 0;
+        font-size: 52px;
+        font-weight: 700;
+        color: #333333;
+        margin: 25px 0;
+        letter-spacing: -1px;
     }
     
-    /* Compact text */
-    .compact {
-        font-size: 12px;
-        color: #6B7280;
+    .amount-display .currency {
+        font-size: 28px;
+        color: #666666;
+        margin-right: 5px;
     }
     
-    /* Info card with light background */
+    /* Warning card - FNB style */
+    .warning-card {
+        background: #FFF5F5;
+        padding: 18px;
+        border-radius: 4px;
+        border-left: 4px solid #E31E24;
+        margin: 15px 0;
+    }
+    
+    /* Info card - FNB style */
     .info-card {
-        background: #EFF6FF;
-        padding: 15px;
-        border-radius: 8px;
-        border: 1px solid #BFDBFE;
-        margin: 10px 0;
-        color: #1E40AF;
+        background: #F0F8FF;
+        padding: 18px;
+        border-radius: 4px;
+        border-left: 4px solid #0066CC;
+        margin: 15px 0;
     }
     
     /* Success card */
     .success-card {
-        background: #F0FDF4;
-        padding: 15px;
-        border-radius: 8px;
-        border: 1px solid #BBF7D0;
-        margin: 10px 0;
-        color: #166534;
+        background: #F0FFF4;
+        padding: 18px;
+        border-radius: 4px;
+        border-left: 4px solid #00A651;
+        margin: 15px 0;
+    }
+    
+    /* Slider customization */
+    .stSlider > div > div > div {
+        background: #FF9900;
+    }
+    
+    /* Compact text */
+    .compact {
+        font-size: 13px;
+        color: #666666;
+        line-height: 1.5;
+    }
+    
+    /* Table styling */
+    .cost-table {
+        width: 100%;
+        margin: 15px 0;
+    }
+    
+    .cost-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 10px 0;
+        border-bottom: 1px solid #F0F0F0;
+    }
+    
+    .cost-row:last-child {
+        border-bottom: none;
+        border-top: 2px solid #333333;
+        margin-top: 10px;
+        padding-top: 12px;
+        font-weight: 600;
+    }
+    
+    /* Icon styling */
+    .icon {
+        font-size: 24px;
+        margin-right: 12px;
+    }
+    
+    /* Divider */
+    .fnb-divider {
+        height: 2px;
+        background: #FF9900;
+        margin: 20px 0;
+        width: 60px;
+    }
+    
+    /* Hide default streamlit elements */
+    div[data-testid="stDecoration"] {
+        display: none;
+    }
+    
+    /* Custom scrollbar */
+    ::-webkit-scrollbar {
+        width: 8px;
+    }
+    
+    ::-webkit-scrollbar-track {
+        background: #F5F5F5;
+    }
+    
+    ::-webkit-scrollbar-thumb {
+        background: #DDDDDD;
+        border-radius: 4px;
+    }
+    
+    ::-webkit-scrollbar-thumb:hover {
+        background: #CCCCCC;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -254,7 +382,7 @@ def calculate_full_cost(amount, expected_days):
         }
 
 def show_progress_dots(current_step, total_steps=4):
-    """Display progress dots"""
+    """Display progress dots - FNB website style"""
     dots_html = '<div class="progress-dots">'
     for i in range(1, total_steps + 1):
         if i < current_step:
@@ -265,9 +393,8 @@ def show_progress_dots(current_step, total_steps=4):
             dots_html += '<div class="dot"></div>'
         
         if i < total_steps:
-            dots_html += '<div style="width: 30px; height: 2px; background: {}"></div>'.format(
-                '#F9A01B' if i < current_step else '#E0E3E8'
-            )
+            line_class = 'completed' if i < current_step else ''
+            dots_html += f'<div class="dot-line {line_class}"></div>'
     
     dots_html += '</div>'
     st.markdown(dots_html, unsafe_allow_html=True)
@@ -277,32 +404,64 @@ def show_notification_screen():
     st.markdown("""
     <div class="fnb-header">
         <h1>Notifications</h1>
+        <p>Important updates for you</p>
     </div>
     """, unsafe_allow_html=True)
     
-    st.markdown("#### Today")
+    st.markdown('<p class="section-header">Today</p>', unsafe_allow_html=True)
     
-    # Notification 1: Action Required
-    if st.button("⚠️ **Action Required: Upcoming Debit Order**\n\n"
-                 f"{user_data['debit_order_recipient']} • R{user_data['debit_order_amount']:,.2f} on {user_data['debit_order_date'].strftime('%d %b')}\n\n"
-                 "Predicted shortfall detected. BufferShield available.", 
-                 key="notif1", use_container_width=True):
+    # Notification 1: Action Required (styled as FNB notification)
+    st.markdown("""
+    <div class="notification-card" style="border-left: 4px solid #E31E24;">
+        <div style="display: flex; align-items: start;">
+            <span class="icon" style="color: #E31E24;">⚠️</span>
+            <div style="flex: 1;">
+                <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">Action Required: Upcoming Debit Order</p>
+                <p class="grey-text" style="margin: 5px 0 0 0;">{} • R{:,.2f} on {}</p>
+                <p class="compact" style="margin: 5px 0 0 0;">Predicted shortfall detected. BufferShield available.</p>
+            </div>
+            <span style="color: #FF9900; font-size: 20px;">→</span>
+        </div>
+    </div>
+    """.format(
+        user_data['debit_order_recipient'],
+        user_data['debit_order_amount'],
+        user_data['debit_order_date'].strftime('%d %b')
+    ), unsafe_allow_html=True)
+    
+    if st.button("View BufferShield Offer", key="notif1_btn", use_container_width=True):
         st.session_state.page = 1
         st.rerun()
     
-    # Notification 2: Reschedule suggestion
-    st.button(f"📅 **Suggested: Reschedule Debit Order**\n\n"
-              f"{user_data['debit_order_recipient']} debit order\n\n"
-              "Move to after your next inflow for better cashflow",
-              key="notif2", use_container_width=True)
+    # Notification 2: Suggestion
+    st.markdown("""
+    <div class="notification-card" style="margin-top: 15px;">
+        <div style="display: flex; align-items: start;">
+            <span class="icon" style="color: #FF9900;">📅</span>
+            <div style="flex: 1;">
+                <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">Suggested: Reschedule Debit Order</p>
+                <p class="grey-text" style="margin: 5px 0 0 0;">{} debit order</p>
+                <p class="compact" style="margin: 5px 0 0 0;">Move to after your next inflow for better cashflow</p>
+            </div>
+        </div>
+    </div>
+    """.format(user_data['debit_order_recipient']), unsafe_allow_html=True)
     
-    st.markdown("#### Yesterday")
+    st.markdown('<p class="section-header" style="margin-top: 30px;">Yesterday</p>', unsafe_allow_html=True)
     
     # Notification 3: Insight
-    st.button("📊 **Cashflow Insight**\n\n"
-              "Your spending pattern detected\n\n"
-              "R2,450 spent on groceries this month vs R2,100 last month",
-              key="notif3", use_container_width=True)
+    st.markdown("""
+    <div class="notification-card">
+        <div style="display: flex; align-items: start;">
+            <span class="icon" style="color: #00A651;">📊</span>
+            <div style="flex: 1;">
+                <p style="margin: 0; font-weight: 600; color: #333333; font-size: 15px;">Cashflow Insight</p>
+                <p class="grey-text" style="margin: 5px 0 0 0;">Your spending pattern detected</p>
+                <p class="compact" style="margin: 5px 0 0 0;">R2,450 spent on groceries this month vs R2,100 last month</p>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 # Page 1: Amount Selection
 def show_page_1():
@@ -315,26 +474,26 @@ def show_page_1():
     
     show_progress_dots(1, 4)
     
-    # Usage limit
+    # Usage limit - FNB style
     st.markdown(f"""
-    <div class="card">
-        <p class="compact">⚡ Not available if used twice in 30 days • Currently: {user_data['activations_used']}/2</p>
+    <div class="fnb-card" style="background: #FFF5E6; border-left: 3px solid #FF9900;">
+        <p class="compact" style="margin: 0;">⚡ Not available if used twice in 30 days • Currently: {user_data['activations_used']}/2</p>
     </div>
     """, unsafe_allow_html=True)
     
-    # Why you qualify
+    # Why you qualify - FNB style
     st.markdown(f"""
-    <div class="info-card">
-        <p style="font-weight: bold; color: #1E40AF;">🔮 Why you qualify</p>
-        <p style="color: #1E40AF;">{user_data['flagged_reason']}: {user_data['debit_order_recipient']} R{user_data['debit_order_amount']:,.2f} on {user_data['debit_order_date'].strftime('%d %b')}</p>
-        <p class="danger-text compact">Predicted shortfall: R{user_data['predicted_shortfall']:,.2f}</p>
+    <div class="fnb-card">
+        <p class="gold-text" style="margin: 0 0 8px 0; font-size: 15px;">🔮 Why you qualify</p>
+        <p class="grey-text" style="margin: 0 0 5px 0;">{user_data['flagged_reason']}: {user_data['debit_order_recipient']} R{user_data['debit_order_amount']:,.2f} on {user_data['debit_order_date'].strftime('%d %b')}</p>
+        <p class="red-text compact" style="margin: 0;">Predicted shortfall: R{user_data['predicted_shortfall']:,.2f}</p>
     </div>
     """, unsafe_allow_html=True)
     
-    st.markdown("### Bridging amount needed?")
+    st.markdown('<p class="section-header">Bridging amount needed?</p>', unsafe_allow_html=True)
     
-    # Amount display
-    st.markdown(f'<div class="amount-display">R{st.session_state.selected_amount:,}</div>', unsafe_allow_html=True)
+    # Amount display - large and centered
+    st.markdown(f'<div class="amount-display"><span class="currency">R</span>{st.session_state.selected_amount:,}</div>', unsafe_allow_html=True)
     
     # Slider
     st.session_state.selected_amount = st.slider(
@@ -358,12 +517,12 @@ def show_page_1():
                 st.session_state.selected_amount = amount
                 st.rerun()
     
-    # Next inflow info
+    # Next inflow info - FNB card style
     st.markdown(f"""
-    <div class="success-card">
-        <p style="color: #166534; text-align: center; font-weight: bold;">Next expected inflow</p>
-        <p style="text-align: center; font-size: 18px; font-weight: bold; color: #15803D;">R{user_data['predicted_inflow']:,}</p>
-        <p style="text-align: center; color: #166534;">{user_data['inflow_date'].strftime('%d %B %Y')}</p>
+    <div class="fnb-card" style="text-align: center; background: #F0FFF4;">
+        <p class="grey-text" style="margin: 0 0 5px 0;">Next expected inflow</p>
+        <p class="green-text" style="margin: 0; font-size: 22px;">R{user_data['predicted_inflow']:,}</p>
+        <p class="compact" style="margin: 5px 0 0 0;">{user_data['inflow_date'].strftime('%d %B %Y')}</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -412,53 +571,72 @@ def show_page_2():
     
     if cost_details['scenario'] == 'on_time':
         st.markdown(f"""
-        <div class="card">
-            <p style="font-weight: bold; color: #1F2937;">💰 Cost for selected period</p>
-            <p style="color: #1F2937;">{st.session_state.selected_days} days: <span class="orange-text">R{cost_details['interest']:.2f}</span></p>
-            <p style="color: #1F2937;">Total to repay: <span style="font-weight: bold;">R{cost_details['total']:.2f}</span></p>
-            {f'<p class="teal-text compact">ℹ️ Using {cost_details["grace_used"]} grace day(s)</p>' if cost_details['grace_used'] > 0 else ''}
+        <div class="fnb-card">
+            <p style="font-weight: 600; color: #333333; margin: 0 0 12px 0;">💰 Cost for selected period</p>
+            <div class="cost-table">
+                <div class="cost-row" style="border: none;">
+                    <span class="grey-text">{st.session_state.selected_days} days:</span>
+                    <span class="gold-text">R{cost_details['interest']:.2f}</span>
+                </div>
+                <div class="cost-row">
+                    <span style="font-weight: 600; color: #333333;">Total to repay:</span>
+                    <span style="font-weight: 600; color: #333333;">R{cost_details['total']:.2f}</span>
+                </div>
+            </div>
+            {f'<p class="compact" style="margin: 10px 0 0 0; color: #00A651;">ℹ️ Using {cost_details["grace_used"]} grace day(s)</p>' if cost_details['grace_used'] > 0 else ''}
         </div>
         """, unsafe_allow_html=True)
     else:
         st.markdown(f"""
         <div class="warning-card">
             <p class="danger-text">⚠️ Escalation Scenario</p>
-            <p style="color: #991B1B;">Your expected inflow is on {user_data['inflow_date'].strftime('%d %b')} (day {inflow_days}).<br>
+            <p class="grey-text">Your expected inflow is on {user_data['inflow_date'].strftime('%d %b')} (day {inflow_days}).<br>
             Grace period ends day {grace_end_days} ({(current_date + datetime.timedelta(days=grace_end_days)).strftime('%d %b')}).</p>
-            <p style="font-weight: bold; margin-top: 10px; color: #991B1B;">Since {st.session_state.selected_days} days exceeds grace period:</p>
-            <p style="color: #991B1B;">Interest (Standard OD rate): <span class="danger-text">R{cost_details['interest']:.2f}</span></p>
-            <p style="color: #991B1B;">Activation fee: <span class="danger-text">R{cost_details['activation_fee']:.2f}</span></p>
+            <p style="font-weight: bold; margin-top: 10px;">Since {st.session_state.selected_days} days exceeds grace period:</p>
+            <p class="grey-text">Interest (Standard OD rate): <span class="danger-text">R{cost_details['interest']:.2f}</span></p>
+            <p class="grey-text">Activation fee: <span class="danger-text">R{cost_details['activation_fee']:.2f}</span></p>
             <hr>
-            <p style="font-weight: bold; color: #991B1B;">Total cost: <span class="danger-text">R{cost_details['total']:.2f}</span></p>
+            <p style="font-weight: bold;">Total cost: <span class="danger-text">R{cost_details['total']:.2f}</span></p>
             <p class="danger-text compact">⚠️ At {cost_details['rate']:.2f}% p.a. (Standard overdraft)</p>
         </div>
         """, unsafe_allow_html=True)
     
-    # Comparison table
-    st.markdown("**Compare scenarios:**")
+    # Comparison table - FNB style
+    st.markdown('<p style="font-weight: 600; color: #333333; margin: 20px 0 10px 0;">Compare scenarios:</p>', unsafe_allow_html=True)
     
-    comparison_html = '<div class="card">'
+    comparison_html = '<div class="fnb-card"><div class="cost-table">'
     for days in [3, 7, 14, 30]:
         scenario = calculate_full_cost(st.session_state.selected_amount, days)
         is_selected = days == st.session_state.selected_days
-        warning = "⚠️" if scenario['scenario'] == 'escalated' else ""
-        style = "font-weight: bold;" if is_selected else ""
-        color = "#EF4444" if scenario['scenario'] == 'escalated' else ("#FF6B00" if is_selected else "#6B7280")
+        warning = " ⚠️" if scenario['scenario'] == 'escalated' else ""
         
-        arrow = "→ " if is_selected else "   "
-        comparison_html += f'<p style="{style}color: {color};">{arrow}{days} days {warning} <span style="float: right;">R{scenario["total"]:.2f}</span></p>'
+        row_class = 'cost-row'
+        if days == 30:
+            row_class += '" style="border-bottom: none;'
+        
+        label_style = "font-weight: 600;" if is_selected else ""
+        value_color = "#E31E24" if scenario['scenario'] == 'escalated' else ("#FF9900" if is_selected else "#666666")
+        
+        arrow = "→ " if is_selected else ""
+        comparison_html += f'''
+        <div class="{row_class}">
+            <span style="{label_style} color: #333333;">{arrow}{days} days{warning}</span>
+            <span style="{label_style} color: {value_color};">R{scenario["total"]:.2f}</span>
+        </div>
+        '''
     
-    comparison_html += '<p class="compact">⚠️ = Escalated to standard overdraft</p>'
+    comparison_html += '</div>'
+    comparison_html += '<p class="compact" style="margin: 10px 0 0 0;">⚠️ = Escalated to standard overdraft</p>'
     comparison_html += '</div>'
     
     st.markdown(comparison_html, unsafe_allow_html=True)
     
-    # Predicted inflow
+    # Predicted inflow - FNB info card style
     days_until = (user_data['inflow_date'] - current_date).days
     st.markdown(f"""
     <div class="info-card">
-        <p style="font-weight: bold; color: #1E40AF;">📅 Next predicted inflow: {user_data['inflow_date'].strftime('%d %B')}</p>
-        <p style="color: #1E40AF;">in {days_until} days • We'll auto-repay from this</p>
+        <p class="gold-text" style="margin: 0 0 5px 0; font-size: 15px;">📅 Next predicted inflow: {user_data['inflow_date'].strftime('%d %B')}</p>
+        <p class="grey-text" style="margin: 0;">in {days_until} days • We'll auto-repay from this</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -484,27 +662,27 @@ def show_page_3():
     st.markdown("### What if things go wrong?")
     st.markdown('<p class="grey-text">We\'ve got you covered with transparent processes</p>', unsafe_allow_html=True)
     
-    # Grace Period
+    # Grace Period - FNB card style
     st.markdown(f"""
-    <div class="card">
-        <p style="font-size: 18px; color: #1F2937;">🕐 <span class="teal-text">Grace Period</span></p>
-        <p class="grey-text">If your predicted inflow doesn't arrive on time, you get an automatic 3-day grace period with no additional fees. We understand that salary dates can shift.</p>
+    <div class="fnb-card">
+        <p style="font-size: 16px; margin: 0 0 10px 0;"><span style="font-size: 20px;">🕐</span> <span class="gold-text">Grace Period</span></p>
+        <p class="grey-text" style="margin: 0; line-height: 1.6;">If your predicted inflow doesn't arrive on time, you get an automatic 3-day grace period with no additional fees. We understand that salary dates can shift.</p>
     </div>
     """, unsafe_allow_html=True)
     
-    # Escalation
+    # Escalation - FNB card style
     st.markdown(f"""
-    <div class="card">
-        <p style="font-size: 18px; color: #1F2937;">📊 <span class="orange-text">Escalation to Standard Overdraft</span></p>
-        <p class="grey-text">After the grace period, if still unpaid, BufferShield converts to a standard overdraft facility at {user_data['standard_rate']}% p.a. No surprise fees—you'll know exactly what changes.</p>
+    <div class="fnb-card">
+        <p style="font-size: 16px; margin: 0 0 10px 0;"><span style="font-size: 20px;">📊</span> <span class="gold-text">Escalation to Standard Overdraft</span></p>
+        <p class="grey-text" style="margin: 0; line-height: 1.6;">After the grace period, if still unpaid, BufferShield converts to a standard overdraft facility at {user_data['standard_rate']}% p.a. No surprise fees—you'll know exactly what changes.</p>
     </div>
     """, unsafe_allow_html=True)
     
-    # Communication
+    # Communication - FNB card style
     st.markdown("""
-    <div class="card">
-        <p style="font-size: 18px; color: #1F2937;">💬 <span style="color: #15803D; font-weight: bold;">Proactive Communication</span></p>
-        <p class="grey-text">We'll notify you:<br>
+    <div class="fnb-card">
+        <p style="font-size: 16px; margin: 0 0 10px 0;"><span style="font-size: 20px;">💬</span> <span class="green-text">Proactive Communication</span></p>
+        <p class="grey-text" style="margin: 0; line-height: 1.6;">We'll notify you:<br>
         • 2 days before expected repayment<br>
         • On repayment day<br>
         • If grace period activates<br>
@@ -513,15 +691,16 @@ def show_page_3():
     </div>
     """, unsafe_allow_html=True)
     
-    # Fee Transparency
+    # Fee Transparency - highlighted card
     st.markdown(f"""
-    <div class="info-card">
-        <p style="font-size: 18px; color: #1E40AF;">💵 <span style="font-weight: bold;">Fee Transparency</span></p>
-        <p style="color: #1E40AF;">Current BufferShield rate: {user_data['interest_rate']}% p.a.<br>
+    <div class="fnb-card" style="background: linear-gradient(to right, #FF9900 0%, #FF8800 100%); color: white;">
+        <p style="font-size: 16px; margin: 0 0 10px 0; color: white;"><span style="font-size: 20px;">💵</span> <span style="font-weight: 600;">Fee Transparency</span></p>
+        <p style="color: white; margin: 0; line-height: 1.6; opacity: 0.95;">
+        Current BufferShield rate: {user_data['interest_rate']}% p.a.<br>
         Standard overdraft rate: {user_data['standard_rate']}% p.a.<br>
         Activation fee: R0.00<br>
         Monthly fee: R0.00<br><br>
-        No hidden costs. Ever.</p>
+        <strong>No hidden costs. Ever.</strong></p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -546,54 +725,76 @@ def show_page_4():
     
     st.markdown("### Review Details")
     
-    # Summary card
+    # Summary card - FNB orange gradient
     st.markdown(f"""
-    <div class="card" style="background: #2C3E50; text-align: center;">
-        <p style="color: #F9A01B;">Bridging amount</p>
-        <h1 style="color: white; margin: 10px 0;">R{st.session_state.selected_amount:,}</h1>
-        <hr style="border-color: #F9A01B;">
-        <p style="color: white;">Expected repay: <strong>{st.session_state.selected_days} days</strong></p>
+    <div class="fnb-card" style="background: linear-gradient(to bottom, #FF9900 0%, #FF8800 100%); color: white; text-align: center; padding: 30px 20px;">
+        <p style="color: white; margin: 0 0 10px 0; opacity: 0.9; font-size: 14px;">Bridging amount</p>
+        <h1 style="color: white; margin: 10px 0 20px 0; font-size: 42px; font-weight: 700;">R{st.session_state.selected_amount:,}</h1>
+        <div style="height: 2px; background: white; opacity: 0.3; margin: 20px auto; width: 80px;"></div>
+        <p style="color: white; margin: 10px 0 0 0; font-size: 15px;">Expected repay: <strong>{st.session_state.selected_days} days</strong></p>
     </div>
     """, unsafe_allow_html=True)
     
-    # Cost breakdown
+    # Cost breakdown - FNB clean table style
     cost_details = calculate_full_cost(st.session_state.selected_amount, st.session_state.selected_days)
     
-    cost_html = '<div class="card"><p style="font-weight: bold; color: #1F2937;">💰 Total cost breakdown</p><br>'
+    cost_html = '<div class="fnb-card"><p style="font-weight: 600; color: #333333; margin: 0 0 15px 0;">💰 Total cost breakdown</p>'
+    cost_html += '<div class="cost-table">'
     
     if cost_details['scenario'] == 'on_time':
-        cost_html += f'<p class="grey-text">Bridging amount <span style="float: right; color: #1F2937; font-weight: bold;">R{st.session_state.selected_amount:,.2f}</span></p>'
-        cost_html += f'<p class="grey-text">Interest charge <span style="float: right; color: #1F2937; font-weight: bold;">R{cost_details["interest"]:.2f}</span></p>'
-        cost_html += f'<p class="grey-text">Rate <span style="float: right; color: #1F2937; font-weight: bold;">{cost_details["rate"]:.2f}% p.a. (BufferShield)</span></p>'
-        cost_html += f'<p class="grey-text">Activation fee <span style="float: right; color: #1F2937; font-weight: bold;">R0.00</span></p>'
-        cost_html += f'<p class="grey-text">Monthly fee <span style="float: right; color: #1F2937; font-weight: bold;">R0.00</span></p>'
+        items = [
+            ("Bridging amount", f"R{st.session_state.selected_amount:,.2f}", False),
+            ("Interest charge", f"R{cost_details['interest']:.2f}", False),
+            ("Rate", f"{cost_details['rate']:.2f}% p.a. (BufferShield)", False),
+            ("Activation fee", "R0.00", False),
+            ("Monthly fee", "R0.00", False)
+        ]
         if cost_details['grace_used'] > 0:
-            cost_html += f'<p class="grey-text">Grace period used <span style="float: right; color: #1F2937; font-weight: bold;">{cost_details["grace_used"]} day(s)</span></p>'
+            items.insert(3, ("Grace period used", f"{cost_details['grace_used']} day(s)", False))
     else:
-        cost_html += f'<p class="grey-text">Bridging amount <span style="float: right; color: #1F2937; font-weight: bold;">R{st.session_state.selected_amount:,.2f}</span></p>'
-        cost_html += f'<p class="danger-text">Interest charge <span style="float: right;">R{cost_details["interest"]:.2f}</span></p>'
-        cost_html += f'<p class="danger-text">Rate <span style="float: right;">{cost_details["rate"]:.2f}% p.a. (Standard OD)</span></p>'
-        cost_html += f'<p class="danger-text">Activation fee <span style="float: right;">R{cost_details["activation_fee"]:.2f}</span></p>'
-        cost_html += f'<p class="danger-text">Grace period exceeded <span style="float: right;">by {cost_details["days_beyond_grace"]} day(s)</span></p>'
+        items = [
+            ("Bridging amount", f"R{st.session_state.selected_amount:,.2f}", False),
+            ("Interest charge", f"R{cost_details['interest']:.2f}", True),
+            ("Rate", f"{cost_details['rate']:.2f}% p.a. (Standard OD)", True),
+            ("Activation fee", f"R{cost_details['activation_fee']:.2f}", True),
+            ("Grace period exceeded", f"by {cost_details['days_beyond_grace']} day(s)", True)
+        ]
     
-    cost_html += '<hr>'
+    for label, value, is_warning in items:
+        color = "#E31E24" if is_warning else "#666666"
+        value_color = "#E31E24" if is_warning else "#333333"
+        cost_html += f'''
+        <div class="cost-row" style="border-bottom: 1px solid #F0F0F0;">
+            <span style="color: {color};">{label}</span>
+            <span style="font-weight: 600; color: {value_color};">{value}</span>
+        </div>
+        '''
     
-    total_color = "#EF4444" if cost_details['scenario'] == 'escalated' else "#2C3E50"
-    cost_html += f'<p style="font-size: 18px; font-weight: bold; color: #1F2937;">Total repayment <span style="float: right; color: {total_color};">R{cost_details["total"]:.2f}</span></p>'
+    # Total
+    total_color = "#E31E24" if cost_details['scenario'] == 'escalated' else "#333333"
+    cost_html += f'''
+    <div class="cost-row" style="border-top: 2px solid #333333; border-bottom: none; margin-top: 10px; padding-top: 12px;">
+        <span style="font-weight: 600; color: #333333;">Total repayment</span>
+        <span style="font-weight: 700; color: {total_color}; font-size: 18px;">R{cost_details['total']:.2f}</span>
+    </div>
+    '''
     
+    cost_html += '</div>'  # Close cost-table
+    
+    # Escalation warning if applicable
     if cost_details['scenario'] == 'escalated':
-        cost_html += f'<p class="danger-text compact">⚠️ Escalates to standard overdraft on {cost_details["escalation_date"].strftime("%d %b")}</p>'
+        cost_html += f'<p class="red-text compact" style="margin: 12px 0 0 0;">⚠️ Escalates to standard overdraft on {cost_details["escalation_date"].strftime("%d %b")}</p>'
     
-    cost_html += '</div>'
+    cost_html += '</div>'  # Close fnb-card
     
     st.markdown(cost_html, unsafe_allow_html=True)
     
-    # Auto-repay
+    # Auto-repay - FNB info card
     st.markdown(f"""
     <div class="info-card">
-        <p style="font-weight: bold; color: #1E40AF;">🔄 Auto-Repay</p>
-        <p style="color: #1E40AF;">Date: {user_data['inflow_date'].strftime('%d %B %Y')}</p>
-        <p style="color: #1E40AF;">Amount: R{cost_details['total']:.2f} from predicted inflow</p>
+        <p class="gold-text" style="margin: 0 0 8px 0; font-size: 15px;">🔄 Auto-Repay</p>
+        <p class="grey-text" style="margin: 0 0 3px 0;">Date: {user_data['inflow_date'].strftime('%d %B %Y')}</p>
+        <p class="grey-text" style="margin: 0;">Amount: R{cost_details['total']:.2f} from predicted inflow</p>
     </div>
     """, unsafe_allow_html=True)
     
