@@ -580,48 +580,24 @@ def show_options_screen():
         is_rec = recommended and opt['name'] == recommended['name']
         border_color = "#00A651" if is_rec else "#e2e8f0"
         bg_color = "#f0fdf4" if is_rec else "white"
-        rec_badge = "&nbsp; 🏆 <span style='color:#00A651;font-size:11px;font-weight:700;'>RECOMMENDED</span>" if is_rec else ""
-
-        st.markdown(f"""
-        <div style="border:1.5px solid {border_color};border-radius:12px;
-            padding:16px 18px;margin-bottom:14px;background:{bg_color};">
-
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                <div style="font-size:15px;font-weight:700;color:#0A1628;">
-                    {opt['name']} {rec_badge}
-                    <span style="font-size:12px;font-weight:400;color:#6b7280;margin-left:6px;">
-                        {opt['rate']}% p.a.
-                    </span>
-                </div>
-                <div style="font-size:22px;font-weight:800;color:#0A1628;font-family:'DM Mono',monospace;">
-                    R{opt['grand_total']:.2f}
-                </div>
-            </div>
-
-            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;">
-                <div style="background:#f8fafc;border-radius:8px;padding:10px 12px;">
-                    <div style="font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:4px;">Amount</div>
-                    <div style="font-size:15px;font-weight:700;color:#0A1628;">R{opt['amount']:,.0f}</div>
-                </div>
-                <div style="background:#f8fafc;border-radius:8px;padding:10px 12px;">
-                    <div style="font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:4px;">Interest ({opt['days']}d)</div>
-                    <div style="font-size:15px;font-weight:700;color:#0A1628;">R{opt['interest']:.2f}</div>
-                </div>
-                <div style="background:#f8fafc;border-radius:8px;padding:10px 12px;">
-                    <div style="font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:4px;">Fees</div>
-                    <div style="font-size:15px;font-weight:700;color:#0A1628;">R{opt['fees']:.2f}</div>
-                </div>
-                <div style="background:#f8fafc;border-radius:8px;padding:10px 12px;">
-                    <div style="font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:4px;">RALC</div>
-                    <div style="font-size:15px;font-weight:700;color:#5b21b6;">R{opt['ralc']:.2f}</div>
-                </div>
-            </div>
-
-            <div style="font-size:12px;color:#4b5563;border-top:1px solid #e2e8f0;padding-top:10px;">
-                💡 {opt['why_chosen']}
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        rec_badge = "&nbsp;🏆 <span style='color:#00A651;font-size:11px;font-weight:700;'>RECOMMENDED</span>" if is_rec else ""
+        html = (
+            f"<div style='border:1.5px solid {border_color};border-radius:12px;padding:16px 18px;margin-bottom:14px;background:{bg_color};'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;'>"
+            f"<div style='font-size:15px;font-weight:700;color:#0A1628;'>{opt['name']}{rec_badge}"
+            f"<span style='font-size:12px;font-weight:400;color:#6b7280;margin-left:6px;'>{opt['rate']}% p.a.</span></div>"
+            f"<div style='font-size:22px;font-weight:800;color:#0A1628;font-family:monospace;'>R{opt['grand_total']:.2f}</div>"
+            f"</div>"
+            f"<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;'>"
+            f"<div style='background:#f8fafc;border-radius:8px;padding:10px 12px;'><div style='font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:4px;'>Amount</div><div style='font-size:15px;font-weight:700;color:#0A1628;'>R{opt['amount']:,.0f}</div></div>"
+            f"<div style='background:#f8fafc;border-radius:8px;padding:10px 12px;'><div style='font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:4px;'>Interest ({opt['days']}d)</div><div style='font-size:15px;font-weight:700;color:#0A1628;'>R{opt['interest']:.2f}</div></div>"
+            f"<div style='background:#f8fafc;border-radius:8px;padding:10px 12px;'><div style='font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:4px;'>Fees</div><div style='font-size:15px;font-weight:700;color:#0A1628;'>R{opt['fees']:.2f}</div></div>"
+            f"<div style='background:#f8fafc;border-radius:8px;padding:10px 12px;'><div style='font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:4px;'>RALC</div><div style='font-size:15px;font-weight:700;color:#5b21b6;'>R{opt['ralc']:.2f}</div></div>"
+            f"</div>"
+            f"<div style='font-size:12px;color:#4b5563;border-top:1px solid #e2e8f0;padding-top:10px;'>💡 {opt['why_chosen']}</div>"
+            f"</div>"
+        )
+        st.markdown(html, unsafe_allow_html=True)
 
     if st.button("← Back", use_container_width=True):
         st.session_state.page = 1
