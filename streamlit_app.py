@@ -166,7 +166,7 @@ st.markdown("""
 
 # ── Session state ─────────────────────────────────────────────────────────────
 for k, v in [('page', 0), ('shortfall_amount', 800), ('expected_repay_days', 7),
-             ('unread_count', 1), ('protection_activated', False)]:
+             ('unread_count', 1), ('protection_activated', False), ('selected_option', None)]:
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -183,11 +183,11 @@ user_data = {
     "debit_order_date": current_date + datetime.timedelta(days=2),
     "debit_order_recipient": "DStv",
     "predicted_shortfall": 800.00,
-    "income_stability_score": 0.92,
-    "debit_success_ratio": 0.88,
-    "overdraft_utilization": 0.35,
-    "savings_buffer_ratio": 0.15,
-    "credit_repayment_performance": 0.95,
+    "income_stability_score": 0.78,
+    "debit_success_ratio": 0.75,
+    "overdraft_utilization": 0.48,
+    "savings_buffer_ratio": 0.12,
+    "credit_repayment_performance": 0.78,
     "shortfall_events_this_quarter": 2,
     "max_shortfall_events_threshold": 3,
     "overdraft_limit": 20000,
@@ -287,7 +287,7 @@ def get_credit_options(shortfall, days, ud, rci_tier, rci_score):
             'optimal_for': 'Longer gaps (30+ days)',
             'why_chosen': "Fixed repayment gives certainty; preferred when gap exceeds 10 days.",
         })
-    if shortfall <= ud['credit_card_limit'] and rci_tier <= 2:
+    if shortfall <= ud['credit_card_limit']:
         c = calculate_credit_cost(shortfall, days, ud['credit_card_rate'])
         fee = round(shortfall * 0.015, 2)
         options.append({
@@ -298,7 +298,7 @@ def get_credit_options(shortfall, days, ud, rci_tier, rci_score):
             'optimal_for': 'Tier 1–2 customers, short gaps',
             'why_chosen': "Available due to strong credit history; cost is higher — consider only if overdraft unavailable.",
         })
-    if shortfall <= ud['salary_advance_max'] and rci_tier <= 3:
+    if shortfall <= ud['salary_advance_max']:
         c = calculate_credit_cost(shortfall, days, ud['salary_advance_rate'])
         options.append({
             'name': 'Salary Advance', 'amount': shortfall, 'days': days,
@@ -308,6 +308,7 @@ def get_credit_options(shortfall, days, ud, rci_tier, rci_score):
             'optimal_for': 'Confirmed salary inflow ≤14 days',
             'why_chosen': "Lowest rate available; repaid directly against confirmed salary inflow.",
         })
+    options.sort(key=lambda x: x['grand_total'])
     return options
 
 def get_recommended_option(options, days, rci_tier):
@@ -327,7 +328,7 @@ def get_recommended_option(options, days, rci_tier):
 # ── PAGE 0 — Messages ─────────────────────────────────────────────────────────
 
 def show_message_screen():
-    st.markdown("### 💬 Messages")
+    st.markdown("### Messages")
     st.caption(f"Hi {user_data['name'].split()[0]} · {user_data['account_number']}")
     st.divider()
 
@@ -339,7 +340,7 @@ def show_message_screen():
         border-radius:12px;padding:16px 18px;margin-bottom:12px;">
         <div style="font-size:11px;font-weight:700;letter-spacing:1px;
             color:#ea580c;text-transform:uppercase;margin-bottom:6px;">
-            ⚠️ Action Required
+            Action Required
         </div>
         <div style="font-size:16px;font-weight:700;color:#1a1a2e;">
             {user_data['debit_order_recipient']} · R{user_data['debit_order_amount']:,.2f}
@@ -363,7 +364,7 @@ def show_message_screen():
 
     st.divider()
     st.markdown("#### Earlier")
-    st.info("💡 **Cashflow Insight** — R2,450 spent on groceries this month vs R2,100 last month")
+    st.info("Cashflow Insight — R2,450 spent on groceries this month vs R2,100 last month")
 
 
 # ── PAGE 1 — Protection screen (3-step narrative) ─────────────────────────────
@@ -381,7 +382,7 @@ def show_protection_screen():
     st.markdown("")
 
     # ── STEP 1: THE PROBLEM ──────────────────────────────────────────────────
-    st.markdown("""<div class="step-label" style="color:#94a3b8;">STEP 1 OF 3 &nbsp;·&nbsp; WHAT'S HAPPENING</div>""",
+    st.markdown("""<div class="step-label" style="color:#94a3b8;">STEP 1 — WHAT'S HAPPENING</div>""",
                 unsafe_allow_html=True)
     st.markdown(f"""
     <div class="step-card step-problem">
@@ -408,7 +409,7 @@ def show_protection_screen():
     """, unsafe_allow_html=True)
 
     # ── STEP 2: TRUST SIGNAL ─────────────────────────────────────────────────
-    st.markdown("""<div class="step-label" style="color:#94a3b8;margin-top:4px;">STEP 2 OF 3 &nbsp;·&nbsp; YOUR CREDIT PROFILE</div>""",
+    st.markdown("""<div class="step-label" style="color:#94a3b8;margin-top:4px;">STEP 2 — YOUR CREDIT PROFILE</div>""",
                 unsafe_allow_html=True)
 
     bar_width = int(rci_score * 100)
@@ -472,7 +473,7 @@ def show_protection_screen():
         """, unsafe_allow_html=True)
 
     # ── STEP 3: THE SOLUTION ─────────────────────────────────────────────────
-    st.markdown("""<div class="step-label" style="color:#94a3b8;margin-top:4px;">STEP 3 OF 3 &nbsp;·&nbsp; OUR RECOMMENDATION</div>""",
+    st.markdown("""<div class="step-label" style="color:#94a3b8;margin-top:4px;">STEP 3 — OUR RECOMMENDATION</div>""",
                 unsafe_allow_html=True)
 
     if recommended:
@@ -508,8 +509,10 @@ def show_protection_screen():
         """, unsafe_allow_html=True)
 
     st.markdown("")
-    if st.button("✓  Protect my payment", use_container_width=True, type="primary", key="protect_btn"):
+    if st.button("Protect my payment", use_container_width=True, type="primary", key="protect_btn"):
         st.session_state.protection_activated = True
+        if not st.session_state.selected_option and recommended:
+            st.session_state.selected_option = recommended['name']
         st.session_state.page = 2
         st.rerun()
 
@@ -533,7 +536,10 @@ def show_confirmation_screen():
     rci_tier, rci_label, rci_color, rci_bg = get_rci_tier(rci_score)
     options = get_credit_options(shortfall, days, user_data, rci_tier, rci_score)
     recommended = get_recommended_option(options, days, rci_tier)
-    cost = recommended['grand_total'] - shortfall if recommended else 0
+    # Use user-selected option if set, otherwise fall back to recommended
+    selected_name = st.session_state.get('selected_option')
+    chosen = next((o for o in options if o['name'] == selected_name), recommended)
+    cost = chosen['grand_total'] - shortfall if chosen else 0
 
     st.balloons()
 
@@ -547,13 +553,13 @@ def show_confirmation_screen():
     </div>
     """, unsafe_allow_html=True)
 
-    if recommended:
+    if chosen:
         c1, c2, c3 = st.columns(3)
         c1.metric("Amount covered", f"R{shortfall:,.0f}")
         c2.metric("Total cost", f"R{cost:.2f}")
         c3.metric("Repay on", user_data['inflow_date'].strftime('%d %b'))
-
-        st.success(f"R{recommended['grand_total']:,.2f} will be automatically deducted from your salary deposit on {user_data['inflow_date'].strftime('%d %B %Y')}. Nothing more to do.")
+        facility_note = f" via {chosen['name']}" if selected_name and selected_name != (recommended['name'] if recommended else '') else ""
+        st.success(f"R{chosen['grand_total']:,.2f} will be automatically deducted from your salary deposit on {user_data['inflow_date'].strftime('%d %B %Y')}{facility_note}. Nothing more to do.")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -602,12 +608,12 @@ def show_options_screen():
         is_rec = recommended and opt['name'] == recommended['name']
         border_color = "#00A651" if is_rec else "#e2e8f0"
         bg_color = "#f0fdf4" if is_rec else "white"
-        rec_badge = "&nbsp;🏆 <span style='color:#00A651;font-size:11px;font-weight:700;'>RECOMMENDED</span>" if is_rec else ""
+        rec_badge = "&nbsp;<span style='color:#00A651;font-size:11px;font-weight:700;'>Recommended</span>" if is_rec else ""
 
         # Behavioural view (primary — actual cost for John's window)
         html = (
             f"<div style='border:1.5px solid {border_color};border-radius:12px;padding:16px 18px;margin-bottom:4px;background:{bg_color};'>"
-            f"<div style='font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;'>📊 Behavioural View &nbsp;·&nbsp; Your actual {opt['days']}-day cost</div>"
+            f"<div style='font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;'>Behavioural View &nbsp;·&nbsp; Your actual {opt['days']}-day cost</div>"
             f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;'>"
             f"<div style='font-size:15px;font-weight:700;color:#0A1628;'>{opt['name']}{rec_badge}"
             f"<span style='font-size:12px;font-weight:400;color:#6b7280;margin-left:6px;'>{opt['rate']}% p.a.</span></div>"
@@ -619,10 +625,18 @@ def show_options_screen():
             f"<div style='background:#f8fafc;border-radius:8px;padding:10px 12px;'><div style='font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:4px;'>Fees</div><div style='font-size:15px;font-weight:700;color:#0A1628;'>R{opt['fees']:.2f}</div></div>"
             f"<div style='background:#f8fafc;border-radius:8px;padding:10px 12px;'><div style='font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:4px;'>RALC</div><div style='font-size:15px;font-weight:700;color:#5b21b6;'>R{opt['ralc']:.2f}</div></div>"
             f"</div>"
-            f"<div style='font-size:12px;color:#4b5563;border-top:1px solid #e2e8f0;padding-top:10px;'>💡 {opt['why_chosen']}</div>"
+            f"<div style='font-size:12px;color:#4b5563;border-top:1px solid #e2e8f0;padding-top:10px;'>{opt['why_chosen']}</div>"
             f"</div>"
         )
         st.markdown(html, unsafe_allow_html=True)
+
+        # Select button — user can override recommendation
+        is_selected = st.session_state.selected_option == opt['name']
+        btn_label = "Selected" if is_selected else "Select this option"
+        btn_type = "primary" if is_selected else "secondary"
+        if st.button(btn_label, key=f"select_{opt['name']}", use_container_width=True, type=btn_type):
+            st.session_state.selected_option = opt['name']
+            st.rerun()
 
         # Regulatory view — collapsed expander per card, overdraft only (revolving facility)
         if opt['name'] == 'Overdraft':
@@ -631,7 +645,7 @@ def show_options_screen():
                 user_data['overdraft_rate'],
                 user_data['overdraft_monthly_fee']
             )
-            with st.expander("🏦 Regulatory View — NCA disclosure (full limit, 12-month illustration)"):
+            with st.expander("Regulatory View — NCA disclosure (full limit, 12-month illustration)"):
                 st.markdown(f"""
 <div style='background:#f1f5f9;border-radius:8px;padding:12px 16px;font-size:13px;'>
 <div style='color:#64748b;font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px;'>If full R{user_data['overdraft_limit']:,} limit used · Repaid over 12 months</div>
@@ -650,7 +664,18 @@ def show_options_screen():
 
         st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
 
-    if st.button("← Back", use_container_width=True):
+    st.markdown("---")
+    selected_name = st.session_state.get('selected_option')
+    if selected_name:
+        st.success(f"You have selected: **{selected_name}**")
+        if st.button("Confirm and protect my payment", use_container_width=True, type="primary", key="confirm_from_options"):
+            st.session_state.protection_activated = True
+            st.session_state.page = 2
+            st.rerun()
+    else:
+        st.info("Select an option above to proceed.")
+
+    if st.button("Back", use_container_width=True, key="back_from_options"):
         st.session_state.page = 1
         st.rerun()
 
@@ -658,7 +683,7 @@ def show_options_screen():
 # ── PAGE 4 — Calculator ───────────────────────────────────────────────────────
 
 def show_calculator_screen():
-    st.markdown("### 🧮 Cost Calculator")
+    st.markdown("### Cost Calculator")
     st.caption("Explore different amounts and repayment windows")
     st.divider()
 
@@ -698,7 +723,7 @@ def show_calculator_screen():
         for opt in options:
             is_rec = recommended and opt['name'] == recommended['name']
             if is_rec:
-                st.success(f"**🏆 {opt['name']} (Recommended)**")
+                st.success(f"**{opt['name']} (Recommended)**")
             else:
                 st.info(f"**{opt['name']}**")
             c1, c2, c3 = st.columns(3)
