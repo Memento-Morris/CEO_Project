@@ -203,11 +203,33 @@ user_data = {
 
 # ── Backend logic ─────────────────────────────────────────────────────────────
 
-def calculate_credit_cost(amount, days, rate):
+def calculate_behavioural_cost(amount, days, rate):
+    """Engine 1 — Real cost for actual usage window (daily accrual)."""
     daily_rate = rate / 100 / 365
-    total = amount * math.pow(1 + daily_rate, days)
-    interest = total - amount
-    return {'interest': round(interest, 2), 'total': round(total, 2)}
+    interest = amount * daily_rate * days
+    return {'interest': round(interest, 2), 'total': round(amount + interest, 2)}
+
+def calculate_regulatory_cost(limit, annual_rate, monthly_fee, term_months=12):
+    """Engine 2 — NCA disclosure view (full limit, amortised over 12 months)."""
+    r = annual_rate / 100 / 12
+    if r == 0:
+        pmt = limit / term_months
+    else:
+        pmt = limit * (r / (1 - (1 + r) ** -term_months))
+    total_repayment = round(pmt * term_months + monthly_fee * term_months, 2)
+    total_interest = round(pmt * term_months - limit, 2)
+    total_fees = round(monthly_fee * term_months, 2)
+    return {
+        'monthly_instalment': round(pmt, 2),
+        'total_repayment': total_repayment,
+        'total_interest': total_interest,
+        'total_fees': total_fees,
+        'term_months': term_months,
+    }
+
+def calculate_credit_cost(amount, days, rate):
+    """Alias — behavioural engine used throughout."""
+    return calculate_behavioural_cost(amount, days, rate)
 
 def calculate_rci(ud, days=0):
     weights = {'income_stability': 0.30, 'debit_success': 0.25,
@@ -581,8 +603,11 @@ def show_options_screen():
         border_color = "#00A651" if is_rec else "#e2e8f0"
         bg_color = "#f0fdf4" if is_rec else "white"
         rec_badge = "&nbsp;🏆 <span style='color:#00A651;font-size:11px;font-weight:700;'>RECOMMENDED</span>" if is_rec else ""
+
+        # Behavioural view (primary — actual cost for John's window)
         html = (
-            f"<div style='border:1.5px solid {border_color};border-radius:12px;padding:16px 18px;margin-bottom:14px;background:{bg_color};'>"
+            f"<div style='border:1.5px solid {border_color};border-radius:12px;padding:16px 18px;margin-bottom:4px;background:{bg_color};'>"
+            f"<div style='font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;'>📊 Behavioural View &nbsp;·&nbsp; Your actual {opt['days']}-day cost</div>"
             f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;'>"
             f"<div style='font-size:15px;font-weight:700;color:#0A1628;'>{opt['name']}{rec_badge}"
             f"<span style='font-size:12px;font-weight:400;color:#6b7280;margin-left:6px;'>{opt['rate']}% p.a.</span></div>"
@@ -598,6 +623,27 @@ def show_options_screen():
             f"</div>"
         )
         st.markdown(html, unsafe_allow_html=True)
+
+        # Regulatory view — collapsed expander per card, overdraft only (revolving facility)
+        if opt['name'] == 'Overdraft':
+            reg = calculate_regulatory_cost(
+                user_data['overdraft_limit'],
+                user_data['overdraft_rate'],
+                user_data['overdraft_monthly_fee']
+            )
+            with st.expander("🏦 Regulatory View — NCA disclosure (full limit, 12-month illustration)"):
+                st.markdown(f"""
+<div style='background:#f1f5f9;border-radius:8px;padding:12px 16px;font-size:13px;'>
+<div style='color:#64748b;font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px;'>If full R{user_data['overdraft_limit']:,} limit used · Repaid over 12 months</div>
+</div>""", unsafe_allow_html=True)
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Monthly instalment", f"R{reg['monthly_instalment']:,.2f}")
+                c2.metric("Total repayment", f"R{reg['total_repayment']:,.2f}")
+                c3.metric("Total interest", f"R{reg['total_interest']:,.2f}")
+                c4.metric("Total fees (12mo)", f"R{reg['total_fees']:,.2f}")
+                st.caption("This illustration is required by the NCA for revolving credit facilities. It assumes the full limit is drawn and repaid over 12 equal monthly instalments — it does not reflect John's actual R800 / 7-day usage.")
+
+        st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
 
     if st.button("← Back", use_container_width=True):
         st.session_state.page = 1
