@@ -196,6 +196,7 @@ user_data = {
     "temp_loan_rate": 19.75,
     "temp_loan_max": 5000,
     "salary_advance_rate": 15.00,
+    "salary_advance_monthly_fee": 100.00,
     "salary_advance_max": 2000,
 }
 
@@ -285,12 +286,13 @@ def get_credit_options(shortfall, days, ud, rci_tier, rci_score):
         })
     if shortfall <= ud['salary_advance_max']:
         c = calculate_credit_cost(shortfall, days, ud['salary_advance_rate'])
+        fee = ud['salary_advance_monthly_fee']
         options.append({
             'name': 'Salary Advance', 'amount': shortfall, 'days': days,
             'rate': ud['salary_advance_rate'], 'interest': c['interest'],
-            'total': c['total'], 'fees': 0, 'grand_total': c['total'],
+            'total': c['total'], 'fees': fee, 'grand_total': c['total'] + fee,
             'ralc': calculate_ralc(shortfall, days, ud['salary_advance_rate'], rci_score),
-            'note': "Lowest rate available with no fees. Repaid directly from your confirmed salary deposit. Best choice when your shortfall is within the advance limit.",
+            'note': f"Lowest interest rate available. Monthly service fee of R{fee:.0f} applies. Repaid directly from your confirmed salary deposit.",
         })
     options.sort(key=lambda x: x['grand_total'])
     return options
@@ -744,6 +746,6 @@ for col, (p, label) in zip(nav_cols, nav_items):
             f"<div style='text-align:center;font-size:11px;font-weight:600;color:{color};{underline}'>{label}</div>",
             unsafe_allow_html=True
         )
-        if st.button(label, key=f"nav_{p}", use_container_width=True, label_visibility="collapsed"):
+        if st.button(" ", key=f"nav_{p}", use_container_width=True):
             st.session_state.page = p
             st.rerun()
