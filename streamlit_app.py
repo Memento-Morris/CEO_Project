@@ -122,7 +122,9 @@ st.markdown("""
 .stButton > button:not([kind="primary"]) {
     border-radius: 10px !important;
     font-size: 13px !important;
-    color: #374151 !important;
+    background: #0A1628 !important;
+    color: #ffffff !important;
+    border: none !important;
 }
 
 /* Guardrail strip */
@@ -272,7 +274,7 @@ def get_credit_options(shortfall, days, ud, rci_tier, rci_score):
             'rate': ud['overdraft_rate'], 'interest': c['interest'],
             'total': c['total'], 'fees': fee, 'grand_total': c['total'] + fee,
             'ralc': calculate_ralc(shortfall, days, ud['overdraft_rate'], rci_score),
-            'note': f"No new credit application needed. Monthly service fee of R{ud['overdraft_monthly_fee']:.0f} applies regardless of how long you use it — most cost-effective when you need more than R{int(ud['overdraft_monthly_fee'] * 10):,} or carry the balance for 30+ days.",
+            'note': f"Recommended for this scenario. No new application needed — your existing facility covers the shortfall instantly. Monthly service fee of R{ud['overdraft_monthly_fee']:.0f} applies. Most cost-effective when used for 30+ days or larger amounts.",
         })
     if shortfall <= ud['temp_loan_max']:
         c = calculate_credit_cost(shortfall, days, ud['temp_loan_rate'])
@@ -300,6 +302,11 @@ def get_credit_options(shortfall, days, ud, rci_tier, rci_score):
 def get_recommended_option(options, days, rci_tier):
     if not options:
         return None
+    # Overdraft preferred for short gaps — no new application, instant, revolving
+    if days <= 14:
+        od = [o for o in options if o['name'] == 'Overdraft']
+        if od:
+            return od[0]
     return min(options, key=lambda x: x['grand_total'])
 
 
@@ -686,30 +693,41 @@ def show_calculator_screen():
 
     st.divider()
 
-    st.markdown(f"""
-    <div style="background:{rci_bg};border-left:4px solid {rci_color};
-        padding:8px 12px;border-radius:6px;margin-bottom:12px;font-size:13px;">
-        <strong>RCI at {calc_days}-day horizon:</strong>
-        <span style="font-size:18px;font-weight:800;color:{rci_color};margin:0 6px;">{rci_score}</span>
-        Tier {rci_tier} — {rci_label}
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        f"<div style='background:#0A1628;border-left:4px solid {rci_color};padding:10px 14px;border-radius:8px;margin-bottom:12px;font-size:13px;color:#e2e8f0;'>"
+        f"<strong style='color:white;'>RCI at {calc_days}-day horizon:</strong>"
+        f"<span style='font-size:18px;font-weight:800;color:{rci_color};margin:0 8px;'>{rci_score}</span>"
+        f"Tier {rci_tier} — {rci_label}</div>",
+        unsafe_allow_html=True
+    )
 
     if not options:
         st.warning("No eligible facilities for this combination.")
     else:
-        for opt in options:
-            is_rec = recommended and opt['name'] == recommended['name']
-            if is_rec:
-                st.success(f"**{opt['name']} (Recommended)**")
-            else:
-                st.info(f"**{opt['name']}**")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Cost of Liquidity", f"R{opt['grand_total'] - opt['amount']:.2f}")
-            c2.metric("Total to Repay", f"R{opt['grand_total']:,.2f}")
-            c3.metric("RALC", f"R{opt['ralc']:.2f}", help="Risk-Adjusted Liquidity Cost")
-            st.caption(f"Rate {opt['rate']}% p.a. · Best for: {opt['optimal_for']}")
-            st.divider()
+        option_names = [o['name'] for o in options]
+        # Mark recommended
+        rec_name = recommended['name'] if recommended else None
+        display_names = [f"{n} (Recommended)" if n == rec_name else n for n in option_names]
+        selected_display = st.radio("Select product to view", display_names, horizontal=True, label_visibility="collapsed")
+        selected_name = option_names[display_names.index(selected_display)]
+        opt = next(o for o in options if o['name'] == selected_name)
+
+        is_rec = opt['name'] == rec_name
+        bg = "#f0fdf4" if is_rec else "#f8fafc"
+        border = "#00A651" if is_rec else "#e2e8f0"
+        st.markdown(
+            f"<div style='background:{bg};border:1.5px solid {border};border-radius:12px;padding:16px 18px;margin-top:12px;'>",
+            unsafe_allow_html=True
+        )
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Cost of liquidity", f"R{opt['grand_total'] - opt['amount']:.2f}")
+        c2.metric("Total to repay", f"R{opt['grand_total']:,.2f}")
+        c3.metric("RALC", f"R{opt['ralc']:.2f}", help="Risk-Adjusted Liquidity Cost: interest cost divided by RCI score")
+        st.markdown(
+            f"<div style='font-size:12px;color:#4b5563;margin-top:8px;border-top:1px solid {border};padding-top:10px;'>"
+            f"{opt['note']}</div></div>",
+            unsafe_allow_html=True
+        )
 
     if st.button("← Back to Messages", use_container_width=True):
         st.session_state.page = 0
