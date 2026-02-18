@@ -190,7 +190,7 @@ user_data = {
     "credit_repayment_performance": 0.95,
     "shortfall_events_this_quarter": 2,
     "max_shortfall_events_threshold": 3,
-    "overdraft_limit": 2000,
+    "overdraft_limit": 20000,
     "overdraft_rate": 18.25,
     "overdraft_monthly_fee": 69.00,
     "temp_loan_rate": 19.75,
@@ -636,12 +636,17 @@ def show_options_screen():
 <div style='background:#f1f5f9;border-radius:8px;padding:12px 16px;font-size:13px;'>
 <div style='color:#64748b;font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px;'>If full R{user_data['overdraft_limit']:,} limit used · Repaid over 12 months</div>
 </div>""", unsafe_allow_html=True)
-                c1, c2, c3, c4 = st.columns(4)
+                total_cost = reg['total_interest'] + reg['total_fees']
+                c1, c2, c3 = st.columns(3)
                 c1.metric("Monthly instalment", f"R{reg['monthly_instalment']:,.2f}")
-                c2.metric("Total repayment", f"R{reg['total_repayment']:,.2f}")
-                c3.metric("Total interest", f"R{reg['total_interest']:,.2f}")
-                c4.metric("Total fees (12mo)", f"R{reg['total_fees']:,.2f}")
-                st.caption("This illustration is required by the NCA for revolving credit facilities. It assumes the full limit is drawn and repaid over 12 equal monthly instalments — it does not reflect John's actual R800 / 7-day usage.")
+                c2.metric("Total you repay", f"R{reg['total_repayment']:,.2f}")
+                c3.metric("Total cost to you", f"R{total_cost:,.2f}")
+                st.caption(
+                    f"You borrow R{user_data['overdraft_limit']:,} and repay R{reg['total_repayment']:,.2f} over 12 months. "
+                    f"The R{total_cost:,.2f} difference is what it actually costs — "
+                    f"R{reg['total_interest']:,.2f} in interest + R{reg['total_fees']:,.2f} in monthly service fees. "
+                    f"NCA requires this worst-case illustration. John's real cost for R800 over {days} days is R{options[0]['grand_total'] - options[0]['amount']:.2f}."
+                )
 
         st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
 
