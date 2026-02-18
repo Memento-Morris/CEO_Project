@@ -23,6 +23,11 @@ pip install -r requirements.txt
 streamlit run streamlit_app.py
 ```
 
+Teal: #54B9AC
+Light teal: #76FAE9
+Orange: #E66C37
+Black: #333333
+
 3. Open browser at `http://localhost:8501`
 
 ## Deploy to Streamlit Cloud (FREE)
