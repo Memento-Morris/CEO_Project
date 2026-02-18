@@ -13,45 +13,153 @@ st.set_page_config(
 # ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-/* RCI tier pill */
-.rci-pill {
-    display: inline-flex; align-items: center; gap: 8px;
-    padding: 6px 14px; border-radius: 999px;
-    font-weight: 700; font-size: 14px; margin-bottom: 4px;
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@500&display=swap');
+
+* { font-family: 'DM Sans', sans-serif; }
+
+/* ── Step cards ── */
+.step-card {
+    border-radius: 16px;
+    padding: 20px 22px;
+    margin-bottom: 16px;
+    border: 1.5px solid #e2e8f0;
+    background: #ffffff;
 }
-/* Event-type badge */
-.event-badge {
-    display: inline-flex; align-items: center; gap: 6px;
-    background: #f0f4ff; border: 1px solid #c7d7ff;
-    color: #1a3a8f; padding: 5px 12px; border-radius: 8px;
-    font-size: 12px; font-weight: 600;
+.step-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: #94a3b8;
+    margin-bottom: 10px;
 }
-/* Guardrail bar */
-.guardrail-bar {
-    background: #fff8e1; border-left: 4px solid #f59e0b;
-    padding: 8px 12px; border-radius: 4px; font-size: 12px;
-    color: #78350f; margin-bottom: 6px;
+/* Step 1 — Problem */
+.step-problem {
+    background: #0A1628;
+    border: none;
+    color: white;
 }
-/* Option card */
+.step-problem .step-label { color: #64748b; }
+.problem-amount {
+    font-size: 42px;
+    font-weight: 700;
+    color: #ffffff;
+    line-height: 1;
+    font-family: 'DM Mono', monospace;
+}
+.problem-meta {
+    font-size: 14px;
+    color: #94a3b8;
+    margin-top: 6px;
+}
+.problem-highlight {
+    color: #f97316;
+    font-weight: 600;
+}
+/* Step 2 — Trust */
+.step-trust {
+    background: #f8fafc;
+    border-color: #e2e8f0;
+}
+.rci-score-big {
+    font-size: 38px;
+    font-weight: 700;
+    font-family: 'DM Mono', monospace;
+    line-height: 1;
+}
+.rci-bar-track {
+    background: #e2e8f0;
+    border-radius: 999px;
+    height: 8px;
+    margin: 10px 0 6px 0;
+    overflow: hidden;
+}
+.tier-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 10px;
+}
+.tier-chip {
+    flex: 1;
+    text-align: center;
+    padding: 5px 4px;
+    border-radius: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    border: 1.5px solid transparent;
+}
+/* Step 3 — Solution */
+.step-solution {
+    background: #f0fdf4;
+    border-color: #86efac;
+}
+.cost-big {
+    font-size: 42px;
+    font-weight: 700;
+    color: #16a34a;
+    font-family: 'DM Mono', monospace;
+    line-height: 1;
+}
+.solution-meta {
+    font-size: 13px;
+    color: #4b5563;
+    margin-top: 6px;
+}
+/* CTA button override */
+.stButton > button[kind="primary"] {
+    background: #00A651 !important;
+    border: none !important;
+    border-radius: 12px !important;
+    font-size: 16px !important;
+    font-weight: 700 !important;
+    padding: 14px !important;
+    color: white !important;
+    transition: opacity 0.15s;
+}
+.stButton > button[kind="primary"]:hover { opacity: 0.88; }
+
+/* Secondary buttons */
+.stButton > button:not([kind="primary"]) {
+    border-radius: 10px !important;
+    font-size: 13px !important;
+    color: #374151 !important;
+}
+
+/* Guardrail strip */
+.guardrail-strip {
+    background: #fff8e1;
+    border-left: 3px solid #f59e0b;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    color: #92400e;
+    margin: 4px 0 16px 0;
+}
+
+/* Option card for compare page */
 .option-card {
-    border: 1.5px solid #e2e8f0; border-radius: 12px;
-    padding: 14px 16px; margin-bottom: 10px;
+    border: 1.5px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin-bottom: 12px;
     background: white;
 }
 .option-card.recommended {
-    border-color: #00A651; background: #f0fdf4;
+    border-color: #00A651;
+    background: #f0fdf4;
 }
-.ralc-chip {
-    background: #ede9fe; color: #5b21b6;
-    font-size: 11px; font-weight: 600;
-    padding: 2px 8px; border-radius: 999px;
-    display: inline-block;
-}
-/* Repayment window badge */
-.repay-window {
-    background: #0A1628; color: white;
-    padding: 10px 18px; border-radius: 10px;
+
+/* Nav */
+.nav-active { color: #00A651 !important; font-weight: 700 !important; }
+
+/* Confirmation */
+.confirm-hero {
+    background: linear-gradient(135deg, #0A1628 0%, #1e3a5f 100%);
+    border-radius: 20px;
+    padding: 32px 24px;
     text-align: center;
+    color: white;
+    margin-bottom: 20px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -75,16 +183,13 @@ user_data = {
     "debit_order_date": current_date + datetime.timedelta(days=2),
     "debit_order_recipient": "DStv",
     "predicted_shortfall": 800.00,
-    # RCI factors
     "income_stability_score": 0.92,
     "debit_success_ratio": 0.88,
     "overdraft_utilization": 0.35,
     "savings_buffer_ratio": 0.15,
     "credit_repayment_performance": 0.95,
-    # Shortfall history (for guardrails)
     "shortfall_events_this_quarter": 2,
     "max_shortfall_events_threshold": 3,
-    # Credit facilities
     "overdraft_limit": 2000,
     "overdraft_rate": 18.25,
     "overdraft_monthly_fee": 69.00,
@@ -131,87 +236,56 @@ def get_rci_tier(rci):
     else:
         return 4, "Low",       "#E31E24", "#fef2f2"
 
-def classify_event(shortfall, days, balance):
-    """Classify the liquidity shortfall type."""
-    if days <= 3:
-        return "Payment Orchestration Risk", "⚡", "Timing mismatch — funds arriving imminently"
-    elif balance > 0 and shortfall / balance < 3:
-        return "Short-Duration Liquidity Risk", "📊", "Genuine gap — balance insufficient for committed outflow"
-    else:
-        return "Extended Liquidity Deficit", "⚠️", "Structural shortfall — income insufficient to cover obligations"
-
 def calculate_ralc(amount, days, rate, rci):
-    """Risk-Adjusted Liquidity Cost: base cost scaled by inverse RCI."""
     cost = calculate_credit_cost(amount, days, rate)
     ralc = cost['interest'] / rci if rci > 0 else cost['interest']
     return round(ralc, 2)
 
 def get_credit_options(shortfall, days, ud, rci_tier, rci_score):
     options = []
-
-    # 1. Overdraft
     if shortfall <= ud['overdraft_limit']:
         c = calculate_credit_cost(shortfall, days, ud['overdraft_rate'])
         fee = ud['overdraft_monthly_fee'] if shortfall >= 200 else 0
-        ralc = calculate_ralc(shortfall, days, ud['overdraft_rate'], rci_score)
         options.append({
-            'name': 'Overdraft',
-            'amount': shortfall, 'days': days,
-            'rate': ud['overdraft_rate'],
-            'interest': c['interest'], 'total': c['total'],
-            'fees': fee, 'grand_total': c['total'] + fee,
-            'ralc': ralc,
+            'name': 'Overdraft', 'amount': shortfall, 'days': days,
+            'rate': ud['overdraft_rate'], 'interest': c['interest'],
+            'total': c['total'], 'fees': fee, 'grand_total': c['total'] + fee,
+            'ralc': calculate_ralc(shortfall, days, ud['overdraft_rate'], rci_score),
             'optimal_for': 'Very short gaps (1–3 days)',
             'why_chosen': f"Lowest cost for your {days}-day window with no new credit application required.",
         })
-
-    # 2. Temporary Loan
     if shortfall <= ud['temp_loan_max'] and rci_tier <= 3:
         c = calculate_credit_cost(shortfall, days, ud['temp_loan_rate'])
         init_fee = max(50, shortfall * 0.02)
-        ralc = calculate_ralc(shortfall, days, ud['temp_loan_rate'], rci_score)
         options.append({
-            'name': 'Temporary Loan',
-            'amount': shortfall, 'days': days,
-            'rate': ud['temp_loan_rate'],
-            'interest': c['interest'], 'total': c['total'],
-            'fees': init_fee, 'grand_total': c['total'] + init_fee,
-            'ralc': ralc,
+            'name': 'Temporary Loan', 'amount': shortfall, 'days': days,
+            'rate': ud['temp_loan_rate'], 'interest': c['interest'],
+            'total': c['total'], 'fees': init_fee, 'grand_total': c['total'] + init_fee,
+            'ralc': calculate_ralc(shortfall, days, ud['temp_loan_rate'], rci_score),
             'optimal_for': 'Longer gaps (30+ days)',
-            'why_chosen': f"Fixed repayment gives certainty; preferred when gap exceeds 10 days.",
+            'why_chosen': "Fixed repayment gives certainty; preferred when gap exceeds 10 days.",
         })
-
-    # 3. Credit Card Cash Advance
     if shortfall <= ud['credit_card_limit'] and rci_tier <= 2:
         c = calculate_credit_cost(shortfall, days, ud['credit_card_rate'])
         fee = round(shortfall * 0.015, 2)
-        ralc = calculate_ralc(shortfall, days, ud['credit_card_rate'], rci_score)
         options.append({
-            'name': 'Credit Card Advance',
-            'amount': shortfall, 'days': days,
-            'rate': ud['credit_card_rate'],
-            'interest': c['interest'], 'total': c['total'],
-            'fees': fee, 'grand_total': c['total'] + fee,
-            'ralc': ralc,
+            'name': 'Credit Card Advance', 'amount': shortfall, 'days': days,
+            'rate': ud['credit_card_rate'], 'interest': c['interest'],
+            'total': c['total'], 'fees': fee, 'grand_total': c['total'] + fee,
+            'ralc': calculate_ralc(shortfall, days, ud['credit_card_rate'], rci_score),
             'optimal_for': 'Tier 1–2 customers, short gaps',
             'why_chosen': "Available due to strong credit history; cost is higher — consider only if overdraft unavailable.",
         })
-
-    # 4. Salary Advance
     if shortfall <= ud['salary_advance_max'] and rci_tier <= 3:
         c = calculate_credit_cost(shortfall, days, ud['salary_advance_rate'])
-        ralc = calculate_ralc(shortfall, days, ud['salary_advance_rate'], rci_score)
         options.append({
-            'name': 'Salary Advance',
-            'amount': shortfall, 'days': days,
-            'rate': ud['salary_advance_rate'],
-            'interest': c['interest'], 'total': c['total'],
-            'fees': 0, 'grand_total': c['total'],
-            'ralc': ralc,
+            'name': 'Salary Advance', 'amount': shortfall, 'days': days,
+            'rate': ud['salary_advance_rate'], 'interest': c['interest'],
+            'total': c['total'], 'fees': 0, 'grand_total': c['total'],
+            'ralc': calculate_ralc(shortfall, days, ud['salary_advance_rate'], rci_score),
             'optimal_for': 'Confirmed salary inflow ≤14 days',
             'why_chosen': "Lowest rate available; repaid directly against confirmed salary inflow.",
         })
-
     return options
 
 def get_recommended_option(options, days, rci_tier):
@@ -228,109 +302,49 @@ def get_recommended_option(options, days, rci_tier):
     return min(options, key=lambda x: x['grand_total'])
 
 
-# ── RCI Widget (reusable) ─────────────────────────────────────────────────────
-
-def render_rci_widget(rci_score, rci_tier, rci_label, rci_color, rci_bg):
-    st.markdown("**Repayment Certainty Index (RCI)**")
-    # Tier pills
-    cols = st.columns(4)
-    for i, (num, label, col, bg) in enumerate([
-        (1, "Excellent", "#00A651", "#f0fdf4"),
-        (2, "Good",      "#007c7f", "#f0fafa"),
-        (3, "Fair",      "#FF9900", "#fffbeb"),
-        (4, "Low",       "#E31E24", "#fef2f2"),
-    ]):
-        with cols[i]:
-            is_active = (num == rci_tier)
-            border = f"2px solid {col}" if is_active else "1.5px solid #e2e8f0"
-            opacity = "1" if is_active else "0.4"
-            st.markdown(
-                f"""<div style="background:{bg if is_active else 'white'};
-                    border:{border}; border-radius:8px; padding:8px 4px;
-                    text-align:center; opacity:{opacity};">
-                    <div style="font-size:11px;font-weight:700;color:{col};">TIER {num}</div>
-                    <div style="font-size:10px;color:#555;">{label}</div>
-                </div>""",
-                unsafe_allow_html=True
-            )
-
-    st.markdown(
-        f"""<div style="margin-top:10px;background:{rci_bg};
-            border-left:4px solid {rci_color};
-            padding:8px 12px;border-radius:6px;">
-            <span style="font-size:22px;font-weight:800;color:{rci_color};">{rci_score}</span>
-            <span style="font-size:13px;color:#555;margin-left:8px;">/ 1.00 — {rci_label}</span>
-        </div>""",
-        unsafe_allow_html=True
-    )
-
-    with st.expander("How your RCI is calculated"):
-        factors = {
-            "Income Stability":      (user_data['income_stability_score'],       0.30),
-            "Payment History":       (user_data['debit_success_ratio'],           0.25),
-            "Overdraft Discipline":  (1 - user_data['overdraft_utilization'],     0.20),
-            "Savings Buffer":        (user_data['savings_buffer_ratio'],          0.15),
-            "Credit Performance":    (user_data['credit_repayment_performance'],  0.10),
-        }
-        for label, (score, weight) in factors.items():
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.markdown(f"<div style='font-size:12px;'>{label} <span style='color:#888;'>(weight {int(weight*100)}%)</span></div>",
-                            unsafe_allow_html=True)
-                st.progress(score)
-            with col2:
-                st.markdown(f"<div style='font-size:13px;font-weight:600;padding-top:20px;'>{int(score*100)}%</div>",
-                            unsafe_allow_html=True)
-
-
-# ── Guardrails widget ─────────────────────────────────────────────────────────
-
-def render_guardrails():
-    events = user_data['shortfall_events_this_quarter']
-    threshold = user_data['max_shortfall_events_threshold']
-    pct = events / threshold
-    color = "#f59e0b" if pct < 1 else "#E31E24"
-    label = "⚠️ Approaching limit" if pct >= 0.66 else "✅ Within normal range"
-    st.markdown(
-        f"""<div class="guardrail-bar">
-            <strong>Guardrails Active</strong> &nbsp;|&nbsp;
-            Shortfall events this quarter: <strong>{events}/{threshold}</strong>
-            &nbsp;—&nbsp; {label}
-        </div>""",
-        unsafe_allow_html=True
-    )
-
-
 # ── PAGE 0 — Messages ─────────────────────────────────────────────────────────
 
 def show_message_screen():
-    st.markdown("### Messages")
-    st.caption("Important updates for you")
+    st.markdown("### 💬 Messages")
+    st.caption(f"Hi {user_data['name'].split()[0]} · {user_data['account_number']}")
     st.divider()
 
     st.markdown("#### Today")
-    with st.container():
-        st.error("**Payment Protection Available**")
-        st.write(
-            f"**{user_data['debit_order_recipient']}** payment of "
-            f"R{user_data['debit_order_amount']:,.2f} on "
-            f"{user_data['debit_order_date'].strftime('%d %b')}"
-        )
-        st.caption(f"We can cover the R{user_data['predicted_shortfall']:,.2f} shortfall for you.")
 
-    if st.button("View Protection", use_container_width=True, type="primary"):
+    # Alert card
+    st.markdown(f"""
+    <div style="background:#fff4e5;border-left:4px solid #f97316;
+        border-radius:12px;padding:16px 18px;margin-bottom:12px;">
+        <div style="font-size:11px;font-weight:700;letter-spacing:1px;
+            color:#ea580c;text-transform:uppercase;margin-bottom:6px;">
+            ⚠️ Action Required
+        </div>
+        <div style="font-size:16px;font-weight:700;color:#1a1a2e;">
+            {user_data['debit_order_recipient']} · R{user_data['debit_order_amount']:,.2f}
+        </div>
+        <div style="font-size:13px;color:#6b7280;margin-top:4px;">
+            Due {user_data['debit_order_date'].strftime('%d %b')} · 
+            <span style="color:#dc2626;font-weight:600;">
+                R{user_data['predicted_shortfall']:,.0f} shortfall predicted
+            </span>
+        </div>
+        <div style="font-size:12px;color:#6b7280;margin-top:6px;">
+            FNB can cover this automatically — tap below to review.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if st.button("Review Payment Protection →", use_container_width=True, type="primary"):
         st.session_state.unread_count = 0
         st.session_state.page = 1
         st.rerun()
 
     st.divider()
     st.markdown("#### Earlier")
-    with st.container():
-        st.info("**Cashflow Insight**")
-        st.caption("R2,450 spent on groceries this month vs R2,100 last month")
+    st.info("💡 **Cashflow Insight** — R2,450 spent on groceries this month vs R2,100 last month")
 
 
-# ── PAGE 1 — Protection screen ────────────────────────────────────────────────
+# ── PAGE 1 — Protection screen (3-step narrative) ─────────────────────────────
 
 def show_protection_screen():
     shortfall = user_data['predicted_shortfall']
@@ -340,76 +354,152 @@ def show_protection_screen():
     options = get_credit_options(shortfall, days, user_data, rci_tier, rci_score)
     recommended = get_recommended_option(options, days, rci_tier)
 
-    # ── Event classification ──
-    event_type, event_icon, event_desc = classify_event(
-        shortfall, days, user_data['current_balance']
-    )
-    st.markdown(
-        f"""<div class="event-badge">{event_icon} &nbsp;
-            <span>{event_type}</span>
+    st.markdown("### Payment Protection")
+    st.caption(f"{user_data['debit_order_date'].strftime('%d %B %Y')}")
+    st.markdown("")
+
+    # ── STEP 1: THE PROBLEM ──────────────────────────────────────────────────
+    st.markdown("""<div class="step-label" style="color:#94a3b8;">STEP 1 OF 3 &nbsp;·&nbsp; WHAT'S HAPPENING</div>""",
+                unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="step-card step-problem">
+        <div class="step-label">Upcoming payment</div>
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+            <div>
+                <div style="font-size:13px;color:#94a3b8;margin-bottom:4px;">
+                    {user_data['debit_order_recipient']} · due {user_data['debit_order_date'].strftime('%d %b')}
+                </div>
+                <div class="problem-amount">R{user_data['debit_order_amount']:,.0f}</div>
+                <div class="problem-meta">
+                    Your balance &nbsp;<span style="color:#64748b;">R{user_data['current_balance']:,.0f}</span>
+                    &nbsp;·&nbsp;
+                    Shortfall &nbsp;<span class="problem-highlight">R{shortfall:,.0f}</span>
+                </div>
+            </div>
+            <div style="text-align:right;">
+                <div style="font-size:11px;color:#64748b;margin-bottom:4px;">Salary arrives in</div>
+                <div style="font-size:28px;font-weight:700;color:#ffffff;font-family:'DM Mono',monospace;">{days} days</div>
+                <div style="font-size:12px;color:#64748b;">{user_data['inflow_date'].strftime('%d %B')}</div>
+            </div>
         </div>
-        <div style="font-size:12px;color:#555;margin:4px 0 12px 0;">{event_desc}</div>""",
-        unsafe_allow_html=True
-    )
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.markdown("## We'll protect your payment")
+    # ── STEP 2: TRUST SIGNAL ─────────────────────────────────────────────────
+    st.markdown("""<div class="step-label" style="color:#94a3b8;margin-top:4px;">STEP 2 OF 3 &nbsp;·&nbsp; YOUR CREDIT PROFILE</div>""",
+                unsafe_allow_html=True)
 
-    # ── RCI Widget ──
-    render_rci_widget(rci_score, rci_tier, rci_label, rci_color, rci_bg)
-    st.markdown("")
+    bar_width = int(rci_score * 100)
+    tier_chips = ""
+    for num, label, col, bg in [(1,"Excellent","#00A651","#f0fdf4"),(2,"Good","#007c7f","#f0fafa"),
+                                  (3,"Fair","#FF9900","#fffbeb"),(4,"Low","#E31E24","#fef2f2")]:
+        active = num == rci_tier
+        border = f"2px solid {col}" if active else "1.5px solid #e2e8f0"
+        opacity = "1" if active else "0.35"
+        tier_chips += f"""<div class="tier-chip" style="border:{border};background:{bg if active else 'white'};
+            color:{col};opacity:{opacity};">
+            <div>T{num}</div><div style="font-weight:400;font-size:9px;">{label}</div>
+        </div>"""
 
-    # ── Guardrails ──
-    render_guardrails()
-    st.markdown("")
+    st.markdown(f"""
+    <div class="step-card step-trust">
+        <div class="step-label">Repayment Certainty Index (RCI)</div>
+        <div style="display:flex;align-items:center;gap:16px;">
+            <div>
+                <div class="rci-score-big" style="color:{rci_color};">{rci_score}</div>
+                <div style="font-size:12px;color:#6b7280;">out of 1.00 &nbsp;·&nbsp; <strong>{rci_label}</strong></div>
+            </div>
+            <div style="flex:1;">
+                <div class="rci-bar-track">
+                    <div style="height:100%;width:{bar_width}%;background:{rci_color};border-radius:999px;"></div>
+                </div>
+                <div style="font-size:11px;color:#6b7280;">
+                    Based on your income stability, payment history & overdraft discipline
+                </div>
+                <div class="tier-row">{tier_chips}</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    # ── Summary card ──
-    col_a, col_b, col_c = st.columns(3)
-    with col_a:
-        st.markdown("**Payment**")
-        st.markdown(f"### {user_data['debit_order_recipient']}")
-    with col_b:
-        st.markdown("**Amount Covered**")
-        st.markdown(f"### R{int(shortfall):,}")
-    with col_c:
-        # Repayment window — prominent
-        st.markdown(
-            f"""<div class="repay-window">
-                <div style="font-size:10px;font-weight:600;letter-spacing:1px;opacity:.7;">REPAYMENT WINDOW</div>
-                <div style="font-size:26px;font-weight:800;">{days} days</div>
-                <div style="font-size:11px;opacity:.8;">{user_data['inflow_date'].strftime('%d %B')}</div>
-            </div>""",
-            unsafe_allow_html=True
-        )
+    with st.expander("See how your RCI is calculated"):
+        factors = {
+            "Income Stability":      (user_data['income_stability_score'],       0.30),
+            "Payment History":       (user_data['debit_success_ratio'],           0.25),
+            "Overdraft Discipline":  (1 - user_data['overdraft_utilization'],     0.20),
+            "Savings Buffer":        (user_data['savings_buffer_ratio'],          0.15),
+            "Credit Performance":    (user_data['credit_repayment_performance'],  0.10),
+        }
+        for label, (score, weight) in factors.items():
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                st.markdown(f"<div style='font-size:12px;'>{label} <span style='color:#888;'>(weight {int(weight*100)}%)</span></div>",
+                            unsafe_allow_html=True)
+                st.progress(score)
+            with c2:
+                st.markdown(f"<div style='font-size:13px;font-weight:600;padding-top:20px;'>{int(score*100)}%</div>",
+                            unsafe_allow_html=True)
 
-    st.markdown("---")
+        events = user_data['shortfall_events_this_quarter']
+        threshold = user_data['max_shortfall_events_threshold']
+        st.markdown(f"""
+        <div class="guardrail-strip">
+            <strong>Guardrails:</strong> {events}/{threshold} shortfall events this quarter &nbsp;·&nbsp;
+            {"⚠️ Approaching limit" if events/threshold >= 0.66 else "✅ Within normal range"}
+        </div>
+        """, unsafe_allow_html=True)
 
-    # ── Recommended option highlight ──
+    # ── STEP 3: THE SOLUTION ─────────────────────────────────────────────────
+    st.markdown("""<div class="step-label" style="color:#94a3b8;margin-top:4px;">STEP 3 OF 3 &nbsp;·&nbsp; OUR RECOMMENDATION</div>""",
+                unsafe_allow_html=True)
+
     if recommended:
         cost = recommended['grand_total'] - shortfall
-        st.markdown(f"**Total Cost of Liquidity** &nbsp; <span style='color:#888;font-size:12px;'>via {recommended['name']}</span>",
-                    unsafe_allow_html=True)
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            st.markdown(f"<span style='font-size:36px;font-weight:800;color:#00A651;'>R{cost:.2f}</span>",
-                        unsafe_allow_html=True)
-            st.markdown(
-                f"<span class='ralc-chip' title='Risk-Adjusted Liquidity Cost: raw cost scaled by your RCI'>RALC R{recommended['ralc']:.2f}</span>",
-                unsafe_allow_html=True
-            )
-        with col2:
-            st.info(f"💡 **Why this option?** {recommended['why_chosen']}")
+        st.markdown(f"""
+        <div class="step-card step-solution">
+            <div class="step-label" style="color:#16a34a;">Best option for you</div>
+            <div style="display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+                <div>
+                    <div style="font-size:13px;color:#4b5563;margin-bottom:4px;">
+                        {recommended['name']} &nbsp;·&nbsp; {recommended['rate']}% p.a.
+                    </div>
+                    <div class="cost-big">R{cost:.2f}</div>
+                    <div class="solution-meta">
+                        Total to repay &nbsp;<strong>R{recommended['grand_total']:,.2f}</strong>
+                        &nbsp;·&nbsp; on {user_data['inflow_date'].strftime('%d %B')}
+                    </div>
+                    <div style="font-size:12px;color:#6b7280;margin-top:6px;">
+                        Repaid automatically from your salary deposit
+                    </div>
+                </div>
+                <div style="text-align:right;">
+                    <div style="font-size:11px;color:#6b7280;">Interest only</div>
+                    <div style="font-size:22px;font-weight:700;color:#16a34a;font-family:'DM Mono',monospace;">
+                        R{recommended['interest']:.2f}
+                    </div>
+                    <div style="font-size:11px;color:#6b7280;margin-top:2px;">
+                        Fees &nbsp;R{recommended['fees']:.2f}
+                    </div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
     st.markdown("")
-    if st.button("Protect my payment", use_container_width=True, type="primary", key="protect_btn"):
+    if st.button("✓  Protect my payment", use_container_width=True, type="primary", key="protect_btn"):
         st.session_state.protection_activated = True
         st.session_state.page = 2
         st.rerun()
-    if st.button("Compare all options →", use_container_width=True, key="options_link"):
-        st.session_state.page = 3
-        st.rerun()
-    if st.button("← Back to Messages", use_container_width=True, key="back_msg"):
-        st.session_state.page = 0
-        st.rerun()
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("Compare all options", use_container_width=True, key="options_link"):
+            st.session_state.page = 3
+            st.rerun()
+    with col_b:
+        if st.button("← Back", use_container_width=True, key="back_msg"):
+            st.session_state.page = 0
+            st.rerun()
 
 
 # ── PAGE 2 — Confirmation ─────────────────────────────────────────────────────
@@ -421,36 +511,44 @@ def show_confirmation_screen():
     rci_tier, rci_label, rci_color, rci_bg = get_rci_tier(rci_score)
     options = get_credit_options(shortfall, days, user_data, rci_tier, rci_score)
     recommended = get_recommended_option(options, days, rci_tier)
+    cost = recommended['grand_total'] - shortfall if recommended else 0
 
     st.balloons()
-    st.markdown("# ✅ Your payment is secured")
 
-    with st.container():
-        st.success(f"""
-**{user_data['debit_order_recipient']}** payment will go through on {user_data['debit_order_date'].strftime('%d %B')}.
+    st.markdown(f"""
+    <div class="confirm-hero">
+        <div style="font-size:48px;margin-bottom:8px;">✅</div>
+        <div style="font-size:22px;font-weight:700;">Payment secured</div>
+        <div style="font-size:14px;color:#94a3b8;margin-top:6px;">
+            {user_data['debit_order_recipient']} will go through on {user_data['debit_order_date'].strftime('%d %B')}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-**Automatic repayment scheduled:**
-- Amount: R{recommended['grand_total']:.2f}
-- Date: {user_data['inflow_date'].strftime('%d %B %Y')}
-- Source: Next salary deposit
-- Total Cost of Liquidity: R{recommended['grand_total'] - shortfall:.2f}
+    if recommended:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Amount covered", f"R{shortfall:,.0f}")
+        c2.metric("Total cost", f"R{cost:.2f}")
+        c3.metric("Repay on", user_data['inflow_date'].strftime('%d %b'))
 
-You're all set. Nothing more to do.
-        """)
+        st.success(f"R{recommended['grand_total']:,.2f} will be automatically deducted from your salary deposit on {user_data['inflow_date'].strftime('%d %B %Y')}. Nothing more to do.")
 
-    if st.button("Done", use_container_width=True, type="primary"):
-        st.session_state.page = 0
-        st.rerun()
-    if st.button("View details", use_container_width=True, key="view_details"):
-        st.session_state.page = 3
-        st.rerun()
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Done", use_container_width=True, type="primary"):
+            st.session_state.page = 0
+            st.rerun()
+    with col2:
+        if st.button("View details", use_container_width=True, key="view_details"):
+            st.session_state.page = 3
+            st.rerun()
 
 
 # ── PAGE 3 — Compare options ──────────────────────────────────────────────────
 
 def show_options_screen():
     st.markdown("### Compare Options")
-    st.caption("All eligible facilities · All costs shown")
+    st.caption("All eligible facilities · Costs shown for your scenario")
     st.divider()
 
     shortfall = user_data['predicted_shortfall']
@@ -460,46 +558,43 @@ def show_options_screen():
     options = get_credit_options(shortfall, days, user_data, rci_tier, rci_score)
     recommended = get_recommended_option(options, days, rci_tier)
 
-    # Render RCI compactly
-    st.markdown(
-        f"""<div style="background:{rci_bg};border-left:4px solid {rci_color};
-            padding:8px 12px;border-radius:6px;margin-bottom:12px;">
-            <strong>Your RCI:</strong>
-            <span style="font-size:18px;font-weight:800;color:{rci_color};margin:0 6px;">{rci_score}</span>
-            Tier {rci_tier} — {rci_label}
-            &nbsp;|&nbsp;
-            <span style="font-size:12px;color:#555;">{days}-day repayment window</span>
-        </div>""",
-        unsafe_allow_html=True
-    )
+    st.markdown(f"""
+    <div style="background:{rci_bg};border-left:4px solid {rci_color};
+        padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:13px;">
+        <strong>RCI {rci_score}</strong> &nbsp;·&nbsp; Tier {rci_tier} — {rci_label}
+        &nbsp;·&nbsp; {days}-day repayment window
+        &nbsp;·&nbsp; Shortfall R{shortfall:,.0f}
+    </div>
+    """, unsafe_allow_html=True)
 
-    render_guardrails()
-    st.markdown("")
+    events = user_data['shortfall_events_this_quarter']
+    threshold = user_data['max_shortfall_events_threshold']
+    st.markdown(f"""
+    <div class="guardrail-strip">
+        <strong>Guardrails:</strong> {events}/{threshold} shortfall events this quarter &nbsp;·&nbsp;
+        {"⚠️ Approaching limit" if events/threshold >= 0.66 else "✅ Within normal range"}
+    </div>
+    """, unsafe_allow_html=True)
 
-    # Option cards
     for opt in options:
         is_rec = recommended and opt['name'] == recommended['name']
         card_class = "option-card recommended" if is_rec else "option-card"
         rec_badge = " 🏆 Recommended" if is_rec else ""
 
         st.markdown(f"<div class='{card_class}'>", unsafe_allow_html=True)
-
         col_title, col_total = st.columns([3, 1])
         with col_title:
             st.markdown(f"**{opt['name']}**{rec_badge} &nbsp; `{opt['rate']}% p.a.`")
         with col_total:
-            st.markdown(f"<div style='text-align:right;font-size:18px;font-weight:800;color:#0A1628;'>R{opt['grand_total']:.2f}</div>",
+            st.markdown(f"<div style='text-align:right;font-size:20px;font-weight:800;color:#0A1628;'>R{opt['grand_total']:.2f}</div>",
                         unsafe_allow_html=True)
-
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Amount", f"R{opt['amount']:,.2f}")
+        c1.metric("Amount", f"R{opt['amount']:,.0f}")
         c2.metric(f"Interest ({opt['days']}d)", f"R{opt['interest']:.2f}")
         c3.metric("Fees", f"R{opt['fees']:.2f}")
-        c4.metric("RALC", f"R{opt['ralc']:.2f}", help="Risk-Adjusted Liquidity Cost: raw interest cost ÷ your RCI score. Lower = better value for your risk profile.")
-
-        st.markdown(f"<div style='margin-top:8px;font-size:12px;color:#555;'>💡 {opt['why_chosen']}</div>",
-                    unsafe_allow_html=True)
-        st.markdown(f"<div style='font-size:11px;color:#888;margin-top:4px;'>Best for: {opt['optimal_for']}</div>",
+        c4.metric("RALC", f"R{opt['ralc']:.2f}",
+                  help="Risk-Adjusted Liquidity Cost: interest cost ÷ your RCI. Lower = better value for your risk profile.")
+        st.markdown(f"<div style='font-size:12px;color:#555;margin-top:4px;'>💡 {opt['why_chosen']}</div>",
                     unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
         st.markdown("")
@@ -512,7 +607,7 @@ def show_options_screen():
 # ── PAGE 4 — Calculator ───────────────────────────────────────────────────────
 
 def show_calculator_screen():
-    st.markdown("### Cost Calculator")
+    st.markdown("### 🧮 Cost Calculator")
     st.caption("Explore different amounts and repayment windows")
     st.divider()
 
@@ -537,44 +632,28 @@ def show_calculator_screen():
 
     st.divider()
 
-    # RCI at this horizon
-    st.markdown(
-        f"""<div style="background:{rci_bg};border-left:4px solid {rci_color};
-            padding:8px 12px;border-radius:6px;margin-bottom:12px;">
-            <strong>RCI at {calc_days}-day horizon:</strong>
-            <span style="font-size:18px;font-weight:800;color:{rci_color};margin:0 6px;">{rci_score}</span>
-            Tier {rci_tier} — {rci_label}
-        </div>""",
-        unsafe_allow_html=True
-    )
-
-    # Event classification at these parameters
-    event_type, event_icon, event_desc = classify_event(
-        calc_amount, calc_days, user_data['current_balance']
-    )
-    st.markdown(
-        f"""<div class="event-badge">{event_icon}&nbsp;{event_type}</div>
-        <div style="font-size:12px;color:#555;margin:4px 0 12px 0;">{event_desc}</div>""",
-        unsafe_allow_html=True
-    )
+    st.markdown(f"""
+    <div style="background:{rci_bg};border-left:4px solid {rci_color};
+        padding:8px 12px;border-radius:6px;margin-bottom:12px;font-size:13px;">
+        <strong>RCI at {calc_days}-day horizon:</strong>
+        <span style="font-size:18px;font-weight:800;color:{rci_color};margin:0 6px;">{rci_score}</span>
+        Tier {rci_tier} — {rci_label}
+    </div>
+    """, unsafe_allow_html=True)
 
     if not options:
         st.warning("No eligible facilities for this combination.")
     else:
         for opt in options:
             is_rec = recommended and opt['name'] == recommended['name']
-            label = f"🏆 {opt['name']} (Recommended)" if is_rec else opt['name']
-
             if is_rec:
-                st.success(f"**{label}**")
+                st.success(f"**🏆 {opt['name']} (Recommended)**")
             else:
-                st.info(f"**{label}**")
-
+                st.info(f"**{opt['name']}**")
             c1, c2, c3 = st.columns(3)
-            c1.metric("Total Cost of Liquidity", f"R{opt['grand_total'] - opt['amount']:.2f}")
+            c1.metric("Cost of Liquidity", f"R{opt['grand_total'] - opt['amount']:.2f}")
             c2.metric("Total to Repay", f"R{opt['grand_total']:,.2f}")
-            c3.metric("RALC", f"R{opt['ralc']:.2f}",
-                      help="Risk-Adjusted Liquidity Cost")
+            c3.metric("RALC", f"R{opt['ralc']:.2f}", help="Risk-Adjusted Liquidity Cost")
             st.caption(f"Rate {opt['rate']}% p.a. · Best for: {opt['optimal_for']}")
             st.divider()
 
@@ -593,20 +672,27 @@ pages = {
     4: show_calculator_screen,
 }
 
-# Persistent bottom nav (pages 0–4)
 pages[st.session_state.page]()
 
+# ── Bottom nav ────────────────────────────────────────────────────────────────
 st.markdown("---")
-nav_cols = st.columns(5)
+nav_cols = st.columns(4)
 nav_items = [
     (0, "💬", "Messages"),
     (1, "🛡️", "Protect"),
     (3, "📊", "Options"),
-    (4, "🧮", "Calculator"),
+    (4, "🧮", "Calc"),
 ]
 for col, (p, icon, label) in zip(nav_cols, nav_items):
     with col:
-        style_str = "color:#00A651;font-weight:700;" if st.session_state.page == p else ""
-        if st.button(f"{icon}\n{label}", key=f"nav_{p}", use_container_width=True):
+        is_active = st.session_state.page == p
+        weight = "700" if is_active else "400"
+        color = "#00A651" if is_active else "#6b7280"
+        st.markdown(
+            f"<div style='text-align:center;font-size:11px;font-weight:{weight};color:{color};'>{icon}<br>{label}</div>",
+            unsafe_allow_html=True
+        )
+        if st.button(f"{label}", key=f"nav_{p}", use_container_width=True,
+                     label_visibility="collapsed"):
             st.session_state.page = p
             st.rerun()
