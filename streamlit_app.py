@@ -195,8 +195,6 @@ user_data = {
     "overdraft_monthly_fee": 69.00,
     "temp_loan_rate": 19.75,
     "temp_loan_max": 5000,
-    "credit_card_rate": 22.00,
-    "credit_card_limit": 3000,
     "salary_advance_rate": 15.00,
     "salary_advance_max": 2000,
 }
@@ -273,10 +271,9 @@ def get_credit_options(shortfall, days, ud, rci_tier, rci_score):
             'rate': ud['overdraft_rate'], 'interest': c['interest'],
             'total': c['total'], 'fees': fee, 'grand_total': c['total'] + fee,
             'ralc': calculate_ralc(shortfall, days, ud['overdraft_rate'], rci_score),
-            'optimal_for': 'Very short gaps (1–3 days)',
-            'why_chosen': f"Lowest cost for your {days}-day window with no new credit application required.",
+            'note': f"No new credit application needed. Monthly service fee of R{ud['overdraft_monthly_fee']:.0f} applies regardless of how long you use it — most cost-effective when you need more than R{int(ud['overdraft_monthly_fee'] * 10):,} or carry the balance for 30+ days.",
         })
-    if shortfall <= ud['temp_loan_max'] and rci_tier <= 3:
+    if shortfall <= ud['temp_loan_max']:
         c = calculate_credit_cost(shortfall, days, ud['temp_loan_rate'])
         init_fee = max(50, shortfall * 0.02)
         options.append({
@@ -284,19 +281,7 @@ def get_credit_options(shortfall, days, ud, rci_tier, rci_score):
             'rate': ud['temp_loan_rate'], 'interest': c['interest'],
             'total': c['total'], 'fees': init_fee, 'grand_total': c['total'] + init_fee,
             'ralc': calculate_ralc(shortfall, days, ud['temp_loan_rate'], rci_score),
-            'optimal_for': 'Longer gaps (30+ days)',
-            'why_chosen': "Fixed repayment gives certainty; preferred when gap exceeds 10 days.",
-        })
-    if shortfall <= ud['credit_card_limit']:
-        c = calculate_credit_cost(shortfall, days, ud['credit_card_rate'])
-        fee = round(shortfall * 0.015, 2)
-        options.append({
-            'name': 'Credit Card Advance', 'amount': shortfall, 'days': days,
-            'rate': ud['credit_card_rate'], 'interest': c['interest'],
-            'total': c['total'], 'fees': fee, 'grand_total': c['total'] + fee,
-            'ralc': calculate_ralc(shortfall, days, ud['credit_card_rate'], rci_score),
-            'optimal_for': 'Tier 1–2 customers, short gaps',
-            'why_chosen': "Available due to strong credit history; cost is higher — consider only if overdraft unavailable.",
+            'note': f"Fixed initiation fee of R{max(50, shortfall * 0.02):.0f} makes this expensive for short gaps. Better suited to gaps of 30+ days where interest savings offset the fee.",
         })
     if shortfall <= ud['salary_advance_max']:
         c = calculate_credit_cost(shortfall, days, ud['salary_advance_rate'])
@@ -305,8 +290,7 @@ def get_credit_options(shortfall, days, ud, rci_tier, rci_score):
             'rate': ud['salary_advance_rate'], 'interest': c['interest'],
             'total': c['total'], 'fees': 0, 'grand_total': c['total'],
             'ralc': calculate_ralc(shortfall, days, ud['salary_advance_rate'], rci_score),
-            'optimal_for': 'Confirmed salary inflow ≤14 days',
-            'why_chosen': "Lowest rate available; repaid directly against confirmed salary inflow.",
+            'note': "Lowest rate available with no fees. Repaid directly from your confirmed salary deposit. Best choice when your shortfall is within the advance limit.",
         })
     options.sort(key=lambda x: x['grand_total'])
     return options
@@ -314,14 +298,6 @@ def get_credit_options(shortfall, days, ud, rci_tier, rci_score):
 def get_recommended_option(options, days, rci_tier):
     if not options:
         return None
-    if days <= 10:
-        od = [o for o in options if 'Overdraft' in o['name']]
-        if od:
-            return od[0]
-    if days > 30 or rci_tier >= 3:
-        tl = [o for o in options if 'Temporary Loan' in o['name']]
-        if tl:
-            return tl[0]
     return min(options, key=lambda x: x['grand_total'])
 
 
@@ -625,7 +601,7 @@ def show_options_screen():
             f"<div style='background:#f8fafc;border-radius:8px;padding:10px 12px;'><div style='font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:4px;'>Fees</div><div style='font-size:15px;font-weight:700;color:#0A1628;'>R{opt['fees']:.2f}</div></div>"
             f"<div style='background:#f8fafc;border-radius:8px;padding:10px 12px;'><div style='font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:4px;'>RALC</div><div style='font-size:15px;font-weight:700;color:#5b21b6;'>R{opt['ralc']:.2f}</div></div>"
             f"</div>"
-            f"<div style='font-size:12px;color:#4b5563;border-top:1px solid #e2e8f0;padding-top:10px;'>{opt['why_chosen']}</div>"
+            f"<div style='font-size:12px;color:#4b5563;border-top:1px solid #e2e8f0;padding-top:10px;'>{opt['note']}</div>"
             f"</div>"
         )
         st.markdown(html, unsafe_allow_html=True)
@@ -754,20 +730,20 @@ pages[st.session_state.page]()
 st.markdown("---")
 nav_cols = st.columns(4)
 nav_items = [
-    (0, "💬", "Messages"),
-    (1, "🛡️", "Protect"),
-    (3, "📊", "Options"),
-    (4, "🧮", "Calc"),
+    (0, "Messages"),
+    (1, "Protect"),
+    (3, "Options"),
+    (4, "Calculator"),
 ]
-for col, (p, icon, label) in zip(nav_cols, nav_items):
+for col, (p, label) in zip(nav_cols, nav_items):
     with col:
         is_active = st.session_state.page == p
-        weight = "700" if is_active else "400"
-        color = "#00A651" if is_active else "#6b7280"
+        color = "#00A651" if is_active else "#9ca3af"
+        underline = "border-bottom: 2px solid #00A651; padding-bottom: 2px;" if is_active else ""
         st.markdown(
-            f"<div style='text-align:center;font-size:11px;font-weight:{weight};color:{color};'>{icon}<br>{label}</div>",
+            f"<div style='text-align:center;font-size:11px;font-weight:600;color:{color};{underline}'>{label}</div>",
             unsafe_allow_html=True
         )
-        if st.button(f"{icon}", key=f"nav_{p}", use_container_width=True):
+        if st.button(label, key=f"nav_{p}", use_container_width=True, label_visibility="collapsed"):
             st.session_state.page = p
             st.rerun()
