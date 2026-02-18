@@ -559,9 +559,9 @@ def show_options_screen():
     recommended = get_recommended_option(options, days, rci_tier)
 
     st.markdown(f"""
-    <div style="background:{rci_bg};border-left:4px solid {rci_color};
-        padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:13px;">
-        <strong>RCI {rci_score}</strong> &nbsp;·&nbsp; Tier {rci_tier} — {rci_label}
+    <div style="background:#0A1628;border-left:4px solid #334155;
+        padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:13px;color:#e2e8f0;">
+        <strong style="color:white;">RCI {rci_score}</strong> &nbsp;·&nbsp; Tier {rci_tier} — {rci_label}
         &nbsp;·&nbsp; {days}-day repayment window
         &nbsp;·&nbsp; Shortfall R{shortfall:,.0f}
     </div>
@@ -578,26 +578,50 @@ def show_options_screen():
 
     for opt in options:
         is_rec = recommended and opt['name'] == recommended['name']
-        card_class = "option-card recommended" if is_rec else "option-card"
-        rec_badge = " 🏆 Recommended" if is_rec else ""
+        border_color = "#00A651" if is_rec else "#e2e8f0"
+        bg_color = "#f0fdf4" if is_rec else "white"
+        rec_badge = "&nbsp; 🏆 <span style='color:#00A651;font-size:11px;font-weight:700;'>RECOMMENDED</span>" if is_rec else ""
 
-        st.markdown(f"<div class='{card_class}'>", unsafe_allow_html=True)
-        col_title, col_total = st.columns([3, 1])
-        with col_title:
-            st.markdown(f"**{opt['name']}**{rec_badge} &nbsp; `{opt['rate']}% p.a.`")
-        with col_total:
-            st.markdown(f"<div style='text-align:right;font-size:20px;font-weight:800;color:#0A1628;'>R{opt['grand_total']:.2f}</div>",
-                        unsafe_allow_html=True)
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Amount", f"R{opt['amount']:,.0f}")
-        c2.metric(f"Interest ({opt['days']}d)", f"R{opt['interest']:.2f}")
-        c3.metric("Fees", f"R{opt['fees']:.2f}")
-        c4.metric("RALC", f"R{opt['ralc']:.2f}",
-                  help="Risk-Adjusted Liquidity Cost: interest cost ÷ your RCI. Lower = better value for your risk profile.")
-        st.markdown(f"<div style='font-size:12px;color:#555;margin-top:4px;'>💡 {opt['why_chosen']}</div>",
-                    unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-        st.markdown("")
+        st.markdown(f"""
+        <div style="border:1.5px solid {border_color};border-radius:12px;
+            padding:16px 18px;margin-bottom:14px;background:{bg_color};">
+
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <div style="font-size:15px;font-weight:700;color:#0A1628;">
+                    {opt['name']} {rec_badge}
+                    <span style="font-size:12px;font-weight:400;color:#6b7280;margin-left:6px;">
+                        {opt['rate']}% p.a.
+                    </span>
+                </div>
+                <div style="font-size:22px;font-weight:800;color:#0A1628;font-family:'DM Mono',monospace;">
+                    R{opt['grand_total']:.2f}
+                </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;">
+                <div style="background:#f8fafc;border-radius:8px;padding:10px 12px;">
+                    <div style="font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:4px;">Amount</div>
+                    <div style="font-size:15px;font-weight:700;color:#0A1628;">R{opt['amount']:,.0f}</div>
+                </div>
+                <div style="background:#f8fafc;border-radius:8px;padding:10px 12px;">
+                    <div style="font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:4px;">Interest ({opt['days']}d)</div>
+                    <div style="font-size:15px;font-weight:700;color:#0A1628;">R{opt['interest']:.2f}</div>
+                </div>
+                <div style="background:#f8fafc;border-radius:8px;padding:10px 12px;">
+                    <div style="font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:4px;">Fees</div>
+                    <div style="font-size:15px;font-weight:700;color:#0A1628;">R{opt['fees']:.2f}</div>
+                </div>
+                <div style="background:#f8fafc;border-radius:8px;padding:10px 12px;">
+                    <div style="font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:4px;">RALC</div>
+                    <div style="font-size:15px;font-weight:700;color:#5b21b6;">R{opt['ralc']:.2f}</div>
+                </div>
+            </div>
+
+            <div style="font-size:12px;color:#4b5563;border-top:1px solid #e2e8f0;padding-top:10px;">
+                💡 {opt['why_chosen']}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
     if st.button("← Back", use_container_width=True):
         st.session_state.page = 1
@@ -692,7 +716,6 @@ for col, (p, icon, label) in zip(nav_cols, nav_items):
             f"<div style='text-align:center;font-size:11px;font-weight:{weight};color:{color};'>{icon}<br>{label}</div>",
             unsafe_allow_html=True
         )
-        if st.button(f"{label}", key=f"nav_{p}", use_container_width=True,
-                     label_visibility="collapsed"):
+        if st.button(f"{icon}", key=f"nav_{p}", use_container_width=True):
             st.session_state.page = p
             st.rerun()
