@@ -1,1 +1,118 @@
- I need you help with calculating numbers for the Servicing Team's OBR, basically we want to see what each employee received over a period of 12 months (01 May 2024 to 30 April 2025) versus what they would have received if they were on the normal ARR. I think you were working on this towards the end of last year   
+/*==========================================================
+  1. Environment & Libname Setup
+==========================================================*/
+
+%include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
+
+%macro logging(libname,database,schema,server);
+LIBNAME &libname odbc noprompt="
+  Driver=MSSQL;
+  AnsiNPW=1;
+  AuthenticationMethod=10;
+  ApplicationUsingThreads=1;
+  BulkLoadOptions=2;
+  Database=&database;
+  FetchTWFSasTime=1;
+  HostName=&server;
+  PortNumber=1433;
+  UID=&User.;
+  PWD=&FNB_Login."
+Schema=&schema;
+%mend;
+
+%logging(STI_WER,FNB_STI_Analytics,Claims,LFE-RBPREATLDB1);
+
+
+/*==========================================================
+  2. Run Date (YYYYMMDD)
+==========================================================*/
+
+%if not %symexist(rd) %then %do;
+  %let rd = %sysfunc(today(), yymmddn8.);
+%end;
+
+
+/*==========================================================
+  3. Motor + Retail + Unpaid Claims
+     Build required fields only
+==========================================================*/
+
+data work.MotorClaims_Final;
+  set STI_WER.Investigate_Claims(
+    keep=
+      ClaimCode
+      ReportMonth
+      Estimate_OCR
+      Total_Paid_ExVAT
+      ClaimHandler
+      ProductTypeSplit
+      Division
+  );
+
+  /* Motor only */
+  if upcase(strip(ProductTypeSplit)) ne 'MOTOR' then delete;
+
+  /* Retail only */
+  if upcase(Division) ne 'RETAIL' then delete;
+
+
+  /* Final output columns ONLY */
+  keep
+    ClaimCode
+    ReportMonth
+	ProductTypeSplit
+    Total_Paid_ExVAT
+    Estimate_OCR
+    ClaimHandler;
+run;
+
+
+/*==========================================================
+  4. Export Motor Claims Excel
+==========================================================*/
+
+proc export data=work.MotorClaims_Final
+  outfile="/data/fnbinsurance/Short_Term/Monitoring/MotorClaimsPaid&rd..xlsx"
+  dbms=xlsx
+  replace;
+  sheet="Motor_Claims";
+run;
+
+
+/*==========================================================
+  5. Email – Motor Claims ONLY
+==========================================================
+
+filename outbox email;
+
+data _null_;
+  file outbox
+    to = ("morris.nkomo@fnb.co.za")
+    from = ("FNB ST Analytics <fnbst-analytics@fnb.co.za>")
+    subject = "Daily Motor Claims – Retail (Under Investigation)"
+    attach = (
+      "/data/fnbinsurance/Short_Term/Monitoring/MotorClaimsPaid&rd..xlsx"
+      content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+
+  put "Good morning Morris,";
+  put;
+  put "Please find attached the Motor Retail claims still under investigation.";
+  put;
+  put "Filters applied:";
+  put "- Product Type: Motor";
+  put "- Division: Retail";
+  put "- Paid Off Indicator = 0";
+  put;
+  put "Columns included:";
+  put "- Claim Code";
+  put "- Reported Month";
+  put "- Estimated OCR (when flagged)";
+  put "- Current Estimate OCR";
+  put "- OCR Movement";
+  put "- Claim Handler";
+  put;
+  put "Regards,";
+  put "FNB ST Analytics";
+run;
+*/
