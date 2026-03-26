@@ -20,7 +20,7 @@ Schema=&schema;
 %mend;
 
 %logging(STI_WER, FNB_STI_Analytics, Claims, LFE-RBPREATLDB1);
-%logging(STI_OPS, FNB_STI_Analytics, Claims, LFE-RBPREATLDB1);  /* for vw_OpsClaimsReport */
+%logging(STI_OPS, FNB_STI_Analytics, Claims, LFE-RBPREATLDB1);
 
 /*==========================================================
   2. Run Date (YYYYMMDD)
@@ -37,23 +37,24 @@ data work.OpsOCR;
   set STI_OPS.vw_OpsClaimsReport(
     keep=
       ClaimCode
+      SubCode
       Total_Estimate_OCR_ExVAT
   );
-  /* Derive Paid_Off_Ind to match Excel dashboard logic */
   if round(Total_Estimate_OCR_ExVAT, 0.01) = 0 then Paid_Off_Ind = 1;
   else Paid_Off_Ind = 0;
 
-  keep ClaimCode Paid_Off_Ind;
+  keep ClaimCode SubCode Paid_Off_Ind;
 run;
 
 /*==========================================================
   4. Motor + Retail + Unpaid Claims
-     Join Investigate_Claims to OpsOCR and filter Paid_Off_Ind = 0
+     Join on ClaimCode + SubCode to avoid duplicates
 ==========================================================*/
 proc sql;
   create table work.MotorClaims_Final as
   select
     a.ClaimCode,
+    a.SubCode,
     a.ReportMonth,
     a.ProductTypeSplit,
     a.Total_Paid_ExVAT,
@@ -61,10 +62,11 @@ proc sql;
     a.ClaimHandler
   from STI_WER.Investigate_Claims a
   inner join work.OpsOCR b
-    on a.ClaimCode = b.ClaimCode
+    on  a.ClaimCode = b.ClaimCode
+    and a.SubCode   = b.SubCode
   where upcase(strip(a.ProductTypeSplit)) = 'MOTOR'
     and upcase(a.Division)               = 'RETAIL'
-    and b.Paid_Off_Ind                   = 0   /* exclude paid-off claims */
+    and b.Paid_Off_Ind                   = 0
   ;
 quit;
 
@@ -102,6 +104,7 @@ data _null_;
   put;
   put "Columns included:";
   put "- Claim Code";
+  put "- Sub Code";
   put "- Report Month";
   put "- Total Paid (Ex VAT)";
   put "- Estimated OCR";
