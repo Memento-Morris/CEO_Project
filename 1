@@ -1,11 +1,31 @@
-SELECT *
-FROM [FNB_STI_Analytics].[Claims].[vw_Ops_Claims_Age] a
-LEFT JOIN (
-    SELECT *
-    FROM [FNB_STI_Analytics].[Claims].[vw_OCR_Claims_Age]
-    WHERE Investigate_Flag = '1'
-) b
-ON a.SubjectCode = b.SubjectCode  -- i.e. ClaimCode
-LEFT JOIN [FNB_STI_Analytics].[Claims].[vw_OCR_Movement_Age] c
-    ON a.SubjectCode = c.SubjectCode
-ORDER BY ReportedMonth DESC;
+SELECT 
+    a.ClaimCode, 
+    a.SubClaimCode, 
+    a.ProductTypeSplit, 
+    c.Division,
+    a.ReportedMonth,
+    c.ClaimHandler,
+    ROUND(a.Total_Estimate_OCR_ExVAT,2) AS Current_Estimate_OCR,
+    ROUND(a.Total_Paid_ExVAT,2) AS Current_Paid,
+    c.Estimate_OCR AS Previous_OCR,
+    c.Total_Paid_ExVAT AS Previous_Paid,
+    CASE 
+        WHEN b.ClaimCode IS NOT NULL THEN 'yes'
+        ELSE 'no'
+    END AS still_investigate
+FROM 
+    [FNB_STI_Analytics].[Claims].[vw_OpsClaimsReport] a
+LEFT JOIN 
+    (SELECT ClaimCode, SubClaimCode
+     FROM FNB_STI_Analytics.Claims.vw_OCR_Claim_Age 
+     WHERE Investigate_Flag = 'Investigate') b
+ON 
+    a.SubClaimCode = b.SubClaimCode
+LEFT JOIN 
+    FNB_STI_Analytics.Claims.Investigate_Claims c
+ON 
+    a.SubClaimCode = c.SubClaimCode
+WHERE 
+    a.SubClaimCode IN (SELECT SubClaimCode FROM FNB_STI_Analytics.Claims.Investigate_Claims)
+ORDER BY 
+    a.ReportedMonth DESC;
