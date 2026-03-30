@@ -1,0 +1,251 @@
+/* Code for calculating Remuneration for Servicing Advisors */
+
+%include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
+
+/* ---------------------------------------------------------------------------
+   Part 1: Calculating the scores of the agents over the OBR period
+--------------------------------------------------------------------------- */
+
+/* ---------------------------------------------------------------------------
+   Deciding time frames
+--------------------------------------------------------------------------- */
+
+/* QA Date Range */
+data Periods;
+    set sti_meta.qa_loc_periods;
+    character_month = put(QA_Period, monyy7.);
+run;
+
+/* IMPORTANT: VERIFY MONTH FOR OBR
+   Adjust offset in intnx():
+   - 0 = current month
+   - -1 = previous month
+*/
+/*%let OBR_Month_start_date = %SYSFUNC(intnx(month, %SYSFUNC(today()), 0, b), date9.);*/
+
+/*%put *******************************************************;*/
+/*%put *** CHECK: OBR_Month_start_date = &OBR_Month_start_date ***;*/
+/*%put *******************************************************;*/
+
+/* Periods as defined (before shifts) */
+data _null_;
+    set Periods;
+    call symput('sheet', character_month);
+    where QA_Period = "&OBR_Month_start_date"d;
+run;
+
+%put -------> &sheet;
+
+/* Hardcode option here - first day of OBR cycle*/
+%let OBR_Month_start_date = '24FEB2026' ;
+%let OBR_Month_end_date = '30MAR2026' ; 
+/*
+Decide the OBR period: Use first Monday to last Sunday of the month, (For 2026, we have shifted back by one week due to timelines).  
+
+For Feb 2026: 27 Jan – 23 Feb 2026 
+
+Decide the Mondays (scorecards):  
+
+For Feb2026, you'll use 02, 09, 16, 23 Feb 2026 
+
+You’ll hardcode these four dates in the script in Step 5. 
+/****** NB: STORING DATES OF FIRST AND LAST SCORECARD TAKEN ******/
+
+/* First Scorecard*/
+%let current_obr_period_start_date = '02MAR2026';
+%put &current_obr_period_start_date;
+
+/* Last Scorecard*/
+%let current_obr_period_end_date = '30MAR2026';
+%put &current_obr_period_end_date;
+
+
+/* ---------------------------------------------------------------------------
+   Calculating 3 month scores
+--------------------------------------------------------------------------- */
+
+/* Getting historical scores
+   NOTE: Update file from previous OBR (Copy and Paste most recent file)
+*/
+
+PROC IMPORT 
+    DATAFILE="\\lfe-rbgfs01\FNB_Insure\FSR STI Corporate Actuarial\Dashboards\Operational\OBR_Records\run\Input_Files\OBR PBI Input Sheet.xlsx"    
+    OUT=OBR_History
+    DBMS=excelcs 
+    REPLACE;
+    SHEET="Operations OBR data";
+    SERVER='lfe-rbgfs01';
+    PORT=9621; 
+RUN;
+
+DATA Historical_Scores;
+    SET OBR_History;
+
+    IF Division = 'Servicing';
+    KEEP Fnumber UserName Team Score OpsYM DateVar;
+
+    /* Convert OpsYM (YYYYMM) to EOM date */
+    Year = INT(OpsYM / 100);          /* Extract year */
+    Month = MOD(OpsYM, 100);          /* Extract month */
+    DateVar = INTNX('month', MDY(Month, 1, Year), 0, 'E'); /* End of month */
+    FORMAT DateVar DATE9.;            /* Format as DDMMMYYYY */
+RUN;
+
+proc sql;
+    create table Leave_Score as
+    select a.*, b.EmployeeNumber as EmployeeNumber2
+    from Historical_Scores a
+/*    inner join sti_pbi.service_employee b*/
+	inner join STI_PBI.STI_Servicing_Agents b /*migrating over to new employee list */
+    on a.Fnumber = b.EmployeeNumber;
+quit;
+
+/* --- These are our current agents 3 month scores --- */
+proc sql; 
+    create table Leave_Score_2 as
+    select UserName,
+           EmployeeNumber2 as employeenumber,
+           round(mean(Score), 0.01) as three_month_score
+    from Leave_Score
+
+/* Calculate scores for the 3 full months before the current month: start = BOM 3 months ago, end = EOM of prior month */
+
+/*    where DateVar between intnx('month', "&OBR_Month_start_date"d, -3, 's')*/
+/*                      and "&OBR_Month_start_date"d*/
+	where DateVar between intnx('month', "&OBR_Month_start_date"d, -3, 'b')
+                  and intnx('month', "&OBR_Month_start_date"d, -1, 'e') 
+
+    group by UserName, EmployeeNumber2;
+
+proc sql;
+	create table Leave_Score_2 
+    as select a.*
+	from Leave_Score_2 a 
+	where a.EmployeeNumber in (select EmployeeNumber 
+                               from STI_PBI.STI_Servicing_Agents
+							   where Active = 1);
+quit;
+
+
+/* ---------------------------------------------------------------------------
+   Getting leave records
+   NOTE: 3 month score will only taken if leave days >= 5 
+--------------------------------------------------------------------------- */
+
+/*NOTE: Copy and Paste most recent file in location*/
+
+PROC Import 
+    DATAFILE="\\lfe-rbgfs01\FNB_Insure\FSR STI Corporate Actuarial\Dashboards\Operational\OBR_Records\Leave_Template.xlsx"
+    OUT=Leave_Template
+    DBMS=excelcs 
+    REPLACE;
+    server= 'lfe-rbgfs01';
+    PORT=9621;    
+	sheet='&sheet';
+RUN;
+
+data Leave_Template;
+set Leave_Template;
+rename 'Scorecard_Affected_Date(Which Mo'n = Score_Affected_Date;
+run;
+
+data Leave_Template2;
+set Leave_Template;
+/*Scorecard_Day_affected2= input(Score_Affected_Date, mmddyy10.);*/
+IF 'Leave Days'n >= 5 THEN Scorecard_Day_affected2= Score_Affected_Date;
+format Scorecard_Day_affected2 date9;   /*This variable defines if 3 month average is used */
+run;
+
+
+/* ---------------------------------------------------------------------------
+   Pulling in weekly scores from scorecards 
+--------------------------------------------------------------------------- */
+
+/* Note that because the scorecards capture the previosu 7 days, we take everything after the start date up until and including the end date */
+proc sql;
+create table Servicing_Scores as
+select *
+from STI_SC.Servicing_Scores b
+where sql_export_day = (select max(sql_export_day) 
+							from STI_SC.Servicing_Scores c
+							 where b.run_date = c.run_date and b.EmployeeNumber = c.EmployeeNumber)
+and run_date >= "&current_obr_period_start_date"d and run_date <= "&current_obr_period_end_date"d
+and weekday(run_date) = 2
+and active =1
+order by EmployeeNumber
+;quit;
+
+proc sql;
+	create table Servicing_Scores 
+    as select a.*
+	from Servicing_Scores a 
+	where a.EmployeeNumber in (select EmployeeNumber 
+                               from STI_PBI.STI_Servicing_Agents
+							   where Active = 1);
+quit;
+
+/* extra precaution to make sure there no duplicate names */
+
+data Servicing_Scores;
+Set Servicing_Scores;
+drop full_name;
+
+run;
+
+proc sql; 
+	create table Servicing_Scores as 
+	select catx(' ', b.Name, b.Surname) as full_name
+		  ,a.*
+	from Servicing_Scores a
+	left join STI_PBI.STI_Servicing_Agents b
+	on a.EmployeeNumber = b.EmployeeNumber;
+quit;
+
+
+/**** Check: OBR Dates ****/
+proc sql;
+	select distinct
+		run_date 
+		from Servicing_Scores;
+quit;
+
+
+/* ---------------------------------------------------------------------------
+   Adjusting for 3 month scores for leave <= 5 days 
+--------------------------------------------------------------------------- */ 
+
+proc sql;
+create table Servicing_Scores_WLeave as
+select     a.*,  
+           b.three_month_score,
+		   c.Scorecard_Day_affected2
+from Servicing_Scores a
+left join Leave_Score_2 b
+on a.EmployeeNumber = b.employeenumber
+left join Leave_Template2 c
+on (a.EmployeeNumber = c.F_Number and a.run_date = c.Scorecard_Day_affected2)
+;quit;
+
+/*** Adjusting for name discrepency found ***/
+
+Data Servicing_Scores_WLeave;
+Set Servicing_Scores_WLeave;
+
+IF EmployeeNumber = 'F5485428' THEN line = 'Comp 1';
+
+run;
+
+
+/* --- Splitting Servicing Teams --- */
+
+data LOC_Servicing_Remm COMP_Servicing_Remm;
+set Servicing_Scores_WLeave (keep=Full_Name line EmployeeNumber run_date Active scorecard three_month_score Scorecard_Day_affected2 rename=(EmployeeNumber=Employee_Number));
+
+if Scorecard_Day_affected2 ne '' and scorecard < three_month_score then 
+    scorecard = three_month_score;
+
+if line in ("LOC 1", "LOC 2") then output LOC_Servicing_Remm;
+else output COMP_Servicing_Remm;
+
+run;
+
