@@ -1,19 +1,31 @@
-DROP TABLE IF EXISTS FNB_STI_Analytics.Claims.Investigate_Claims;
-
-SELECT ClaimCode, 
-       SubClaimCode, 
-       ProductTypeSplit,
-	   Division,
-       ReportMonth,
-       Estimate_OCR,
-	   Total_Paid_ExVAT,
-	   ClaimHandler,
-       GETDATE() AS RunDate
-INTO FNB_STI_Analytics.Claims.Investigate_Claims
-FROM FNB_STI_Analytics.Claims.vw_OCR_Claim_Age
-WHERE Investigate_Flag = 'Investigate'
-ORDER BY ReportMonth DESC;
-
-
-
-
+SELECT 
+    c.ClaimCode, 
+    c.SubClaimCode, 
+    c.ProductTypeSplit, 
+    c.Division,
+    c.ReportMonth,
+    c.ClaimHandler,
+    ROUND(a.Total_Estimate_OCR_ExVAT, 2) AS Current_Estimate_OCR,
+    ROUND(a.Total_Paid_ExVAT, 2)         AS Current_Paid,
+    c.Estimate_OCR                        AS Previous_OCR,
+    c.Total_Paid_ExVAT                    AS Previous_Paid,
+    c.RunDate                             AS SnapshotDate,
+    CASE 
+        WHEN b.SubClaimCode IS NOT NULL THEN 'yes'
+        ELSE 'no'
+    END AS still_investigate
+FROM 
+    FNB_STI_Analytics.Claims.Investigate_Claims c
+LEFT JOIN 
+    [FNB_STI_Analytics].[Claims].[vw_OpsClaimsReport] a
+    ON c.SubClaimCode = a.SubClaimCode
+LEFT JOIN 
+    (SELECT SubClaimCode
+     FROM FNB_STI_Analytics.Claims.vw_OCR_Claim_Age 
+     WHERE Investigate_Flag = 'Investigate') b
+    ON c.SubClaimCode = b.SubClaimCode
+WHERE 
+    c.ProductTypeSplit = 'Motor'              -- Motor only
+    AND ISNULL(a.Total_Estimate_OCR_ExVAT, 0) > 0  -- not paid off
+ORDER BY 
+    c.ReportMonth DESC;
