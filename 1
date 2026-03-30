@@ -27,5 +27,7 @@ ON
     a.SubClaimCode = c.SubClaimCode
 WHERE 
     a.SubClaimCode IN (SELECT SubClaimCode FROM FNB_STI_Analytics.Claims.Investigate_Claims)
+    AND a.Total_Estimate_OCR_ExVAT > 0      -- not paid off (Paid_Off_Ind = 0)
+    AND a.ProductTypeSplit = 'Motor'         -- Motor only
 ORDER BY 
     a.ReportedMonth DESC;
