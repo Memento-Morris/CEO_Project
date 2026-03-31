@@ -50,8 +50,8 @@ run;
 %let current_obr_period_start_date = '02MAR2026'd;
 %let current_obr_period_end_date   = '30MAR2026'd;
 
-/* QA fallback window: Dec 2025 to Jan 2026 (2-month average) */
-%let QA_Fallback_start = '01DEC2025'd;
+/* QA fallback window: Nov 2025 to Jan 2026 (3-month average) */
+%let QA_Fallback_start = '01NOV2025'd;
 %let QA_Fallback_end   = '31JAN2026'd;
 
 %put OBR Start      : &OBR_Month_start_date;
@@ -321,10 +321,12 @@ quit;
 
 /* ============================================================================
    PART 9: QA FALLBACK — CURRENT MONTH QA NOT YET AVAILABLE
-   Average QA_Score_Perc from Dec 2025 to Jan 2026 used as proxy for Mar 2026.
+   Average QA_Score_Perc from Nov 2025 to Jan 2026 used as proxy for Mar 2026.
    Incentive_Factor_To_Be_Paid is derived from the averaged score via
-   QA_factors using the most recent factor date range available.
-   Agents with no QA history in the fallback window default to 100% / factor 1.
+   QA_factors using only the score band (LB_QA / UP_QA) — no date filter
+   applied since we are deliberately using a historical average outside the
+   current period. Agents with no QA history in the fallback window default
+   to QA_Score_Perc = 100 and factor = 1.
    ============================================================================ */
 
 /* Step 1: Load raw QA source */
@@ -334,7 +336,7 @@ data Service_QA_Raw;
     if score = . then evaluations = 0;
 run;
 
-/* Step 2: Aggregate to per-agent average over Dec 2025 – Jan 2026 */
+/* Step 2: Aggregate to per-agent average over Nov 2025 – Jan 2026 */
 proc sql;
     create table QA_Fallback_Avg as
     select      Employee_number,
@@ -352,20 +354,43 @@ proc sql;
     select count(*) as agents_with_fallback_QA from QA_Fallback_Avg;
 quit;
 
-/* Step 3: Look up incentive factor using the latest available QA_factors range */
+/* Diagnostic: print the QA_factors table so we can confirm score bands exist */
+%put === QA_factors contents ===;
+proc sql;
+    select * from QA_factors order by LB_QA;
+quit;
+
+/* Step 3: Look up incentive factor using ONLY the score band — no date filter.
+   We are applying a historical average so date-restricting the factor lookup
+   was causing everyone to return null and silently default to 100. */
 proc sql;
     create table QA_FINAL as
     select      a.Employee_number,
                 a.QA_Score_Perc,
                 a.QA_Evaluations,
-                a.Fallback_Start    as start_date   format date9.,
-                a.Fallback_End      as end_date     format date9.,
+                a.Fallback_Start                as start_date   format date9.,
+                a.Fallback_End                  as end_date     format date9.,
                 b.Incentive_Factor_To_Be_Paid,
-                'DEC25-JAN26 Avg'   as QA_Source
+                'NOV25-JAN26 Avg'               as QA_Source
     from        QA_Fallback_Avg a
+    /* FIX: removed date restriction — only match on score band */
     left join   QA_factors b
-        on  (a.QA_Score_Perc between b.LB_QA and b.UP_QA)
-        and  b.End_date = (select max(End_date) from QA_factors);
+        on  (a.QA_Score_Perc between b.LB_QA and b.UP_QA);
+quit;
+
+/* Diagnostic: confirm factors are populating correctly */
+%put === QA_FINAL after factor join — sample ===;
+proc sql;
+    select Employee_number, QA_Score_Perc, Incentive_Factor_To_Be_Paid, QA_Source
+    from QA_FINAL
+    order by Employee_number;
+quit;
+
+/* Check how many still have a null factor after the fix */
+proc sql;
+    select count(*) as still_null_factor
+    from QA_FINAL
+    where Incentive_Factor_To_Be_Paid is null;
 quit;
 
 /* Step 4: Default any agent missing from the fallback window to 100% / factor 1 */
@@ -649,3 +674,4 @@ data Secure_Chat_Agents;
     set STI_PBI.STI_Servicing_Agents;
     where Active = 1;
 run;
+
