@@ -6,6 +6,11 @@
      2. Removed unused 3rd macro parameter (QA_Periods) from %ALL_OFFICE_MONTHLY_EARN
      3. Temp tables used to avoid recursive reference warnings
      4. Data type mismatch in Leave join confirmed both character — direct join used
+     5. %Final_Earn macro: QA_Period forced to numeric date on both sides via
+        input(put(...,date9.),date9.) to prevent format mismatch causing empty
+        start_date, end_date and QA_Evaluations columns in COMP/LOC Final Earns
+     6. %Final_Earn macro: strip() added to Employee_Number join to remove
+        trailing spaces that can silently break the match
    ============================================================================ */
 
 %include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
@@ -429,8 +434,14 @@ proc sql;
                 a.Monthly_Earn_before_QA * b.Incentive_Factor_To_Be_Paid as Monthly_Earn_after_QA
     from        &from_earn a
     left join   &QA b
-        on  (a.Employee_Number = b.Employee_Number
-         and a.QA_Period       = b.QA_Period)
+        /* FIX: strip() guards against trailing spaces in Employee_Number.
+                input(put(...,date9.),date9.) forces both QA_Period values to a
+                plain numeric date regardless of how each table stored the format,
+                preventing silent mismatches that leave start_date/end_date/
+                QA_Evaluations empty in the output. */
+        on  strip(a.Employee_Number) = strip(b.Employee_Number)
+        and input(put(a.QA_Period, date9.), date9.)
+          = input(put(b.QA_Period, date9.), date9.)
     order by a.QA_Period desc;
 quit;
 %mend;
