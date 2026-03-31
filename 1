@@ -9,10 +9,18 @@
         prevent format mismatch causing empty columns in Final Earns
      6. %Final_Earn macro: strip() added to Employee_Number join
      7. QA scores for current month not yet available — replaced with 3-month
-        average QA_Score_Perc calculated from Dec 2025 to Jan 2026 historical
+        average QA_Score_Perc calculated from Nov 2025 to Jan 2026 historical
         data in sti_pbi.Service_QA_Final. Incentive_Factor_To_Be_Paid derived
         from the averaged score via QA_factors lookup. Agents with no historical
         QA records default to QA_Score_Perc = 100 and factor = 1.
+     8. FIX: QA_FINAL_Perioded now uses OBR_Month_start_date directly instead
+        of filtering Periods by current_obr_period_start/end_date — the SC
+        start date (02MAR2026) was after most QA_Period values causing the
+        cross join to return zero rows and silently nulling all QA columns.
+     9. FIX: %Final_Earn QA_Period join replaced with a direct Employee_Number
+        only join — since all agents now carry the same fallback average there
+        is no need to match on QA_Period, removing the root cause of empty
+        QA columns in the final table entirely.
    ============================================================================ */
 
 %include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
@@ -327,6 +335,12 @@ quit;
    applied since we are deliberately using a historical average outside the
    current period. Agents with no QA history in the fallback window default
    to QA_Score_Perc = 100 and factor = 1.
+
+   KEY FIX: QA_FINAL_Perioded now stamps every agent with OBR_Month_start_date
+   as QA_Period directly — no sub-select against Periods with SC date bounds
+   that previously returned zero rows. The %Final_Earn join has also been
+   simplified to match on Employee_Number only, removing the QA_Period
+   comparison that was silently failing and nulling all QA columns.
    ============================================================================ */
 
 /* Step 1: Load raw QA source */
@@ -360,9 +374,7 @@ proc sql;
     select * from QA_factors order by LB_QA;
 quit;
 
-/* Step 3: Look up incentive factor using ONLY the score band — no date filter.
-   We are applying a historical average so date-restricting the factor lookup
-   was causing everyone to return null and silently default to 100. */
+/* Step 3: Look up incentive factor using ONLY the score band — no date filter */
 proc sql;
     create table QA_FINAL as
     select      a.Employee_number,
@@ -373,7 +385,6 @@ proc sql;
                 b.Incentive_Factor_To_Be_Paid,
                 'NOV25-JAN26 Avg'               as QA_Source
     from        QA_Fallback_Avg a
-    /* FIX: removed date restriction — only match on score band */
     left join   QA_factors b
         on  (a.QA_Score_Perc between b.LB_QA and b.UP_QA);
 quit;
@@ -425,21 +436,27 @@ run;
 
 proc sql; drop table QA_FINAL_Missing; quit;
 
-/* Step 6: Attach current QA_Period so the join in %Final_Earn matches */
+/* -----------------------------------------------------------------------
+   FIX (Step 6): Stamp QA_Period directly from OBR_Month_start_date.
+   Previously this used a sub-select filtering Periods where QA_Period
+   was BETWEEN current_obr_period_start_date and current_obr_period_end_date.
+   Because QA_Period in the Periods table is stored as month-start (24FEB2026)
+   and current_obr_period_start_date = 02MAR2026, the filter returned zero
+   rows — making QA_FINAL_Perioded empty and silently nulling all QA columns
+   in the final table.  We now stamp every row with the known OBR period date
+   directly, which is guaranteed to exist in the Periods table.
+   ----------------------------------------------------------------------- */
 proc sql;
     create table QA_FINAL_Perioded as
-    select      a.*,
-                b.QA_Period
-    from        QA_FINAL a
-    cross join  (select QA_Period
-                 from Periods
-                 where QA_Period between &current_obr_period_start_date
-                                     and &current_obr_period_end_date) b;
+    select  a.*,
+            &OBR_Month_start_date as QA_Period format date9.
+    from    QA_FINAL a;
 quit;
 
-%put === QA_FINAL_Perioded — row count ===;
+%put === QA_FINAL_Perioded — row count (should match agent count) ===;
 proc sql; select count(*) as total_rows from QA_FINAL_Perioded; quit;
 
+/* Confirm period and scores look correct */
 proc sql;
     select Employee_number,
            QA_Period                    format date9.,
@@ -453,6 +470,15 @@ quit;
 
 /* ---------------------------------------------------------------------------
    Calculating Earn: After QA — using fallback QA scores
+
+   FIX: Join is now on Employee_Number only.
+   The previous double join (Employee_Number AND QA_Period) was failing
+   because QA_Period in the monthly earn tables is set from the Periods
+   table via run_date, which resolves to 24FEB2026, but minor format
+   differences or value mismatches caused the join to produce no matches
+   even after the input(put()) casting. Removing the QA_Period condition
+   is safe here because every agent has exactly one fallback QA row —
+   there is no multi-period ambiguity to protect against.
    --------------------------------------------------------------------------- */
 %macro Final_Earn(Earn_Table, from_earn, QA);
 proc sql;
@@ -464,12 +490,11 @@ proc sql;
                 b.QA_Score_Perc,
                 b.Incentive_Factor_To_Be_Paid,
                 b.QA_Source,
-                a.Monthly_Earn_before_QA * b.Incentive_Factor_To_Be_Paid as Monthly_Earn_after_QA
+                a.Monthly_Earn_before_QA * b.Incentive_Factor_To_Be_Paid
+                    as Monthly_Earn_after_QA
     from        &from_earn a
     left join   &QA b
         on  strip(a.Employee_Number) = strip(b.Employee_number)
-        and input(put(a.QA_Period, date9.), date9.)
-          = input(put(b.QA_Period, date9.), date9.)
     order by a.QA_Period desc;
 quit;
 %mend;
@@ -674,4 +699,3 @@ data Secure_Chat_Agents;
     set STI_PBI.STI_Servicing_Agents;
     where Active = 1;
 run;
-
