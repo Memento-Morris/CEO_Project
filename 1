@@ -1,19 +1,10 @@
 SELECT 
-    c.ClaimCode, 
-    c.SubClaimCode, 
-    c.ProductTypeSplit, 
-    c.Division,
-    c.ReportMonth,
-    c.ClaimHandler,
-    ROUND(a.Total_Estimate_OCR_ExVAT, 2) AS Current_Estimate_OCR,
-    ROUND(a.Total_Paid_ExVAT, 2)         AS Current_Paid,
-    c.Estimate_OCR                        AS Previous_OCR,
-    c.Total_Paid_ExVAT                    AS Previous_Paid,
-    c.RunDate                             AS SnapshotDate,
-    CASE 
-        WHEN b.SubClaimCode IS NOT NULL THEN 'yes'
-        ELSE 'no'
-    END AS still_investigate
+    c.ClaimCode,
+    c.ReportMonth                         AS ReportedMonth,
+    c.Estimate_OCR                        AS Estimate_OCR_When_Flagged,
+    ROUND(a.Total_Estimate_OCR_ExVAT, 2)  AS Current_Estimate_OCR,
+    ROUND(a.Total_Estimate_OCR_ExVAT, 2) 
+        - c.Estimate_OCR                  AS OCR_Movement
 FROM 
     FNB_STI_Analytics.Claims.Investigate_Claims c
 LEFT JOIN 
@@ -25,7 +16,8 @@ LEFT JOIN
      WHERE Investigate_Flag = 'Investigate') b
     ON c.SubClaimCode = b.SubClaimCode
 WHERE 
-    c.ProductTypeSplit = 'Motor'              -- Motor only
-    AND ISNULL(a.Total_Estimate_OCR_ExVAT, 0) > 0  -- not paid off
+    c.ProductTypeSplit = 'Motor'
+    AND c.Division = 'Retail'
+    AND ISNULL(a.Total_Estimate_OCR_ExVAT, 0) > 0
 ORDER BY 
     c.ReportMonth DESC;
