@@ -116,27 +116,31 @@ quit;
 
 /* ----------------------------------------------------------------------------
    STEP 5: QA_Period type check — compare how QA_Period is stored in each
-   table. If vtype differs OR the formatted values differ, that is the join
-   breaking in %Final_Earn.
+   table. If TYPE differs (1=numeric, 2=character) OR formatted values differ,
+   that is the join breaking in %Final_Earn.
    ---------------------------------------------------------------------------- */
-%put === STEP 5: QA_Period type and value comparison ===;
+%put === STEP 5a: QA_Period type — COMP_SER_Monthly_Earn_PreQA ===;
+proc contents data=COMP_SER_Monthly_Earn_PreQA varnum;
+    ods select Variables;
+run;
 
-/* From the earn side */
+%put === STEP 5b: QA_Period type — QA_FINAL ===;
+proc contents data=QA_FINAL varnum;
+    ods select Variables;
+run;
+
+/* Also print the distinct QA_Period values from each table so you can
+   visually confirm they are the same date */
+%put === STEP 5c: Distinct QA_Period values — COMP_SER_Monthly_Earn_PreQA ===;
 proc sql;
-    select  distinct
-            QA_Period                           format date9.,
-            put(QA_Period, date9.)              as QA_Period_char,
-            vtype(QA_Period)                    as stored_type
-    from    COMP_SER_Monthly_Earn_PreQA;
+    select distinct QA_Period format date9.
+    from COMP_SER_Monthly_Earn_PreQA;
 quit;
 
-/* From the QA side */
+%put === STEP 5d: Distinct QA_Period values — QA_FINAL ===;
 proc sql;
-    select  distinct
-            QA_Period                           format date9.,
-            put(QA_Period, date9.)              as QA_Period_char,
-            vtype(QA_Period)                    as stored_type
-    from    QA_FINAL;
+    select distinct QA_Period format date9.
+    from QA_FINAL;
 quit;
 
 
