@@ -1,0 +1,182 @@
+/*==============================================================
+  FILE: OCR_00_Backfill.sas
+  PURPOSE: One-time back-fill — inserts the Baseline + 2 weekly
+           rows into OCR_Weekly_Tracker for the March 2026 cycle.
+  RUN: Once only, manually, BEFORE the next OCR_03_Weekly.sas run.
+  AFTER RUNNING: Verify with the check query at the bottom.
+==============================================================*/
+
+/*--------------------------------------------------------------
+  !! FILL IN YOUR VALUES HERE BEFORE RUNNING !!
+--------------------------------------------------------------*/
+
+/* --- BASELINE (March 16, 2026) --- */
+%let bf_baseline_date    = 2026-03-16;  /* do not change */
+%let bf_baseline_claims  = 999;         /* replace: total Motor Retail claims flagged */
+%let bf_baseline_ocr     = 999999.99;   /* replace: total OCR amount on the 16th (R) */
+
+/* --- WEEK 1 --- */
+%let bf_week1_date       = 2026-03-23;  /* replace if actual run date differs */
+%let bf_week1_open       = 999;         /* replace: claims still open */
+%let bf_week1_ocr        = 999999.99;   /* replace: total OCR amount */
+
+/* --- WEEK 2 --- */
+%let bf_week2_date       = 2026-03-30;  /* replace if actual run date differs */
+%let bf_week2_open       = 999;         /* replace: claims still open */
+%let bf_week2_ocr        = 999999.99;   /* replace: total OCR amount */
+
+/*--------------------------------------------------------------
+  Derived metrics — calculated automatically, do not edit
+--------------------------------------------------------------*/
+
+/* Week 1 derived */
+%let bf_week1_cumul_closed     = %sysevalf(&bf_baseline_claims. - &bf_week1_open.);
+%let bf_week1_closed_this_week = %sysevalf(&bf_baseline_claims. - &bf_week1_open.);  /* vs baseline */
+%let bf_week1_ocr_reduced      = %sysevalf(&bf_baseline_ocr.    - &bf_week1_ocr.);
+%let bf_week1_pct_closed       = %sysevalf(&bf_week1_cumul_closed. / &bf_baseline_claims.);
+
+/* Week 2 derived */
+%let bf_week2_cumul_closed     = %sysevalf(&bf_baseline_claims. - &bf_week2_open.);
+%let bf_week2_closed_this_week = %sysevalf(&bf_week1_open.      - &bf_week2_open.);
+%let bf_week2_ocr_reduced      = %sysevalf(&bf_week1_ocr.       - &bf_week2_ocr.);
+%let bf_week2_pct_closed       = %sysevalf(&bf_week2_cumul_closed. / &bf_baseline_claims.);
+
+/*--------------------------------------------------------------
+  1. Libname
+--------------------------------------------------------------*/
+%include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
+
+%macro logging(libname, database, schema, server);
+LIBNAME &libname odbc noprompt="
+  Driver=MSSQL;
+  AnsiNPW=1;
+  AuthenticationMethod=10;
+  ApplicationUsingThreads=1;
+  BulkLoadOptions=2;
+  Database=&database;
+  FetchTWFSasTime=1;
+  HostName=&server;
+  PortNumber=1433;
+  UID=&User.;
+  PWD=&FNB_Login."
+Schema=&schema;
+%mend;
+
+%logging(STI_WER, FNB_STI_Analytics, Claims, LFE-RBPREATLDB1);
+
+/*--------------------------------------------------------------
+  2. Safety check — abort if March 2026 rows already exist
+--------------------------------------------------------------*/
+proc sql noprint;
+  select count(*)
+  into :existing_march trimmed
+  from STI_WER.OCR_Weekly_Tracker
+  where YEAR(RunDate)  = 2026
+    and MONTH(RunDate) = 3;
+quit;
+
+%if &existing_march. > 0 %then %do;
+  %put ERROR: &existing_march. row(s) already exist for March 2026 in OCR_Weekly_Tracker.;
+  %put ERROR: Back-fill aborted. Delete existing March rows first if you want to re-run.;
+  %abort cancel;
+%end;
+
+%put NOTE: No existing March 2026 rows found. Proceeding with back-fill.;
+
+/*--------------------------------------------------------------
+  3. Insert all three rows in one pass
+--------------------------------------------------------------*/
+proc sql;
+  connect to odbc as sqlsvr (
+    noprompt="Driver=MSSQL;
+              AnsiNPW=1;
+              AuthenticationMethod=10;
+              Database=FNB_STI_Analytics;
+              HostName=LFE-RBPREATLDB1;
+              PortNumber=1433;
+              UID=&User.;
+              PWD=&FNB_Login."
+  );
+
+  /* --- Baseline row --- */
+  execute (
+    INSERT INTO FNB_STI_Analytics.Claims.OCR_Weekly_Tracker
+      (WeekLabel, RunDate, Baseline_Claims, Open_Claims,
+       Current_OCR_Amt, Cumul_Closed, Closed_This_Week,
+       OCR_Reduced_This_Week, Pct_Claims_Closed)
+    VALUES (
+      'Baseline',
+      CAST('%unquote(&bf_baseline_date.)' AS DATE),
+      %unquote(&bf_baseline_claims.),
+      %unquote(&bf_baseline_claims.),   /* open = baseline on day 0 */
+      %unquote(&bf_baseline_ocr.),
+      0,
+      0,
+      0,
+      0.0
+    )
+  ) by sqlsvr;
+
+  /* --- Week 1 row --- */
+  execute (
+    INSERT INTO FNB_STI_Analytics.Claims.OCR_Weekly_Tracker
+      (WeekLabel, RunDate, Baseline_Claims, Open_Claims,
+       Current_OCR_Amt, Cumul_Closed, Closed_This_Week,
+       OCR_Reduced_This_Week, Pct_Claims_Closed)
+    VALUES (
+      'Week 1',
+      CAST('%unquote(&bf_week1_date.)' AS DATE),
+      %unquote(&bf_baseline_claims.),
+      %unquote(&bf_week1_open.),
+      %unquote(&bf_week1_ocr.),
+      %unquote(&bf_week1_cumul_closed.),
+      %unquote(&bf_week1_closed_this_week.),
+      %unquote(&bf_week1_ocr_reduced.),
+      %unquote(&bf_week1_pct_closed.)
+    )
+  ) by sqlsvr;
+
+  /* --- Week 2 row --- */
+  execute (
+    INSERT INTO FNB_STI_Analytics.Claims.OCR_Weekly_Tracker
+      (WeekLabel, RunDate, Baseline_Claims, Open_Claims,
+       Current_OCR_Amt, Cumul_Closed, Closed_This_Week,
+       OCR_Reduced_This_Week, Pct_Claims_Closed)
+    VALUES (
+      'Week 2',
+      CAST('%unquote(&bf_week2_date.)' AS DATE),
+      %unquote(&bf_baseline_claims.),
+      %unquote(&bf_week2_open.),
+      %unquote(&bf_week2_ocr.),
+      %unquote(&bf_week2_cumul_closed.),
+      %unquote(&bf_week2_closed_this_week.),
+      %unquote(&bf_week2_ocr_reduced.),
+      %unquote(&bf_week2_pct_closed.)
+    )
+  ) by sqlsvr;
+
+  disconnect from sqlsvr;
+quit;
+
+%put NOTE: Back-fill complete. Baseline + Week 1 + Week 2 inserted for March 2026.;
+
+/*--------------------------------------------------------------
+  4. Verification — print what was inserted
+--------------------------------------------------------------*/
+proc sql;
+  title "OCR_Weekly_Tracker — March 2026 Back-fill Verification";
+  select WeekLabel,
+         RunDate        format=date9.,
+         Baseline_Claims,
+         Open_Claims,
+         Current_OCR_Amt       format=comma18.2,
+         Cumul_Closed,
+         Closed_This_Week,
+         OCR_Reduced_This_Week format=comma18.2,
+         Pct_Claims_Closed     format=percent8.2
+  from STI_WER.OCR_Weekly_Tracker
+  where YEAR(RunDate)  = 2026
+    and MONTH(RunDate) = 3
+  order by RunDate;
+  title;
+quit;
