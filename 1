@@ -1,27 +1,3 @@
-/* ============================================================================
-   Calculating Remuneration for Servicing Advisors
-   Fixes applied:
-     1. Removed +7 and +1 date offsets in %ALL_OFFICE_MONTHLY_EARN macro
-     2. Removed unused 3rd macro parameter from %ALL_OFFICE_MONTHLY_EARN
-     3. Temp tables used to avoid recursive reference warnings
-     4. Data type mismatch in Leave join confirmed both character — direct join used
-     5. %Final_Earn macro: QA_Period forced to numeric date on both sides to
-        prevent format mismatch causing empty columns in Final Earns
-     6. %Final_Earn macro: strip() added to Employee_Number join
-     7. QA scores for current month not yet available — replaced with 3-month
-        average QA_Score_Perc calculated from Nov 2025 to Jan 2026 historical
-        data in sti_pbi.Service_QA_Final. Incentive_Factor_To_Be_Paid derived
-        from the averaged score via QA_factors lookup. Agents with no historical
-        QA records default to QA_Score_Perc = 100 and factor = 1.
-     8. FIX: QA_FINAL_Perioded now uses OBR_Month_start_date directly instead
-        of filtering Periods by current_obr_period_start/end_date — the SC
-        start date (02MAR2026) was after most QA_Period values causing the
-        cross join to return zero rows and silently nulling all QA columns.
-     9. FIX: %Final_Earn QA_Period join replaced with a direct Employee_Number
-        only join — since all agents now carry the same fallback average there
-        is no need to match on QA_Period, removing the root cause of empty
-        QA columns in the final table entirely.
-   ============================================================================ */
 
 %include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
 
@@ -677,7 +653,7 @@ run;
    PART 12: EXPORT TO EXCEL
    NOTE: Update file name to current run date before exporting
    ============================================================================ */
-ods excel file='/data/fnbinsurance/Corporate_Actuarial/Short_Term/Servicing/Serv_Output_MAR2026_run1.xlsx'
+ods excel file='/data/fnbinsurance/Corporate_Actuarial/Short_Term/Servicing/Serv_Output_MAR2026_run1.csv'
     options(sheet_name='COMP Final_Earns');
     proc print data=COMP_Monthly_Earn noobs; run;
 ods excel options(sheet_name='LOC FinalEarns');
