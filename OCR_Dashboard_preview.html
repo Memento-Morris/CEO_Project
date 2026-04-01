@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Motor OCR Tracker — Week 2 — 20260330</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Sora:wght@300;400;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+:root {
+  --bg: #0d0f14;
+  --surface: #151820;
+  --surface2: #1c2030;
+  --border: rgba(255,255,255,0.07);
+  --border2: rgba(255,255,255,0.13);
+  --text: #e8eaf2;
+  --muted: #6b7280;
+  --accent: #4f8ef7;
+  --accent2: #34d399;
+  --warn: #f59e0b;
+  --danger: #f87171;
+  --font: "Sora", sans-serif;
+  --mono: "DM Mono", monospace;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; line-height: 1.6; min-height: 100vh; }
+.shell { max-width: 1200px; margin: 0 auto; padding: 2rem 1.5rem; }
+.header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 2rem; padding-bottom: 1.5rem; border-bottom: 1px solid var(--border2); }
+.header-left .eyebrow { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); font-family: var(--mono); margin-bottom: 6px; }
+.header-left h1 { font-size: 26px; font-weight: 600; color: var(--text); }
+.header-right { text-align: right; font-family: var(--mono); font-size: 12px; color: var(--muted); line-height: 2; }
+.pill { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-family: var(--mono); background: rgba(79,142,247,0.15); color: var(--accent); border: 1px solid rgba(79,142,247,0.3); }
+.metrics { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; margin-bottom: 2rem; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; position: relative; overflow: hidden; }
+.card::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px; }
+.card.blue::before  { background: var(--accent); }
+.card.green::before { background: var(--accent2); }
+.card.amber::before { background: var(--warn); }
+.card.red::before   { background: var(--danger); }
+.card-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 8px; font-family: var(--mono); }
+.card-value { font-size: 28px; font-weight: 600; color: var(--text); line-height: 1; margin-bottom: 6px; }
+.card-sub { font-size: 12px; color: var(--muted); }
+.pbar-bg { height: 4px; background: var(--surface2); border-radius: 2px; margin-top: 10px; }
+.pbar-fill { height: 4px; border-radius: 2px; background: var(--accent2); transition: width 0.8s ease; }
+.charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 2rem; }
+.chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
+.chart-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 1rem; font-family: var(--mono); letter-spacing: 0.04em; }
+.section-head { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); font-family: var(--mono); margin-bottom: 12px; }
+.table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-bottom: 2rem; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead tr { background: var(--surface2); }
+th { text-align: left; padding: 10px 14px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-family: var(--mono); font-weight: 400; border-bottom: 1px solid var(--border2); }
+td { padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--text); }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: var(--surface2); }
+.badge { display: inline-block; padding: 2px 9px; border-radius: 20px; font-size: 11px; font-family: var(--mono); }
+.badge-base { background: rgba(79,142,247,0.15); color: var(--accent); border: 1px solid rgba(79,142,247,0.3); }
+.badge-wk { background: rgba(52,211,153,0.12); color: var(--accent2); border: 1px solid rgba(52,211,153,0.25); }
+.toggle-btn { background: var(--surface2); border: 1px solid var(--border2); color: var(--text); font-family: var(--mono); font-size: 12px; padding: 7px 16px; border-radius: 8px; cursor: pointer; margin-bottom: 12px; letter-spacing: 0.04em; }
+.toggle-btn:hover { background: var(--surface); border-color: var(--accent); color: var(--accent); }
+#claimsSection { display: none; }
+.search-bar { width: 100%; background: var(--surface2); border: 1px solid var(--border2); border-radius: 8px; padding: 8px 14px; color: var(--text); font-family: var(--mono); font-size: 13px; margin-bottom: 12px; outline: none; }
+.search-bar:focus { border-color: var(--accent); }
+.footer { text-align: center; font-size: 12px; color: var(--muted); font-family: var(--mono); margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <div class="header">
+    <div class="header-left">
+      <p class="eyebrow">FNB ST Insurance &mdash; Motor Retail</p>
+      <h1>OCR Weekly Tracker &mdash; Week 2</h1>
+    </div>
+    <div class="header-right">
+      <div><span class="pill">Motor &bull; Retail &bull; Not Paid Off</span></div>
+      <div style="margin-top:8px;">Run date: 30 Mar 2026</div>
+      <div>Cycle start: 16 Mar 2026</div>
+    </div>
+  </div>
+
+  <div class="metrics">
+    <div class="card blue">
+      <div class="card-label">Baseline claims</div>
+      <div class="card-value">247</div>
+      <div class="card-sub">flagged on the 16th</div>
+    </div>
+    <div class="card green">
+      <div class="card-label">Open this week</div>
+      <div class="card-value" id="m-open">198</div>
+      <div class="card-sub">19.8% resolved</div>
+      <div class="pbar-bg"><div class="pbar-fill" id="pbar"></div></div>
+    </div>
+    <div class="card amber">
+      <div class="card-label">Cumul. closed</div>
+      <div class="card-value">49</div>
+      <div class="card-sub">18 closed this week</div>
+    </div>
+    <div class="card red">
+      <div class="card-label">Current OCR total</div>
+      <div class="card-value" style="font-size:20px;">R 3,412,880</div>
+      <div class="card-sub">reduced R 284,320 this week</div>
+    </div>
+  </div>
+
+  <div class="charts">
+    <div class="chart-card">
+      <div class="chart-title">OCR amount over the cycle</div>
+      <div style="position:relative; height:220px;"><canvas id="ocrChart"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Claims closed per week</div>
+      <div style="position:relative; height:220px;"><canvas id="closedChart"></canvas></div>
+    </div>
+  </div>
+
+  <p class="section-head">Weekly tracker detail</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>Week</th><th>Date</th><th>Open</th>
+        <th>Closed this week</th><th>Cumul. closed</th>
+        <th>% closed</th><th>Current OCR</th><th>OCR reduced</th>
+      </tr></thead>
+      <tbody id="trackerBody"></tbody>
+    </table>
+  </div>
+
+  <button class="toggle-btn" onclick="toggleClaims(this)">Show claims detail &#8595;</button>
+  <div id="claimsSection">
+    <input class="search-bar" type="text" placeholder="Search by claim, handler, month..." oninput="filterClaims(this.value)">
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Claim code</th><th>Reported month</th><th>Handler</th>
+          <th>OCR when flagged</th><th>Current OCR</th><th>Movement</th>
+        </tr></thead>
+        <tbody id="claimsBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="footer">Generated by OCR_05_Dashboard_Export.sas &bull; FNB ST Analytics &bull; Motor &bull; Retail</div>
+</div>
+
+<script>
+const TRACKER = [
+  {label:"Baseline", date:"16 Mar 2026", open:247,  ocr:3981500, cumul:0,  closed_wk:0,  ocr_red:0,      pct:0},
+  {label:"Week 1",   date:"23 Mar 2026", open:216,  ocr:3697200, cumul:31, closed_wk:31, ocr_red:284300, pct:0.1255},
+  {label:"Week 2",   date:"30 Mar 2026", open:198,  ocr:3412880, cumul:49, closed_wk:18, ocr_red:284320, pct:0.1984}
+];
+
+const CLAIMS = [
+  {claim:"CLM-2026-00441", month:"Feb 2026", handler:"T. Dlamini",    flagged_ocr:"R 48,200.00",  current_ocr:"R 44,100.00",  movement:"-4,100.00"},
+  {claim:"CLM-2026-00398", month:"Feb 2026", handler:"S. Mokoena",    flagged_ocr:"R 62,000.00",  current_ocr:"R 62,000.00",  movement:"0.00"},
+  {claim:"CLM-2026-00312", month:"Jan 2026", handler:"T. Dlamini",    flagged_ocr:"R 31,500.00",  current_ocr:"R 28,900.00",  movement:"-2,600.00"},
+  {claim:"CLM-2026-00287", month:"Jan 2026", handler:"N. Khumalo",    flagged_ocr:"R 95,400.00",  current_ocr:"R 91,000.00",  movement:"-4,400.00"},
+  {claim:"CLM-2025-00974", month:"Dec 2025", handler:"M. van der Berg",flagged_ocr:"R 120,000.00", current_ocr:"R 115,500.00", movement:"-4,500.00"},
+  {claim:"CLM-2025-00831", month:"Nov 2025", handler:"S. Mokoena",    flagged_ocr:"R 54,800.00",  current_ocr:"R 54,800.00",  movement:"0.00"},
+];
+
+document.getElementById("pbar").style.width = Math.round((1 - 198/247)*100) + "%";
+
+const fmtR = v => v === 0 ? "&mdash;" : "R " + Number(v).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmtN = v => Number(v).toLocaleString("en-ZA");
+const fmtP = v => (v*100).toFixed(1) + "%";
+
+const tbody = document.getElementById("trackerBody");
+TRACKER.forEach(r => {
+  const badgeClass = r.label === "Baseline" ? "badge-base" : "badge-wk";
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td><span class="badge ${badgeClass}">${r.label}</span></td>
+    <td style="color:var(--muted);font-family:var(--mono)">${r.date}</td>
+    <td>${fmtN(r.open)}</td>
+    <td>${r.closed_wk === 0 ? "&mdash;" : fmtN(r.closed_wk)}</td>
+    <td>${fmtN(r.cumul)}</td>
+    <td>${r.pct === 0 ? "&mdash;" : fmtP(r.pct)}</td>
+    <td style="font-family:var(--mono)">${fmtR(r.ocr)}</td>
+    <td style="font-family:var(--mono)">${r.ocr_red === 0 ? "&mdash;" : fmtR(r.ocr_red)}</td>
+  `;
+  tbody.appendChild(tr);
+});
+
+let claimsData = CLAIMS;
+function renderClaims(data) {
+  const cb = document.getElementById("claimsBody");
+  cb.innerHTML = "";
+  data.forEach(c => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td style="font-family:var(--mono)">${c.claim}</td>
+      <td>${c.month}</td>
+      <td>${c.handler}</td>
+      <td style="font-family:var(--mono)">${c.flagged_ocr}</td>
+      <td style="font-family:var(--mono)">${c.current_ocr}</td>
+      <td style="font-family:var(--mono)">${c.movement}</td>
+    `;
+    cb.appendChild(tr);
+  });
+}
+renderClaims(claimsData);
+
+function toggleClaims(btn) {
+  const s = document.getElementById("claimsSection");
+  const open = s.style.display === "block";
+  s.style.display = open ? "none" : "block";
+  btn.textContent = open ? "Show claims detail \u2193" : "Hide claims detail \u2191";
+}
+function filterClaims(q) {
+  const lq = q.toLowerCase();
+  renderClaims(claimsData.filter(c =>
+    c.claim.toLowerCase().includes(lq) ||
+    c.handler.toLowerCase().includes(lq) ||
+    c.month.toLowerCase().includes(lq)
+  ));
+}
+
+new Chart(document.getElementById("ocrChart"), {
+  type: "line",
+  data: { labels: TRACKER.map(r => r.label), datasets: [{
+    data: TRACKER.map(r => r.ocr),
+    borderColor: "#4f8ef7", backgroundColor: "rgba(79,142,247,0.08)",
+    fill: true, tension: 0.35, pointBackgroundColor: "#4f8ef7", pointRadius: 5, borderWidth: 2
+  }]},
+  options: { responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      y: { ticks: { color: "#6b7280", font: { size: 11 }, callback: v => "R " + (v/1000).toFixed(0) + "k" }, grid: { color: "rgba(255,255,255,0.05)" } },
+      x: { ticks: { color: "#6b7280", font: { size: 11 } }, grid: { display: false } }
+    }}
+});
+
+new Chart(document.getElementById("closedChart"), {
+  type: "bar",
+  data: { labels: TRACKER.map(r => r.label), datasets: [{
+    data: TRACKER.map(r => r.closed_wk),
+    backgroundColor: "#34d399", borderRadius: 4, borderSkipped: false
+  }]},
+  options: { responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      y: { ticks: { color: "#6b7280", font: { size: 11 } }, grid: { color: "rgba(255,255,255,0.05)" } },
+      x: { ticks: { color: "#6b7280", font: { size: 11 } }, grid: { display: false } }
+    }}
+});
+</script>
+</body>
+</html>
