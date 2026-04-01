@@ -1,13 +1,13 @@
-sas/* Step 5: Append only the missing weeks using data step instead of INSERT INTO */
-proc sql noprint;
-    create table Kendall_Missing as
-    select * from Kendall_Mismatch
-    where run_date not in (select distinct run_date
-                           from Servicing_Scores
-                           where upcase(full_name) like '%KENDALL%MOHAMM%');
+/* ============================================================================
+   KENDALL — VIEW ALL RECORDS ACROSS BOTH NAME SPELLINGS
+   ============================================================================ */
+
+proc sql;
+    select EmployeeNumber, full_name, run_date, scorecard
+    from STI_SC.Servicing_Scores
+    where upcase(full_name) like '%KENDALL%'
+      and run_date between &current_obr_period_start_date
+                       and &current_obr_period_end_date
+      and weekday(run_date) = 2
+    order by full_name, run_date;
 quit;
-
-proc append base=Servicing_Scores data=Kendall_Missing force;
-run;
-
-proc sql; drop table Kendall_Missing; quit;
