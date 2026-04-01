@@ -1,0 +1,71 @@
+/* ============================================================================
+   KENDALL MOHAMMED — NAME MISMATCH CORRECTION
+   Scores were captured under 'Kendall Mohamed' (one 'm') instead of
+   'Kendall Mohammed' (two 'm's). This block retrieves those orphaned
+   scorecard rows and re-stamps them with the correct employee number
+   before they enter the leave merge and earn calculation.
+   ============================================================================ */
+
+/* Step 1: Find the correct employee number for Kendall Mohammed */
+proc sql;
+    select EmployeeNumber, Name, Surname
+    from STI_PBI.STI_Servicing_Agents
+    where upcase(Name) like 'KENDALL%'
+      and upcase(Surname) like 'MOH%';
+quit;
+
+/* Step 2: Pull the mismatched rows directly from the scorecard source
+   using the misspelled name, within the current OBR period            */
+proc sql;
+    create table Kendall_Mismatch as
+    select *
+    from STI_SC.Servicing_Scores b
+    where upcase(full_name) like '%KENDALL%MOHAMED%'
+      and sql_export_day = (select max(sql_export_day)
+                            from STI_SC.Servicing_Scores c
+                            where b.run_date = c.run_date
+                              and b.EmployeeNumber = c.EmployeeNumber)
+      and run_date between &current_obr_period_start_date
+                       and &current_obr_period_end_date
+      and weekday(run_date) = 2;
+quit;
+
+%put === Kendall mismatch rows found ===;
+proc sql; select count(*) as n from Kendall_Mismatch; quit;
+
+/* Step 3: Overwrite the employee number and name with the correct values.
+   Adjust the literals below if Step 1 returns a different number/name.  */
+data Kendall_Mismatch;
+    set Kendall_Mismatch;
+    EmployeeNumber = 'FXXXXXXX';           /* <-- replace with correct F-number from Step 1 */
+    full_name      = 'Kendall Mohammed';
+run;
+
+/* Step 4: Check which run_dates Kendall already has in Servicing_Scores
+   (i.e. the weeks where the fix was already in place)                   */
+proc sql;
+    select distinct run_date
+    from Servicing_Scores
+    where upcase(full_name) like '%KENDALL%MOHAMM%'
+    order by run_date;
+quit;
+
+/* Step 5: Append only the missing weeks — exclude any run_dates already
+   present under the correct name to avoid re-introducing duplicates     */
+proc sql;
+    insert into Servicing_Scores
+    select * from Kendall_Mismatch
+    where run_date not in (select distinct run_date
+                           from Servicing_Scores
+                           where upcase(full_name) like '%KENDALL%MOHAMM%');
+quit;
+
+/* Step 6: Confirm she now has a full set of scorecard dates */
+proc sql;
+    select EmployeeNumber, full_name, run_date, scorecard
+    from Servicing_Scores
+    where upcase(full_name) like '%KENDALL%MOH%'
+    order by run_date;
+quit;
+
+proc sql; drop table Kendall_Mismatch; quit;
