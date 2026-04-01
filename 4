@@ -1,13 +1,13 @@
+sas/* Step 5: Append only the missing weeks using data step instead of INSERT INTO */
+proc sql noprint;
+    create table Kendall_Missing as
+    select * from Kendall_Mismatch
+    where run_date not in (select distinct run_date
+                           from Servicing_Scores
+                           where upcase(full_name) like '%KENDALL%MOHAMM%');
+quit;
 
-WARNING: This DELETE/INSERT statement recursively references the target table. A consequence of this is a possible data integrity 
-         problem.
-ERROR: You cannot reopen WORK.SERVICING_SCORES.DATA for update access with member-level control because WORK.SERVICING_SCORES.DATA 
-is in use by you in resource environment SQL (2).
-ERROR: PROC SQL could not undo this statement if an ERROR were to happen as it could not obtain exclusive access to the data set. 
-       This statement will not execute as the SQL option UNDO_POLICY=REQUIRED is in effect.
-NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
-NOTE: The SAS System stopped processing this step because of errors.
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.02 seconds
-      cpu time            0.02 seconds
-      
+proc append base=Servicing_Scores data=Kendall_Missing force;
+run;
+
+proc sql; drop table Kendall_Missing; quit;
