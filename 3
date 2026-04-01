@@ -1,0 +1,676 @@
+%include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
+
+
+/* ============================================================================
+   PART 1: TIME PERIOD SETUP
+   ============================================================================ */
+
+/* Load QA period reference table and derive readable month label */
+data Periods;
+    set sti_meta.qa_loc_periods;
+    character_month = put(QA_Period, monyy7.);
+run;
+
+/* Hardcode OBR cycle start — used to derive the sheet name */
+%let OBR_Month_start_date = '24FEB2026'd;
+
+/* Derive the sheet name (e.g. MAR2026) from the periods table */
+data _null_;
+    set Periods;
+    where QA_Period = &OBR_Month_start_date;
+    call symput('sheet', strip(character_month));
+run;
+
+%put -------> Sheet name: &sheet;
+
+/* -----------------------------------------------------------------------
+   Hardcode OBR cycle and scorecard date boundaries
+   OBR Period  : 24 Feb 2026 – 30 Mar 2026
+   Scorecards  : Mondays — 02, 09, 16, 23 Mar 2026
+   ----------------------------------------------------------------------- */
+%let OBR_Month_start_date          = '24FEB2026'd;
+%let OBR_Month_end_date            = '30MAR2026'd;
+%let current_obr_period_start_date = '02MAR2026'd;
+%let current_obr_period_end_date   = '30MAR2026'd;
+
+/* QA fallback window: Nov 2025 to Jan 2026 (3-month average) */
+%let QA_Fallback_start = '01NOV2025'd;
+%let QA_Fallback_end   = '31JAN2026'd;
+
+%put OBR Start      : &OBR_Month_start_date;
+%put OBR End        : &OBR_Month_end_date;
+%put SC Start       : &current_obr_period_start_date;
+%put SC End         : &current_obr_period_end_date;
+%put QA Fallback    : &QA_Fallback_start to &QA_Fallback_end;
+
+
+/* ============================================================================
+   PART 2: 3-MONTH HISTORICAL SCORECARD SCORES
+   ============================================================================ */
+
+PROC IMPORT
+    DATAFILE="\\lfe-rbgfs01\FNB_Insure\FSR STI Corporate Actuarial\Dashboards\Operational\OBR_Records\run\Input_Files\OBR PBI Input Sheet.xlsx"
+    OUT=OBR_History
+    DBMS=excelcs
+    REPLACE;
+    SHEET="Operations OBR data";
+    SERVER='lfe-rbgfs01';
+    PORT=9621;
+RUN;
+
+DATA Historical_Scores;
+    SET OBR_History;
+    WHERE Division = 'Servicing';
+    KEEP Fnumber UserName Team Score OpsYM DateVar;
+
+    Year    = INT(OpsYM / 100);
+    Month   = MOD(OpsYM, 100);
+    DateVar = INTNX('month', MDY(Month, 1, Year), 0, 'E');
+    FORMAT DateVar DATE9.;
+RUN;
+
+proc sql;
+    create table Leave_Score as
+    select a.*, b.EmployeeNumber as EmployeeNumber2
+    from Historical_Scores a
+    inner join STI_PBI.STI_Servicing_Agents b
+        on a.Fnumber = b.EmployeeNumber;
+quit;
+
+proc sql;
+    create table Leave_Score_2_tmp as
+    select  UserName,
+            EmployeeNumber2          as employeenumber,
+            round(mean(Score), 0.01) as three_month_score
+    from Leave_Score
+    where DateVar between intnx('month', &OBR_Month_start_date, -3, 'b')
+                      and intnx('month', &OBR_Month_start_date, -1, 'e')
+    group by UserName, EmployeeNumber2;
+quit;
+
+proc sql;
+    create table Leave_Score_2 as
+    select a.*
+    from Leave_Score_2_tmp a
+    where a.EmployeeNumber in (select EmployeeNumber
+                               from STI_PBI.STI_Servicing_Agents
+                               where Active = 1);
+quit;
+
+proc sql; drop table Leave_Score_2_tmp; quit;
+
+
+/* ============================================================================
+   PART 3: LEAVE RECORDS
+   ============================================================================ */
+
+PROC IMPORT
+    DATAFILE="\\lfe-rbgfs01\FNB_Insure\FSR STI Corporate Actuarial\Dashboards\Operational\OBR_Records\Leave_Template.xlsx"
+    OUT=Leave_Template
+    DBMS=excelcs
+    REPLACE;
+    SERVER='lfe-rbgfs01';
+    PORT=9621;
+    SHEET="&sheet";
+RUN;
+
+data Leave_Template;
+    set Leave_Template;
+    rename 'Scorecard_Affected_Date(Which Mo'n = Score_Affected_Date;
+run;
+
+data Leave_Template2;
+    set Leave_Template;
+    length Scorecard_Day_affected2 8.;
+    format Scorecard_Day_affected2 date9.;
+    if 'Leave Days'n >= 5 then Scorecard_Day_affected2 = Score_Affected_Date;
+    else Scorecard_Day_affected2 = .;
+run;
+
+
+/* ============================================================================
+   PART 4: WEEKLY SCORECARD SCORES
+   ============================================================================ */
+
+proc sql;
+    create table Servicing_Scores_tmp as
+    select *
+    from STI_SC.Servicing_Scores b
+    where sql_export_day = (select max(sql_export_day)
+                            from STI_SC.Servicing_Scores c
+                            where b.run_date = c.run_date
+                              and b.EmployeeNumber = c.EmployeeNumber)
+      and run_date between &current_obr_period_start_date and &current_obr_period_end_date
+      and weekday(run_date) = 2
+      and active = 1
+    order by EmployeeNumber;
+quit;
+
+proc sql;
+    create table Servicing_Scores_active as
+    select a.*
+    from Servicing_Scores_tmp a
+    where a.EmployeeNumber in (select EmployeeNumber
+                               from STI_PBI.STI_Servicing_Agents
+                               where Active = 1);
+quit;
+
+proc sql; drop table Servicing_Scores_tmp; quit;
+
+data Servicing_Scores_active;
+    set Servicing_Scores_active;
+    drop full_name;
+run;
+
+proc sql;
+    create table Servicing_Scores as
+    select catx(' ', b.Name, b.Surname) as full_name
+          ,a.*
+    from Servicing_Scores_active a
+    left join STI_PBI.STI_Servicing_Agents b
+        on a.EmployeeNumber = b.EmployeeNumber;
+quit;
+
+proc sql; drop table Servicing_Scores_active; quit;
+
+proc sql;
+    select distinct run_date
+    from Servicing_Scores;
+quit;
+
+
+/* ============================================================================
+   PART 5: MERGE SCORES + LEAVE ADJUSTMENT
+   ============================================================================ */
+
+proc sql;
+    create table Servicing_Scores_WLeave as
+    select  a.*,
+            b.three_month_score,
+            c.Scorecard_Day_affected2
+    from Servicing_Scores a
+    left join Leave_Score_2 b
+        on a.EmployeeNumber = b.employeenumber
+    left join Leave_Template2 c
+        on  a.EmployeeNumber = c.F_Number
+        and a.run_date       = c.Scorecard_Day_affected2;
+quit;
+
+data Servicing_Scores_WLeave;
+    set Servicing_Scores_WLeave;
+    if EmployeeNumber = 'F5485428' then line = 'Comp 1';
+run;
+
+
+/* ============================================================================
+   PART 6: SPLIT INTO LOC AND COMP OUTPUT DATASETS
+   ============================================================================ */
+
+data LOC_Servicing_Remm   COMP_Servicing_Remm;
+    set Servicing_Scores_WLeave (
+        keep   = Full_Name line EmployeeNumber run_date Active scorecard
+                 three_month_score Scorecard_Day_affected2
+        rename = (EmployeeNumber = Employee_Number)
+    );
+    if Scorecard_Day_affected2 ne . and scorecard < three_month_score then
+        scorecard = three_month_score;
+    if line in ('LOC 1', 'LOC 2') then output LOC_Servicing_Remm;
+    else output COMP_Servicing_Remm;
+run;
+
+
+/* ============================================================================
+   PART 7: QUICK VALIDATION CHECKS
+   ============================================================================ */
+
+%put === LOC Servicing Remm ===;
+proc sql; select count(*) as n_rows from LOC_Servicing_Remm; quit;
+
+%put === COMP Servicing Remm ===;
+proc sql; select count(*) as n_rows from COMP_Servicing_Remm; quit;
+
+proc sql;
+    select Employee_Number, Full_Name
+    from LOC_Servicing_Remm
+    where three_month_score is null
+    union
+    select Employee_Number, Full_Name
+    from COMP_Servicing_Remm
+    where three_month_score is null;
+quit;
+
+
+/* ============================================================================
+   PART 8: CALCULATING EARN BASED OFF METRICS AND SCORES
+   ============================================================================ */
+
+%macro importing(output, sheet);
+proc import
+    datafile="/data/fnbinsurance/Corporate_Actuarial/Short_Term/LOC/All_teams_metrics.xlsx"
+    dbms=xlsx replace
+    out=&output;
+    sheet=&sheet;
+quit;
+%mend;
+%importing(LOC_Earn_Metrics, LOC_Servicing_Earn);
+%importing(COMP_Earn_Metrics, COMP_Servicing_Earn);
+%importing(QA_factors, QA_Factor);
+
+%macro Remuneration(Office_Remuneration, Office_Monday_Score, Office_Earn_Metrics,
+                    Office_Scorecard_Total, LB_score, UP_Score);
+proc sql;
+    create table &Office_Remuneration as
+    select      a.*,
+                b.Earn as Earn_before_QA
+    from        &Office_Monday_Score a
+    left join   &Office_Earn_Metrics b
+        on  (a.run_date between b.start_date and b.end_date)
+        and (a.&Office_Scorecard_Total between b.&LB_score and b.&UP_Score)
+    order by a.Employee_Number;
+quit;
+%mend;
+%Remuneration(LOC_Servicing_Earn, LOC_Servicing_Remm, LOC_Earn_Metrics,
+              ScoreCard, LB_LOC_Servicing_Score, UP_LOC_Servicing_Score);
+%Remuneration(COMP_Servicing_Earn, COMP_Servicing_Remm, COMP_Earn_Metrics,
+              ScoreCard, LB_COMP_Servicing_Score, UP_COMP_Servicing_Score);
+
+%macro SORTING_REMUNERATION(TABLE1, TABLE2);
+proc sort data=&TABLE1 out=&TABLE2 noduprecs;
+    by _all_;
+run;
+%mend;
+%SORTING_REMUNERATION(LOC_Servicing_Earn, LOC_Servicing_Earn);
+%SORTING_REMUNERATION(COMP_Servicing_Earn, COMP_Servicing_Earn);
+
+%macro ALL_OFFICE_MONTHLY_EARN(Office_Name, From_Office_Remm);
+proc sql;
+    create table &Office_Name as
+    select      a.Full_Name,
+                a.line,
+                a.Employee_Number,
+                round(avg(ScoreCard), 0.01)  as Monthly_Score,
+                sum(a.Earn_before_QA)        as Monthly_Earn_before_QA,
+                a.active,
+                b.QA_Period
+    from        &From_Office_Remm a
+    inner join  Periods b
+        on (a.run_date between b.Start_Date and b.End_date)
+    group by    a.Full_Name, a.Employee_Number, a.line, a.active, b.QA_Period;
+quit;
+%mend;
+%ALL_OFFICE_MONTHLY_EARN(LOC_SER_Monthly_Earn_PreQA, LOC_Servicing_Earn);
+%ALL_OFFICE_MONTHLY_EARN(COMP_SER_Monthly_Earn_PreQA, COMP_Servicing_Earn);
+
+
+/* ============================================================================
+   PART 9: QA FALLBACK — CURRENT MONTH QA NOT YET AVAILABLE
+   Average QA_Score_Perc from Nov 2025 to Jan 2026 used as proxy for Mar 2026.
+   Incentive_Factor_To_Be_Paid is derived from the averaged score via
+   QA_factors using only the score band (LB_QA / UP_QA) — no date filter
+   applied since we are deliberately using a historical average outside the
+   current period. Agents with no QA history in the fallback window default
+   to QA_Score_Perc = 100 and factor = 1.
+
+   KEY FIX: QA_FINAL_Perioded now stamps every agent with OBR_Month_start_date
+   as QA_Period directly — no sub-select against Periods with SC date bounds
+   that previously returned zero rows. The %Final_Earn join has also been
+   simplified to match on Employee_Number only, removing the QA_Period
+   comparison that was silently failing and nulling all QA columns.
+   ============================================================================ */
+
+/* Step 1: Load raw QA source */
+data Service_QA_Raw;
+    set sti_pbi.Service_QA_Final;
+    Evaluations2 = Evaluations;
+    if score = . then evaluations = 0;
+run;
+
+/* Step 2: Aggregate to per-agent average over Nov 2025 – Jan 2026 */
+proc sql;
+    create table QA_Fallback_Avg as
+    select      Employee_number,
+                round(sum(Score_M) / sum(Evaluations), 0.01) as QA_Score_Perc,
+                sum(Evaluations2)                             as QA_Evaluations,
+                &QA_Fallback_start  as Fallback_Start   format date9.,
+                &QA_Fallback_end    as Fallback_End     format date9.
+    from        Service_QA_Raw
+    where       date_stamp between &QA_Fallback_start and &QA_Fallback_end
+    group by    Employee_number;
+quit;
+
+%put === Agents with fallback QA score ===;
+proc sql;
+    select count(*) as agents_with_fallback_QA from QA_Fallback_Avg;
+quit;
+
+/* Diagnostic: print the QA_factors table so we can confirm score bands exist */
+%put === QA_factors contents ===;
+proc sql;
+    select * from QA_factors order by LB_QA;
+quit;
+
+/* Step 3: Look up incentive factor using ONLY the score band — no date filter */
+proc sql;
+    create table QA_FINAL as
+    select      a.Employee_number,
+                a.QA_Score_Perc,
+                a.QA_Evaluations,
+                a.Fallback_Start                as start_date   format date9.,
+                a.Fallback_End                  as end_date     format date9.,
+                b.Incentive_Factor_To_Be_Paid,
+                'NOV25-JAN26 Avg'               as QA_Source
+    from        QA_Fallback_Avg a
+    left join   QA_factors b
+        on  (a.QA_Score_Perc between b.LB_QA and b.UP_QA);
+quit;
+
+/* Diagnostic: confirm factors are populating correctly */
+%put === QA_FINAL after factor join — sample ===;
+proc sql;
+    select Employee_number, QA_Score_Perc, Incentive_Factor_To_Be_Paid, QA_Source
+    from QA_FINAL
+    order by Employee_number;
+quit;
+
+/* Check how many still have a null factor after the fix */
+proc sql;
+    select count(*) as still_null_factor
+    from QA_FINAL
+    where Incentive_Factor_To_Be_Paid is null;
+quit;
+
+/* Step 4: Default any agent missing from the fallback window to 100% / factor 1 */
+proc sql;
+    create table QA_FINAL_Missing as
+    select      strip(a.Employee_Number) as Employee_number,
+                100                      as QA_Score_Perc,
+                0                        as QA_Evaluations,
+                &QA_Fallback_start       as start_date   format date9.,
+                &QA_Fallback_end         as end_date     format date9.,
+                1                        as Incentive_Factor_To_Be_Paid,
+                'Default 100%'           as QA_Source
+    from        COMP_SER_Monthly_Earn_PreQA a
+    where strip(a.Employee_Number) not in
+              (select strip(Employee_number) from QA_FINAL)
+    union
+    select      strip(a.Employee_Number),
+                100, 0,
+                &QA_Fallback_start,
+                &QA_Fallback_end,
+                1,
+                'Default 100%'
+    from        LOC_SER_Monthly_Earn_PreQA a
+    where strip(a.Employee_Number) not in
+              (select strip(Employee_number) from QA_FINAL);
+quit;
+
+/* Step 5: Combine matched and defaulted records */
+data QA_FINAL;
+    set QA_FINAL QA_FINAL_Missing;
+run;
+
+proc sql; drop table QA_FINAL_Missing; quit;
+
+/* -----------------------------------------------------------------------
+   FIX (Step 6): Stamp QA_Period directly from OBR_Month_start_date.
+   Previously this used a sub-select filtering Periods where QA_Period
+   was BETWEEN current_obr_period_start_date and current_obr_period_end_date.
+   Because QA_Period in the Periods table is stored as month-start (24FEB2026)
+   and current_obr_period_start_date = 02MAR2026, the filter returned zero
+   rows — making QA_FINAL_Perioded empty and silently nulling all QA columns
+   in the final table.  We now stamp every row with the known OBR period date
+   directly, which is guaranteed to exist in the Periods table.
+   ----------------------------------------------------------------------- */
+proc sql;
+    create table QA_FINAL_Perioded as
+    select  a.*,
+            &OBR_Month_start_date as QA_Period format date9.
+    from    QA_FINAL a;
+quit;
+
+%put === QA_FINAL_Perioded — row count (should match agent count) ===;
+proc sql; select count(*) as total_rows from QA_FINAL_Perioded; quit;
+
+/* Confirm period and scores look correct */
+proc sql;
+    select Employee_number,
+           QA_Period                    format date9.,
+           QA_Score_Perc,
+           Incentive_Factor_To_Be_Paid,
+           QA_Source
+    from QA_FINAL_Perioded
+    order by Employee_number;
+quit;
+
+
+/* ---------------------------------------------------------------------------
+   Calculating Earn: After QA — using fallback QA scores
+
+   FIX: Join is now on Employee_Number only.
+   The previous double join (Employee_Number AND QA_Period) was failing
+   because QA_Period in the monthly earn tables is set from the Periods
+   table via run_date, which resolves to 24FEB2026, but minor format
+   differences or value mismatches caused the join to produce no matches
+   even after the input(put()) casting. Removing the QA_Period condition
+   is safe here because every agent has exactly one fallback QA row —
+   there is no multi-period ambiguity to protect against.
+   --------------------------------------------------------------------------- */
+%macro Final_Earn(Earn_Table, from_earn, QA);
+proc sql;
+    create table &Earn_Table as
+    select      a.*,
+                b.start_date,
+                b.end_date,
+                b.QA_Evaluations,
+                b.QA_Score_Perc,
+                b.Incentive_Factor_To_Be_Paid,
+                b.QA_Source,
+                a.Monthly_Earn_before_QA * b.Incentive_Factor_To_Be_Paid
+                    as Monthly_Earn_after_QA
+    from        &from_earn a
+    left join   &QA b
+        on  strip(a.Employee_Number) = strip(b.Employee_number)
+    order by a.QA_Period desc;
+quit;
+%mend;
+%Final_Earn(COMP_Final_Monthly_Earn, COMP_SER_Monthly_Earn_PreQA, QA_FINAL_Perioded);
+%Final_Earn(LOC_Final_Monthly_Earn,  LOC_SER_Monthly_Earn_PreQA,  QA_FINAL_Perioded);
+
+data Sum_Earns_With_QA;
+    set COMP_Final_Monthly_Earn LOC_Final_Monthly_Earn;
+run;
+
+/* Sanity check — no agent should have null factor after fallback logic */
+%put === Agents with null Incentive_Factor after fallback ===;
+proc sql;
+    select Employee_Number, Full_Name, QA_Score_Perc, Incentive_Factor_To_Be_Paid
+    from Sum_Earns_With_QA
+    where Incentive_Factor_To_Be_Paid is null;
+quit;
+
+
+/* ============================================================================
+   PART 10: INCORPORATING BONUSES
+   ============================================================================ */
+
+proc sql;
+    create table Servicing_Score_Months_Pre as
+    select * from Servicing_Scores_WLeave;
+quit;
+
+proc sql;
+    create table Servicing_Score_Months as
+    select      a.Full_name,
+                a.line,
+                a.EmployeeNumber,
+                a.run_date,
+                a.scorecard,
+                b.QA_Period,
+                b.Weeks_in_Month,
+                b.start_date
+    from        Servicing_Score_Months_Pre a
+    left join   Periods b
+        on (a.run_date between b.Start_Date and b.End_date)
+    order by    a.run_date, a.employeeNumber;
+quit;
+
+proc sort data=Servicing_Score_Months;
+    by _all_;
+run;
+
+proc sql;
+    select min(run_date) format date9.
+    into :min_date
+    from Servicing_Score_Months;
+quit;
+
+data Servicing_Performance_Incentive (drop=Weeks_in_Month start_date);
+    set Servicing_Score_Months;
+    QA_Period = "&min_date"d;
+    if Scorecard >= 4.3 then count = 1;
+    else count = 0;
+    Monday_of_the_period = abs(intck('day', "&min_date"d, run_date) / 7) + 1;
+run;
+
+proc sort data=Servicing_Performance_Incentive noduprecs;
+    by EmployeeNumber QA_Period;
+run;
+
+data Servicing_Performance_count;
+    set Servicing_Performance_Incentive;
+    by EmployeeNumber QA_Period;
+    retain sum_of_count;
+    if first.QA_Period then sum_of_count = count;
+    else sum_of_count + count;
+run;
+
+data Servicing_Incentive_Earn;
+    set Servicing_Performance_count;
+    if (Monday_of_the_period in (1,2,3) and Scorecard >= 4.3) or
+       (Monday_of_the_period in (2,3,4) and Scorecard >= 4.3) or
+       (Monday_of_the_period in (3,4,5) and Scorecard >= 4.3)
+    then Perfomance_Incentive = 1000;
+    else Perfomance_Incentive = 0;
+run;
+
+data Servicing_Incentive_Earn;
+    set Servicing_Incentive_Earn;
+    where sum_of_count in (3,4,5)
+      and Scorecard >= 4.3
+      and QA_Period >= "&min_date"d;
+run;
+
+proc sql;
+    create table Performance_bonus as
+    select Full_name, EmployeeNumber, line, QA_Period, Perfomance_Incentive
+    from Servicing_Incentive_Earn;
+quit;
+
+proc sort data=Performance_bonus noduprecs;
+    by _all_;
+run;
+
+
+/* ---------------------------------------------------------------------------
+   Sales Bonus
+   --------------------------------------------------------------------------- */
+PROC IMPORT
+    DATAFILE="\\lfe-rbgfs01\FNB_Insure\FSR STI Corporate Actuarial\Dashboards\Operational\OBR_Records\Servicing_Sales.xlsx"
+    OUT=Sales_Incentive
+    DBMS=excelcs
+    REPLACE;
+    SERVER='lfe-rbgfs01';
+    PORT=9621;
+    SHEET="&sheet";
+RUN;
+
+proc sql;
+    create table sales_incentives_serv as
+    select a.*, b.EmployeeNumber
+    from Sales_Incentive a
+    left join sti_pbi.service_employee b
+        on upcase(scan(a.name, 1)) = upcase(b.Name);
+quit;
+
+
+/* ============================================================================
+   PART 11: FINAL EARN AND FINAL ADJUSTMENTS
+   ============================================================================ */
+
+data SERVICING_PREFINAL;
+    set COMP_Final_Monthly_Earn LOC_Final_Monthly_Earn;
+    if Monthly_Earn_after_QA = . then Monthly_Earn_after_QA = Monthly_Earn_before_QA;
+run;
+
+proc sql;
+    create table SERVICING_MONTHLY_INCENTIVE as
+    select      a.*,
+                b.Perfomance_Incentive,
+                c.Amount                as Sales_Incentive,
+                sum(a.Monthly_Earn_after_QA,
+                    b.Perfomance_Incentive,
+                    c.Amount)           as Total_incentive
+    from        SERVICING_PREFINAL a
+    left join   Performance_bonus b
+        on  (a.Employee_Number = b.EmployeeNumber
+         and a.line            = b.line)
+    left join   sales_incentives_serv c
+        on  a.Employee_Number = c.EmployeeNumber;
+quit;
+
+proc sort data=SERVICING_MONTHLY_INCENTIVE noduprecs;
+    by Full_Name QA_Period;
+run;
+
+/* Manual adjustments: agents on Secure Chat */
+data SERVICING_MONTHLY_INCENTIVE;
+    set SERVICING_MONTHLY_INCENTIVE;
+
+    if Employee_Number = 'F5324823' then Monthly_Earn_after_QA = 3000; /* Nqobile Magani     */
+    if Employee_Number = 'F5330246' then Monthly_Earn_after_QA = 3000; /* Lesego Motala       */
+    if Employee_Number = 'F5530563' then Monthly_Earn_after_QA = 3000; /* Chase Moses         */
+    if Employee_Number = 'F4903773' then Monthly_Earn_after_QA = 3000; /* Tarryn Fredricks    */
+    if Employee_Number = 'F8872893' then Monthly_Earn_after_QA = 3000; /* Sevushen Thaver     */
+    if Employee_Number = 'F3446921' then Monthly_Earn_after_QA = 3000; /* Stacey Thomas       */
+    if Employee_Number = 'F5663393' then Monthly_Earn_after_QA = 3000; /* Thenjiwe Mnikathi   */
+
+    if Perfomance_Incentive = . then Perfomance_Incentive = 0;
+    if QA_Score_Perc        = . then QA_Score_Perc        = 100;
+    if Sales_Incentive      = . then Sales_Incentive      = 0;
+
+    Total_incentive = Monthly_Earn_after_QA + Perfomance_Incentive + Sales_Incentive;
+run;
+
+data LOC_Monthly_Earn   COMP_Monthly_Earn;
+    set SERVICING_MONTHLY_INCENTIVE;
+    if line in ('LOC 2', 'LOC 1') then output LOC_Monthly_Earn;
+    else output COMP_Monthly_Earn;
+run;
+
+
+/* ============================================================================
+   PART 12: EXPORT TO EXCEL
+   NOTE: Update file name to current run date before exporting
+   ============================================================================ */
+ods excel file='/data/fnbinsurance/Corporate_Actuarial/Short_Term/Servicing/Serv_Output_MAR2026_run1.csv'
+    options(sheet_name='COMP Final_Earns');
+    proc print data=COMP_Monthly_Earn noobs; run;
+ods excel options(sheet_name='LOC FinalEarns');
+    proc print data=LOC_Monthly_Earn noobs; run;
+ods excel options(sheet_name='COMP_WeeklyEarns_before_QA');
+    proc print data=COMP_Servicing_Earn noobs; run;
+ods excel options(sheet_name='LOC_WeeklyEarns_before_QA');
+    proc print data=LOC_Servicing_Earn noobs; run;
+ods excel options(sheet_name='Performance_Incentive');
+    proc print data=Performance_bonus noobs; run;
+ods excel options(sheet_name='Sales_Incentive');
+    proc print data=sales_incentives_serv noobs; run;
+ods excel options(sheet_name='QA_Fallback_Used');
+    proc print data=QA_FINAL_Perioded noobs; run;
+ods excel close;
+
+/* Active agent reference */
+data Secure_Chat_Agents;
+    set STI_PBI.STI_Servicing_Agents;
+    where Active = 1;
+run;
