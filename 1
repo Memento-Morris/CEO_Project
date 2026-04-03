@@ -119,7 +119,7 @@ quit;
 
 
 /* ============================================================================
-   PART 4: MERGE SCORES + LEAVE ADJUSTMENT
+   PART 4: MERGE SCORES + LEAVE FLAG
    ============================================================================ */
 
 proc sql;
@@ -228,6 +228,141 @@ proc sql;
     group by Employee_Number, run_date
     having count(*) > 1;
 quit;
+
+
+/* ============================================================================
+   PART 7B: LEAVE REPLACEMENT — SUBSTITUTE TEAM AVERAGE FOR LEAVE-AFFECTED WEEKS
+   Logic:
+     - For each line + run_date, compute average Earn_before_QA using only
+       agents who were NOT on leave that Monday AND are not secure chat agents
+       (secure chat agents earn a fixed R3000 and must not skew the average)
+     - For any agent flagged as on leave (Scorecard_Day_affected2 is not null),
+       replace their Earn_before_QA with that team/line average
+     - All other agents keep their original earn unchanged
+   ============================================================================ */
+
+/* Step 1: List of secure chat agents who earn fixed R3000 — exclude from average */
+data Secure_Chat_List;
+    length Employee_Number $10;
+    input Employee_Number $;
+    datalines;
+F5324823
+F5330246
+F5530563
+F4903773
+F8872893
+F3446921
+F5663393
+;
+run;
+
+/* Step 2: Calculate clean team average per line per run_date
+           Excludes: agents on leave that Monday + secure chat agents          */
+proc sql;
+    create table Team_Avg_By_RunDate as
+
+    /* LOC averages */
+    select      a.line,
+                a.run_date,
+                round(avg(a.Earn_before_QA), 0.01) as Team_Avg_Earn
+    from        LOC_Servicing_Earn a
+    where       a.Scorecard_Day_affected2 is null
+      and       strip(a.Employee_Number) not in
+                    (select strip(Employee_Number) from Secure_Chat_List)
+    group by    a.line, a.run_date
+
+    union all
+
+    /* COMP averages */
+    select      a.line,
+                a.run_date,
+                round(avg(a.Earn_before_QA), 0.01) as Team_Avg_Earn
+    from        COMP_Servicing_Earn a
+    where       a.Scorecard_Day_affected2 is null
+      and       strip(a.Employee_Number) not in
+                    (select strip(Employee_Number) from Secure_Chat_List)
+    group by    a.line, a.run_date;
+quit;
+
+/* Validation: check that averages look reasonable */
+%put === Team averages by line and run_date (leave replacement values) ===;
+proc sql;
+    select line, run_date format date9., Team_Avg_Earn, count(*) as n_lines
+    from Team_Avg_By_RunDate
+    group by line, run_date, Team_Avg_Earn
+    order by line, run_date;
+quit;
+
+/* Step 3: Apply leave replacement to LOC
+           Leave-affected rows get team average; all others unchanged          */
+proc sql;
+    create table LOC_Servicing_Earn as
+    select  a.Full_Name,
+            a.line,
+            a.Employee_Number,
+            a.run_date,
+            a.Active,
+            a.ScoreCard,
+            a.Scorecard_Day_affected2,
+            case
+                when a.Scorecard_Day_affected2 is not null
+                then b.Team_Avg_Earn
+                else a.Earn_before_QA
+            end as Earn_before_QA
+    from    LOC_Servicing_Earn a
+    left join Team_Avg_By_RunDate b
+        on  a.line     = b.line
+        and a.run_date = b.run_date;
+quit;
+
+/* Step 4: Apply leave replacement to COMP                                     */
+proc sql;
+    create table COMP_Servicing_Earn as
+    select  a.Full_Name,
+            a.line,
+            a.Employee_Number,
+            a.run_date,
+            a.Active,
+            a.ScoreCard,
+            a.Scorecard_Day_affected2,
+            case
+                when a.Scorecard_Day_affected2 is not null
+                then b.Team_Avg_Earn
+                else a.Earn_before_QA
+            end as Earn_before_QA
+    from    COMP_Servicing_Earn a
+    left join Team_Avg_By_RunDate b
+        on  a.line     = b.line
+        and a.run_date = b.run_date;
+quit;
+
+/* Validation: confirm leave agents received team average, not their own earn  */
+%put === Leave agents after replacement — spot check ===;
+proc sql;
+    select Employee_Number, Full_Name, line, run_date format date9.,
+           Scorecard_Day_affected2 format date9.,
+           ScoreCard, Earn_before_QA
+    from LOC_Servicing_Earn
+    where Scorecard_Day_affected2 is not null
+    union all
+    select Employee_Number, Full_Name, line, run_date format date9.,
+           Scorecard_Day_affected2 format date9.,
+           ScoreCard, Earn_before_QA
+    from COMP_Servicing_Earn
+    where Scorecard_Day_affected2 is not null
+    order by Employee_Number, run_date;
+quit;
+
+/* Cleanup temp tables */
+proc sql;
+    drop table Team_Avg_By_RunDate;
+    drop table Secure_Chat_List;
+quit;
+
+
+/* ============================================================================
+   PART 7C: MONTHLY EARN AGGREGATION (now uses leave-adjusted weekly earns)
+   ============================================================================ */
 
 %macro ALL_OFFICE_MONTHLY_EARN(Office_Name, From_Office_Remm);
 proc sql;
