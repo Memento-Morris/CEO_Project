@@ -62,7 +62,7 @@ data Leave_Template2;
     format Scorecard_Day_affected2 date9.;
     if 'Leave Days'n >= 5 then Scorecard_Day_affected2 = Score_Affected_Date;
     else Scorecard_Day_affected2 = .;
-    where calculated Scorecard_Day_affected2 ne .;
+    if Scorecard_Day_affected2 = .;   /* FIX: replaced invalid 'where calculated' */
 run;
 
 proc sort data=Leave_Template2 nodupkey;
@@ -240,31 +240,9 @@ quit;
 
 /* ============================================================================
    PART 7B: LEAVE REPLACEMENT — SUBSTITUTE TEAM AVERAGE FOR LEAVE-AFFECTED WEEKS
-   ============================================================================
-   WHY A NEW APPROACH:
-   The simple CASE-statement fix failed because:
-
-   1. Agents on extended leave often have NO ROW at all in Servicing_Scores for
-      the affected Mondays — they were not scored because they were not working.
-      There is nothing to overwrite, so the team average was never applied.
-
-   2. Even when a row exists (scorecard = 0, earn = 0), the Scorecard_Day_affected2
-      column was not reliably surviving through the %Remuneration macro chain,
-      meaning the CASE condition never evaluated to true.
-
-   THIS FIX:
-   - Drives the replacement directly off Leave_Template2 (the authoritative list
-     of who was on leave and on which specific Monday).
-   - Calculates the clean team average per line per run_date excluding:
-       (a) agents already flagged as on leave that Monday
-       (b) the 7 secure chat agents who earn a fixed R3000 (would distort avg)
-   - For each leave agent + affected Monday:
-       UPDATE: if a row already exists, overwrite Earn_before_QA with team avg
-       INSERT: if no row exists, create one so monthly aggregation picks it up
    ============================================================================ */
 
-/* Step 1: Secure chat agents earn fixed R3000 — must be excluded from the
-           team average so they do not distort what leave agents receive        */
+/* Step 1: Secure chat agents earn fixed R3000 — excluded from team average   */
 data Secure_Chat_List;
     length Employee_Number $10;
     input Employee_Number $;
@@ -279,8 +257,7 @@ F5663393
 ;
 run;
 
-/* Step 2: Calculate clean team average Earn_before_QA per line per run_date.
-           Only uses agents who were present that Monday AND are not SC agents. */
+/* Step 2: Clean team average per line per run_date                            */
 proc sql;
     create table Team_Avg_By_RunDate as
 
@@ -315,11 +292,7 @@ proc sql;
 quit;
 
 
-/* Step 3: Build a leave replacement lookup table.
-           For each leave agent + affected Monday, resolve:
-             - which line they are on (from their earn table entry)
-             - what team average applies for that line + run_date
-           Scope is limited to Mondays within the OBR scoring window.          */
+/* Step 3: Build leave replacement lookup table                                */
 proc sql;
     create table Leave_Replacement_LOC as
     select distinct
@@ -329,11 +302,9 @@ proc sql;
                 t.Team_Avg_Earn               as Earn_Replacement,
                 t.n_agents_in_avg
     from        Leave_Template2 l
-    /* Get the agent's line from their earn table */
     inner join  (select distinct Employee_Number, line
                  from LOC_Servicing_Earn)     e
         on  strip(l.F_Number) = strip(e.Employee_Number)
-    /* Get the team average for that line + Monday */
     inner join  Team_Avg_By_RunDate           t
         on  e.line                       = t.line
         and l.Scorecard_Day_affected2    = t.run_date
@@ -411,7 +382,6 @@ proc sql;
     left join   (select distinct Employee_Number, Full_Name
                  from LOC_Servicing_Earn)                  e
         on  strip(r.Employee_Number) = strip(e.Employee_Number)
-    /* Only insert if this agent has no existing row for this run_date         */
     where not exists (
         select 1
         from LOC_Servicing_Earn x
