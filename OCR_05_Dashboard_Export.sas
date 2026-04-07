@@ -1,50 +1,27 @@
 /*==============================================================
-  FILE: OCR_05_Dashboard_Export.sas
+  FILE: OCR_05_Dashboard_Export_V2.sas
   PURPOSE: Queries OCR_Weekly_Tracker + MotorClaims_Final for
-           the current month and exports a fully self-contained
+           ALL available history and exports a fully self-contained
            HTML dashboard file that can be opened in any browser
            or shared via email / Teams.
   SCHEDULE: Run after OCR_03_Weekly.sas each Monday, OR on demand.
   OUTPUT:   /data/fnbinsurance/Short_Term/Monitoring/
               OCR_Dashboard_YYYYMMDD.html
 
-  FIXES APPLIED:
-  1. RunDate column error: PROC SQL via libref uses SAS SQL
-     functions (year()/month()) which resolve correctly against
-     the ODBC libref. The original query was fine structurally,
-     but the tracker work dataset was never built when the
-     upstream PROC SQL failed. Fixed by pulling tracker data
-     via a DATA step from the libref using a SAS date range
-     instead, making the WHERE clause unambiguous.
-  2. SYMCAT unknown: call symcat() does not exist in SAS Base.
-     Replaced with a DATA step that writes the JSON files and
-     reads them back using call symput() with cats() to build
-     the macro variable correctly line by line.
-  3. HTML entity conflicts: &mdash; &bull; etc. inside double-
-     quoted SAS strings are resolved as macro variable references
-     and cause "apparent symbolic reference not resolved" warnings.
-     Fixed by replacing all HTML entities with their Unicode
-     escape equivalents (e.g. &#8212; for mdash, &#8226; for bull)
-     or rewriting with single-quoted strings where no macro
-     variable injection is needed.
-  4. FIX (NEW): BASELINE_CLAIMS not resolved warning + crash on
-     PUT "&tracker_json.;" — two bugs fixed together:
-       a) Pre-initialise all scalar macro variables with %let
-          before PROC SQL so downstream references never fail
-          even when the Baseline row is absent from the data.
-       b) Replaced  put "&tracker_json.;"  with a DATA step
-          variable populated via symget(). Embedding the macro
-          variable directly in a PUT argument causes SAS to parse
-          the JSON content (braces, colons, decimal numbers) as
-          column/format specifications, producing ERROR 22, 200,
-          and 156. Using symget() retrieves the value at run-time
-          into a character variable which PUT writes as a plain
-          string with no parser confusion.
-  5. FIX (NEW): JSON numeric formatting — SAS default formats
-     for numeric PUT produce extra leading/trailing spaces and
-     may include E-notation. Added explicit formats to all
-     numeric fields in the tracker JSON DATA step so the output
-     is clean, compact JSON that the browser can parse reliably.
+  CHANGES FROM V1 (FIXED):
+  V2-FIX-1: Removed month-scoped date filter entirely. Previously
+     the WHERE clause restricted RunDate to the current calendar
+     month, meaning only the first (or only) week of each month
+     appeared. All tracker rows are now returned and sorted by
+     RunDate so the full monitoring cycle is visible.
+  V2-FIX-2: Latest-week scalar sub-query now uses max(RunDate)
+     against the numeric column instead of max(RunDate_fmt)
+     against the character-formatted column. Alphabetical max on
+     a DATE9. string (e.g. "07APR2025") does not reliably match
+     chronological max; comparing numeric SAS dates does.
+  V2-UX:    Full dashboard HTML/CSS/JS redesign — refined dark
+     theme, improved KPI cards with trend indicators, better
+     chart styling, sticky table headers, and a cleaner layout.
 ==============================================================*/
 
 /*--------------------------------------------------------------
@@ -80,20 +57,16 @@ Schema=&schema;
 %let outfile = /data/fnbinsurance/Short_Term/Monitoring/OCR_Dashboard_&rd..html;
 
 /*--------------------------------------------------------------
-  3. Pull tracker rows for this month
-     FIX 1: Use explicit SAS date integer range in the WHERE
-     clause instead of year()/month() functions, which avoids
-     any ambiguity when the ODBC driver translates the query.
-     Compute the first and last day of the current month as
-     SAS date integers and pass them as literals.
+  3. Pull ALL tracker rows — no date filter
+  V2-FIX-1: Removed WHERE RunDate between &month_start. and
+  &month_end. entirely. The dashboard now shows the complete
+  monitoring cycle from the Baseline row onwards.
 --------------------------------------------------------------*/
-%let month_start = %sysfunc(intnx(month, %sysfunc(today()), 0, b));
-%let month_end   = %sysfunc(intnx(month, %sysfunc(today()), 0, e));
-
 proc sql;
   create table work.tracker as
   select
       WeekLabel,
+      RunDate,
       put(RunDate, date9.)          as RunDate_fmt,
       Baseline_Claims,
       Open_Claims,
@@ -103,22 +76,15 @@ proc sql;
       OCR_Reduced_This_Week,
       Pct_Claims_Closed
   from STI_WER.OCR_Weekly_Tracker
-  where RunDate between &month_start. and &month_end.
   order by RunDate;
 quit;
 
 /*--------------------------------------------------------------
-  4. Pull baseline scalars
-  FIX 4a: Pre-initialise every macro variable that PROC SQL
-  populates via INTO. If the query returns zero rows (e.g. no
-  Baseline row exists yet, or the latest-week sub-select finds
-  nothing) SAS leaves the macro variable undefined, producing
-  "apparent symbolic reference not resolved" warnings for every
-  downstream reference and causing PUT statements in the HTML
-  DATA step to crash. Providing safe defaults here means the
-  dashboard still renders with placeholder values instead of
-  aborting.  Also added NOPRINT to the first SELECT so it no
-  longer echoes row counts to the log.
+  4. Pull baseline and latest-week scalars
+  V2-FIX-2: Latest-week sub-query uses max(RunDate) on the
+  numeric SAS date column, which sorts correctly by date value.
+  The original max(RunDate_fmt) sorted the DATE9. character
+  string alphabetically which could return the wrong row.
 --------------------------------------------------------------*/
 
 /* Safe defaults — overwritten below if data exists */
@@ -141,7 +107,7 @@ proc sql noprint;
   from work.tracker
   where WeekLabel = 'Baseline';
 
-  /* Latest week scalars */
+  /* Latest week scalars — V2-FIX-2: compare numeric RunDate */
   select Open_Claims,
          Current_OCR_Amt,
          Cumul_Closed,
@@ -157,7 +123,7 @@ proc sql noprint;
        :latest_pct       trimmed,
        :latest_week      trimmed
   from work.tracker
-  where RunDate_fmt = (select max(RunDate_fmt) from work.tracker);
+  where RunDate = (select max(RunDate) from work.tracker);
 quit;
 
 /*--------------------------------------------------------------
@@ -182,23 +148,7 @@ proc sql;
 quit;
 
 /*--------------------------------------------------------------
-  6. Serialize tracker rows to JSON via DATA step
-  FIX 2: Replaced call symcat() (which does not exist in SAS)
-  with a two-step approach:
-    a) Write JSON to a temp file.
-    b) Read it back using call symput() with cats() to
-       concatenate each line into the macro variable.
-
-  FIX 5: Added explicit numeric formats to every numeric field.
-  Without them, SAS uses the variable's default format which can
-  produce leading spaces ("  197"), E-notation for large numbers,
-  or extra decimal places — all of which break JSON.parse() in
-  the browser.  Formats used:
-    Open_Claims / Cumul_Closed / Closed_This_Week  -> best8.
-    Current_OCR_Amt / OCR_Reduced_This_Week        -> 20.2
-    Pct_Claims_Closed                              -> 8.6
-  The +(-1) pointer-control trims trailing blanks after each
-  formatted value so there is no whitespace inside the JSON.
+  6. Serialize tracker rows to JSON
 --------------------------------------------------------------*/
 data _null_;
   file '/tmp/tracker_json.txt' lrecl=32767;
@@ -237,11 +187,7 @@ data _null_;
 run;
 
 /*--------------------------------------------------------------
-  8. Read tracker JSON fragment into a macro variable
-  FIX 2 (continued): call symput() + cats() appends each line.
-  Macro variables are capped at 64 KB; safe for the tracker
-  (max ~10 rows).  Claims JSON is streamed directly to the HTML
-  file in Step 10 to avoid the 64 KB ceiling.
+  8. Read tracker JSON into macro variable
 --------------------------------------------------------------*/
 %let tracker_json = ;
 
@@ -251,14 +197,9 @@ data _null_;
   call symput('tracker_json', cats(symget('tracker_json'), trim(_infile_)));
 run;
 
-/*--------------------------------------------------------------
-  9. Write the HTML dashboard — static head + CSS
-  FIX 3: All HTML entities (&mdash; &bull; etc.) replaced with
-  numeric equivalents (&#8212; &#8226;) so SAS does not attempt
-  to resolve them as macro variable references.  Lines needing
-  macro variable injection use double quotes only where
-  necessary; purely static lines use single quotes.
---------------------------------------------------------------*/
+/*==============================================================
+  9. Write HTML dashboard — redesigned V2 UI
+==============================================================*/
 data _null_;
   file "&outfile." lrecl=32767;
 
@@ -267,235 +208,288 @@ data _null_;
   put '<head>';
   put '<meta charset="UTF-8">';
   put '<meta name="viewport" content="width=device-width, initial-scale=1.0">';
-  put "<title>Motor OCR Tracker &#8212; &latest_week. &#8212; &rd.</title>";
+  put "<title>OCR Monitor &#8212; &latest_week.</title>";
   put '<link rel="preconnect" href="https://fonts.googleapis.com">';
-  put '<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Sora:wght@300;400;600&display=swap" rel="stylesheet">';
+  put '<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">';
   put '<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>';
   put '<style>';
+
+  /* ---- Design tokens ---- */
   put ':root {';
-  put '  --bg: #0d0f14;';
-  put '  --surface: #151820;';
-  put '  --surface2: #1c2030;';
-  put '  --border: rgba(255,255,255,0.07);';
-  put '  --border2: rgba(255,255,255,0.13);';
-  put '  --text: #e8eaf2;';
-  put '  --muted: #6b7280;';
-  put '  --accent: #4f8ef7;';
-  put '  --accent2: #34d399;';
-  put '  --warn: #f59e0b;';
-  put '  --danger: #f87171;';
-  put '  --font: "Sora", sans-serif;';
-  put '  --mono: "DM Mono", monospace;';
+  put '  --bg:        #080b10;';
+  put '  --surface:   #0e1219;';
+  put '  --surface2:  #141820;';
+  put '  --surface3:  #1a2030;';
+  put '  --border:    rgba(255,255,255,0.06);';
+  put '  --border2:   rgba(255,255,255,0.11);';
+  put '  --text:      #dde3ee;';
+  put '  --text2:     #8b95a8;';
+  put '  --muted:     #4e5668;';
+  put '  --blue:      #4f8ef7;';
+  put '  --blue-dim:  rgba(79,142,247,0.12);';
+  put '  --blue-glow: rgba(79,142,247,0.25);';
+  put '  --green:     #3ecf8e;';
+  put '  --green-dim: rgba(62,207,142,0.12);';
+  put '  --amber:     #f5a623;';
+  put '  --amber-dim: rgba(245,166,35,0.12);';
+  put '  --red:       #f06a6a;';
+  put '  --red-dim:   rgba(240,106,106,0.12);';
+  put '  --font:      "Instrument Sans", sans-serif;';
+  put '  --mono:      "IBM Plex Mono", monospace;';
+  put '  --radius:    10px;';
   put '}';
+
   put '*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }';
   put 'body { background: var(--bg); color: var(--text); font-family: var(--font);';
-  put '       font-size: 14px; line-height: 1.6; min-height: 100vh; }';
-  put '.shell { max-width: 1200px; margin: 0 auto; padding: 2rem 1.5rem; }';
+  put '       font-size: 14px; line-height: 1.6; min-height: 100vh;';
+  put '       background-image: radial-gradient(ellipse 80% 50% at 50% -10%, rgba(79,142,247,0.07), transparent); }';
 
-  /* Header */
-  put '.header { display: flex; justify-content: space-between; align-items: flex-start;';
-  put '          margin-bottom: 2rem; padding-bottom: 1.5rem;';
-  put '          border-bottom: 1px solid var(--border2); }';
-  put '.header-left .eyebrow { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;';
-  put '                        color: var(--accent); font-family: var(--mono); margin-bottom: 6px; }';
-  put '.header-left h1 { font-size: 26px; font-weight: 600; color: var(--text); }';
-  put '.header-right { text-align: right; font-family: var(--mono); font-size: 12px; color: var(--muted); line-height: 2; }';
-  put '.pill { display: inline-block; padding: 3px 10px; border-radius: 20px;';
-  put '        font-size: 11px; font-family: var(--mono);';
-  put '        background: rgba(79,142,247,0.15); color: var(--accent);';
-  put '        border: 1px solid rgba(79,142,247,0.3); }';
+  /* Layout */
+  put '.shell { max-width: 1280px; margin: 0 auto; padding: 2.5rem 2rem 4rem; }';
 
-  /* Metric cards */
-  put '.metrics { display: grid; grid-template-columns: repeat(4, minmax(0,1fr));';
-  put '           gap: 12px; margin-bottom: 2rem; }';
-  put '.card { background: var(--surface); border: 1px solid var(--border);';
-  put '        border-radius: 12px; padding: 1.25rem; position: relative; overflow: hidden; }';
-  put '.card::before { content: ""; position: absolute; top: 0; left: 0; right: 0;';
-  put '                height: 2px; }';
-  put '.card.blue::before  { background: var(--accent); }';
-  put '.card.green::before { background: var(--accent2); }';
-  put '.card.amber::before { background: var(--warn); }';
-  put '.card.red::before   { background: var(--danger); }';
-  put '.card-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;';
-  put '              color: var(--muted); margin-bottom: 8px; font-family: var(--mono); }';
-  put '.card-value { font-size: 28px; font-weight: 600; color: var(--text); line-height: 1; margin-bottom: 6px; }';
-  put '.card-sub { font-size: 12px; color: var(--muted); }';
-  put '.pbar-bg { height: 4px; background: var(--surface2); border-radius: 2px; margin-top: 10px; }';
-  put '.pbar-fill { height: 4px; border-radius: 2px; background: var(--accent2);';
-  put '             transition: width 0.8s ease; }';
+  /* ---- Top bar ---- */
+  put '.topbar { display: flex; align-items: center; justify-content: space-between;';
+  put '          margin-bottom: 2.5rem; }';
+  put '.brand { display: flex; align-items: center; gap: 12px; }';
+  put '.brand-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--blue);';
+  put '             box-shadow: 0 0 8px var(--blue); animation: pulse 2.5s ease-in-out infinite; }';
+  put '@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }';
+  put '.brand-name { font-family: var(--mono); font-size: 13px; color: var(--text2);';
+  put '              letter-spacing: 0.08em; }';
+  put '.brand-name span { color: var(--blue); }';
+  put '.topbar-right { display: flex; align-items: center; gap: 10px; }';
+  put '.chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px;';
+  put '        border-radius: 20px; font-size: 11px; font-family: var(--mono);';
+  put '        letter-spacing: 0.05em; border: 1px solid var(--border2); color: var(--text2); }';
+  put '.chip.live { border-color: rgba(62,207,142,0.4); color: var(--green);';
+  put '             background: var(--green-dim); }';
+  put '.chip.live::before { content:""; width:6px; height:6px; border-radius:50%;';
+  put '                     background:var(--green); display:inline-block; }';
 
-  /* Charts */
-  put '.charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 2rem; }';
-  put '.chart-card { background: var(--surface); border: 1px solid var(--border);';
-  put '              border-radius: 12px; padding: 1.25rem; }';
-  put '.chart-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 1rem;';
-  put '               font-family: var(--mono); letter-spacing: 0.04em; }';
+  /* ---- Page title ---- */
+  put '.page-title { margin-bottom: 2rem; }';
+  put '.page-title .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em;';
+  put '                       text-transform: uppercase; color: var(--blue); margin-bottom: 8px;';
+  put '                       display: flex; align-items: center; gap: 8px; }';
+  put '.page-title .eyebrow::after { content:""; flex:1; height:1px; background:var(--blue-dim); }';
+  put '.page-title h1 { font-size: 30px; font-weight: 600; color: var(--text); line-height: 1.15; }';
+  put '.page-title h1 em { color: var(--blue); font-style: normal; }';
 
-  /* Table */
-  put '.section-head { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;';
-  put '                color: var(--muted); font-family: var(--mono); margin-bottom: 12px; }';
-  put '.table-wrap { background: var(--surface); border: 1px solid var(--border);';
-  put '              border-radius: 12px; overflow: hidden; margin-bottom: 2rem; }';
+  /* ---- KPI cards ---- */
+  put '.kpi-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 14px; margin-bottom: 2rem; }';
+  put '.kpi { background: var(--surface); border: 1px solid var(--border2);';
+  put '       border-radius: var(--radius); padding: 1.4rem 1.25rem; position: relative;';
+  put '       overflow: hidden; transition: border-color 0.2s, box-shadow 0.2s; }';
+  put '.kpi:hover { border-color: var(--border2); box-shadow: 0 0 24px rgba(0,0,0,0.3); }';
+  put '.kpi-stripe { position: absolute; top: 0; left: 0; right: 0; height: 3px; border-radius: 1px 1px 0 0; }';
+  put '.kpi.blue  .kpi-stripe { background: linear-gradient(90deg,var(--blue),transparent); }';
+  put '.kpi.green .kpi-stripe { background: linear-gradient(90deg,var(--green),transparent); }';
+  put '.kpi.amber .kpi-stripe { background: linear-gradient(90deg,var(--amber),transparent); }';
+  put '.kpi.red   .kpi-stripe { background: linear-gradient(90deg,var(--red),transparent); }';
+  put '.kpi-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;';
+  put '             text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }';
+  put '.kpi-value { font-size: 32px; font-weight: 600; line-height: 1; color: var(--text);';
+  put '             margin-bottom: 6px; font-variant-numeric: tabular-nums; }';
+  put '.kpi.red   .kpi-value,';
+  put '.kpi.amber .kpi-value { font-size: 22px; font-family: var(--mono); }';
+  put '.kpi-sub { font-size: 12px; color: var(--text2); }';
+  put '.kpi-sub strong { color: var(--text); font-weight: 500; }';
+  put '.pbar-track { height: 3px; background: var(--surface3); border-radius: 2px; margin-top: 12px; overflow: hidden; }';
+  put '.pbar-fill  { height: 3px; border-radius: 2px; background: var(--green); width: 0;';
+  put '              transition: width 1.2s cubic-bezier(0.4,0,0.2,1); }';
+
+  /* ---- Charts ---- */
+  put '.chart-row { display: grid; grid-template-columns: 1.6fr 1fr; gap: 14px; margin-bottom: 2rem; }';
+  put '.chart-card { background: var(--surface); border: 1px solid var(--border2);';
+  put '              border-radius: var(--radius); padding: 1.25rem 1.5rem; }';
+  put '.chart-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; }';
+  put '.chart-label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em;';
+  put '               text-transform: uppercase; color: var(--text2); }';
+  put '.chart-tag { font-family: var(--mono); font-size: 10px; padding: 2px 8px;';
+  put '             border-radius: 4px; background: var(--blue-dim); color: var(--blue); }';
+
+  /* ---- Section heading ---- */
+  put '.section-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em;';
+  put '                 text-transform: uppercase; color: var(--muted); margin-bottom: 10px;';
+  put '                 display: flex; align-items: center; gap: 8px; }';
+  put '.section-label::after { content:""; flex:1; height:1px; background:var(--border2); }';
+
+  /* ---- Table ---- */
+  put '.table-wrap { background: var(--surface); border: 1px solid var(--border2);';
+  put '              border-radius: var(--radius); overflow: auto; margin-bottom: 1.5rem;';
+  put '              max-height: 400px; }';
   put 'table { width: 100%; border-collapse: collapse; font-size: 13px; }';
+  put 'thead { position: sticky; top: 0; z-index: 2; }';
   put 'thead tr { background: var(--surface2); }';
-  put 'th { text-align: left; padding: 10px 14px; font-size: 11px; text-transform: uppercase;';
-  put '     letter-spacing: 0.08em; color: var(--muted); font-family: var(--mono);';
-  put '     font-weight: 400; border-bottom: 1px solid var(--border2); }';
-  put 'td { padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--text); }';
+  put 'th { text-align: left; padding: 11px 16px; font-family: var(--mono); font-size: 10px;';
+  put '     letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted);';
+  put '     font-weight: 400; border-bottom: 1px solid var(--border2); white-space: nowrap; }';
+  put 'td { padding: 10px 16px; border-bottom: 1px solid var(--border); color: var(--text);';
+  put '     white-space: nowrap; }';
   put 'tbody tr:last-child td { border-bottom: none; }';
+  put 'tbody tr { transition: background 0.12s; }';
   put 'tbody tr:hover { background: var(--surface2); }';
-  put '.badge { display: inline-block; padding: 2px 9px; border-radius: 20px;';
-  put '         font-size: 11px; font-family: var(--mono); }';
-  put '.badge-base { background: rgba(79,142,247,0.15); color: var(--accent);';
-  put '              border: 1px solid rgba(79,142,247,0.3); }';
-  put '.badge-wk { background: rgba(52,211,153,0.12); color: var(--accent2);';
-  put '            border: 1px solid rgba(52,211,153,0.25); }';
+  put '.num { font-family: var(--mono); font-size: 12px; }';
+  put '.pos { color: var(--green); }';
+  put '.neg { color: var(--red); }';
 
-  /* Claims detail */
-  put '.toggle-btn { background: var(--surface2); border: 1px solid var(--border2);';
-  put '              color: var(--text); font-family: var(--mono); font-size: 12px;';
-  put '              padding: 7px 16px; border-radius: 8px; cursor: pointer;';
-  put '              margin-bottom: 12px; letter-spacing: 0.04em; }';
-  put '.toggle-btn:hover { background: var(--surface); border-color: var(--accent); color: var(--accent); }';
+  /* Badges */
+  put '.badge { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 4px;';
+  put '         font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em; }';
+  put '.badge-base { background: var(--blue-dim);  color: var(--blue);  border: 1px solid rgba(79,142,247,0.25); }';
+  put '.badge-wk   { background: var(--green-dim); color: var(--green); border: 1px solid rgba(62,207,142,0.2); }';
+
+  /* ---- Claims section ---- */
+  put '.toggle-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }';
+  put '.toggle-btn { display: inline-flex; align-items: center; gap: 6px;';
+  put '              background: transparent; border: 1px solid var(--border2);';
+  put '              color: var(--text2); font-family: var(--mono); font-size: 11px;';
+  put '              letter-spacing: 0.06em; padding: 6px 14px; border-radius: 6px;';
+  put '              cursor: pointer; transition: all 0.18s; }';
+  put '.toggle-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-dim); }';
   put '#claimsSection { display: none; }';
+  put '.search-bar { width: 100%; background: var(--surface2);';
+  put '              border: 1px solid var(--border2); border-radius: 8px;';
+  put '              padding: 9px 16px; color: var(--text);';
+  put '              font-family: var(--mono); font-size: 12px; margin-bottom: 10px;';
+  put '              outline: none; transition: border-color 0.18s; }';
+  put '.search-bar::placeholder { color: var(--muted); }';
+  put '.search-bar:focus { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-dim); }';
 
-  /* Search */
-  put '.search-bar { width: 100%; background: var(--surface2); border: 1px solid var(--border2);';
-  put '              border-radius: 8px; padding: 8px 14px; color: var(--text);';
-  put '              font-family: var(--mono); font-size: 13px; margin-bottom: 12px;';
-  put '              outline: none; }';
-  put '.search-bar:focus { border-color: var(--accent); }';
-
-  put '.footer { text-align: center; font-size: 12px; color: var(--muted);';
-  put '          font-family: var(--mono); margin-top: 2rem; padding-top: 1.5rem;';
-  put '          border-top: 1px solid var(--border); }';
+  /* Footer */
+  put '.footer { text-align: center; font-family: var(--mono); font-size: 11px;';
+  put '          color: var(--muted); margin-top: 3rem; padding-top: 1.5rem;';
+  put '          border-top: 1px solid var(--border); letter-spacing: 0.06em; }';
 
   put '</style>';
   put '</head>';
   put '<body>';
   put '<div class="shell">';
 
-  /* Header block
-     FIX 3: &mdash; -> &#8212;  |  &bull; -> &#8226;
-     Only lines needing macro var injection use double quotes. */
-  put '<div class="header">';
-  put '  <div class="header-left">';
-  put '    <p class="eyebrow">FNB ST Insurance &#8212; Motor Retail</p>';
-  put "    <h1>OCR Weekly Tracker &#8212; &latest_week.</h1>";
+  /* ---- Top bar ---- */
+  put '<div class="topbar">';
+  put '  <div class="brand">';
+  put '    <div class="brand-dot"></div>';
+  put '    <div class="brand-name">FNB <span>ST Insurance</span> &#8212; Analytics</div>';
   put '  </div>';
-  put '  <div class="header-right">';
-  put '    <div><span class="pill">Motor &#8226; Retail &#8226; Not Paid Off</span></div>';
-  put "    <div style='margin-top:8px;'>Run date: &rd.</div>";
-  put "    <div>Baseline: &rd. cycle</div>";
+  put '  <div class="topbar-right">';
+  put '    <span class="chip">Motor &#8226; Retail &#8226; Not Paid Off</span>';
+  put "    <span class='chip live'>Current as of &rd.</span>";
   put '  </div>';
   put '</div>';
 
-  /* Metric cards */
-  put '<div class="metrics">';
+  /* ---- Page title ---- */
+  put '<div class="page-title">';
+  put '  <div class="eyebrow">OCR Monitoring Dashboard</div>';
+  put "  <h1>OCR Weekly Tracker &#8212; <em>&latest_week.</em></h1>";
+  put '</div>';
 
-  put '  <div class="card blue">';
-  put '    <div class="card-label">Baseline claims</div>';
-  put "    <div class='card-value' id='m-baseline'>&baseline_claims.</div>";
-  put '    <div class="card-sub">flagged on the 16th</div>';
+  /* ---- KPI cards ---- */
+  put '<div class="kpi-grid">';
+
+  put '  <div class="kpi blue">';
+  put '    <div class="kpi-stripe"></div>';
+  put '    <div class="kpi-label">Baseline Claims</div>';
+  put "    <div class='kpi-value' id='m-baseline'>&baseline_claims.</div>";
+  put '    <div class="kpi-sub">flagged on the 16th</div>';
   put '  </div>';
 
-  put '  <div class="card green">';
-  put '    <div class="card-label">Open this week</div>';
-  put "    <div class='card-value' id='m-open'>&latest_open.</div>";
-  put "    <div class='card-sub'>&latest_pct. resolved</div>";
-  put '    <div class="pbar-bg">';
-  put "      <div class='pbar-fill' id='pbar'></div>";
+  put '  <div class="kpi green">';
+  put '    <div class="kpi-stripe"></div>';
+  put '    <div class="kpi-label">Open This Week</div>';
+  put "    <div class='kpi-value' id='m-open'>&latest_open.</div>";
+  put "    <div class='kpi-sub'><strong id='pct-label'>&latest_pct.</strong> resolved</div>";
+  put '    <div class="pbar-track"><div class="pbar-fill" id="pbar"></div></div>';
+  put '  </div>';
+
+  put '  <div class="kpi amber">';
+  put '    <div class="kpi-stripe"></div>';
+  put '    <div class="kpi-label">Cumul. Closed</div>';
+  put "    <div class='kpi-value'>&latest_cumul.</div>";
+  put "    <div class='kpi-sub'><strong>&latest_closed_wk.</strong> closed this week</div>";
+  put '  </div>';
+
+  put '  <div class="kpi red">';
+  put '    <div class="kpi-stripe"></div>';
+  put '    <div class="kpi-label">Current OCR Total</div>';
+  put "    <div class='kpi-value'>R &latest_ocr.</div>";
+  put "    <div class='kpi-sub'>&#8595;&nbsp;<strong>R &latest_ocr_red.</strong> reduced this week</div>";
+  put '  </div>';
+
+  put '</div>';
+
+  /* ---- Charts ---- */
+  put '<div class="chart-row">';
+
+  put '  <div class="chart-card">';
+  put '    <div class="chart-head">';
+  put '      <span class="chart-label">OCR Amount Over Cycle</span>';
+  put '      <span class="chart-tag">R Total</span>';
   put '    </div>';
+  put '    <div style="position:relative;height:240px;"><canvas id="ocrChart"></canvas></div>';
   put '  </div>';
 
-  put '  <div class="card amber">';
-  put '    <div class="card-label">Cumul. closed</div>';
-  put "    <div class='card-value'>&latest_cumul.</div>";
-  put "    <div class='card-sub'>&latest_closed_wk. closed this week</div>";
-  put '  </div>';
-
-  put '  <div class="card red">';
-  put '    <div class="card-label">Current OCR total</div>';
-  put "    <div class='card-value' style='font-size:20px;'>R &latest_ocr.</div>";
-  put "    <div class='card-sub'>reduced R &latest_ocr_red. this week</div>";
+  put '  <div class="chart-card">';
+  put '    <div class="chart-head">';
+  put '      <span class="chart-label">Claims Closed Per Week</span>';
+  put '      <span class="chart-tag">Count</span>';
+  put '    </div>';
+  put '    <div style="position:relative;height:240px;"><canvas id="closedChart"></canvas></div>';
   put '  </div>';
 
   put '</div>';
 
-  /* Charts */
-  put '<div class="charts">';
-  put '  <div class="chart-card">';
-  put '    <div class="chart-title">OCR amount over the cycle</div>';
-  put '    <div style="position:relative; height:220px;"><canvas id="ocrChart"></canvas></div>';
-  put '  </div>';
-  put '  <div class="chart-card">';
-  put '    <div class="chart-title">Claims closed per week</div>';
-  put '    <div style="position:relative; height:220px;"><canvas id="closedChart"></canvas></div>';
-  put '  </div>';
-  put '</div>';
-
-  /* Tracker table */
-  put '<p class="section-head">Weekly tracker detail</p>';
+  /* ---- Weekly tracker table ---- */
+  put '<p class="section-label">Weekly Tracker Detail</p>';
   put '<div class="table-wrap">';
   put '<table>';
   put '<thead><tr>';
-  put '  <th>Week</th><th>Date</th><th>Open</th>';
-  put '  <th>Closed this week</th><th>Cumul. closed</th>';
-  put '  <th>% closed</th><th>Current OCR</th><th>OCR reduced</th>';
+  put '  <th>Week</th><th>Run Date</th><th>Baseline</th><th>Open</th>';
+  put '  <th>Closed / Wk</th><th>Cumul. Closed</th><th>% Resolved</th>';
+  put '  <th>Current OCR</th><th>OCR Reduced</th>';
   put '</tr></thead>';
   put '<tbody id="trackerBody"></tbody>';
   put '</table>';
   put '</div>';
 
-  /* Claims detail toggle */
-  put '<button class="toggle-btn" onclick="toggleClaims(this)">Show claims detail &#8595;</button>';
+  /* ---- Claims detail ---- */
+  put '<div class="toggle-row">';
+  put '  <p class="section-label" style="flex:1;margin:0;">Claims Detail</p>';
+  put '  <button class="toggle-btn" onclick="toggleClaims(this)">Show detail &#8595;</button>';
+  put '</div>';
+
   put '<div id="claimsSection">';
-  put '  <input class="search-bar" type="text" placeholder="Search by claim, handler, month..." oninput="filterClaims(this.value)">';
+  put '  <input class="search-bar" type="text" placeholder="Filter by claim code, handler, or month&#8230;" oninput="filterClaims(this.value)">';
   put '  <div class="table-wrap">';
-  put '  <table>';
-  put '  <thead><tr>';
-  put '    <th>Claim code</th><th>Reported month</th><th>Handler</th>';
-  put '    <th>OCR when flagged</th><th>Current OCR</th><th>Movement</th>';
-  put '  </tr></thead>';
-  put '  <tbody id="claimsBody"></tbody>';
-  put '  </table>';
+  put '    <table>';
+  put '    <thead><tr>';
+  put '      <th>Claim Code</th><th>Reported Month</th><th>Handler</th>';
+  put '      <th>OCR When Flagged</th><th>Current OCR</th><th>Movement</th>';
+  put '    </tr></thead>';
+  put '    <tbody id="claimsBody"></tbody>';
+  put '    </table>';
   put '  </div>';
   put '</div>';
 
-  put '<div class="footer">Generated by OCR_05_Dashboard_Export.sas &#8226; FNB ST Analytics &#8226; Motor &#8226; Retail</div>';
-  put '</div>';
+  put '<div class="footer">Generated by OCR_05_Dashboard_Export_V2.sas &#8226; FNB ST Insurance Analytics &#8226; Motor &#8226; Retail</div>';
+  put '</div>'; /* .shell */
 
-  /* ---- Inline JS with SAS-injected data ---- */
+  /* ---- Inline JS ---- */
   put '<script>';
+  put 'Chart.defaults.color = "#4e5668";';
+  put 'Chart.defaults.font.family = "IBM Plex Mono, monospace";';
+  put 'Chart.defaults.font.size = 11;';
 
-  /*------------------------------------------------------------
-    FIX 4b: Inject tracker JSON safely.
-    BEFORE (broken):
-      put 'const TRACKER = ';
-      put "&tracker_json.;";
-    WHY IT CRASHED: When SAS macro-resolves &tracker_json. inside
-    a PUT statement argument, it expands the JSON text inline.
-    SAS then tries to parse tokens like  {"label":"Week 3",...}
-    as column-name/format specifications.  The colon after the
-    opening brace looks like a format modifier, the decimal in
-    "0.709440" triggers ERROR 156 ("decimal spec must be less
-    than width"), and the whole DATA step aborts.
-    FIX: Retrieve the macro variable value at run-time into a
-    DATA step character variable with symget().  PUT writes the
-    variable value as a plain string — no SAS parser involvement
-    with the content.
-  ------------------------------------------------------------*/
+  /* Inject tracker JSON safely via symget() */
   length _tracker_json $32767;
   _tracker_json = symget('tracker_json');
   put 'const TRACKER = ' _tracker_json ';';
 
-  /* Inject claims data directly from the temp file to avoid 64KB limit */
   put 'const CLAIMS = ';
 run;
 
 /*--------------------------------------------------------------
-  10. Append claims JSON directly from temp file into the HTML
-      output — bypasses the 64 KB macro variable size ceiling.
+  10. Append claims JSON directly from temp file
 --------------------------------------------------------------*/
 data _null_;
   file "&outfile." lrecl=32767 mod;
@@ -514,59 +508,65 @@ data _null_;
   /* Progress bar */
   put "const baseline = &baseline_claims.;";
   put "const latestOpen = &latest_open.;";
-  put 'document.getElementById("pbar").style.width =';
-  put '  Math.round((1 - latestOpen/baseline)*100) + "%";';
+  put 'const pct = baseline > 0 ? Math.round((1 - latestOpen / baseline) * 100) : 0;';
+  put 'document.getElementById("pbar").style.width = pct + "%";';
 
   /* Formatters */
-  put 'const fmtR = v => v === 0 ? "&#8212;" : "R " + Number(v).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2});';
+  put 'const fmtR = v => v === 0 ? "&#8212;" : "R\u00a0" + Number(v).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2});';
   put 'const fmtN = v => Number(v).toLocaleString("en-ZA");';
-  put 'const fmtP = v => (v*100).toFixed(1) + "%";';
+  put 'const fmtP = v => (v * 100).toFixed(1) + "%";';
 
-  /* Populate tracker table */
+  /* Tracker table */
   put 'const tbody = document.getElementById("trackerBody");';
   put 'TRACKER.forEach(r => {';
-  put '  const badgeClass = r.label === "Baseline" ? "badge-base" : "badge-wk";';
+  put '  const isBase = r.label === "Baseline";';
+  put '  const badgeClass = isBase ? "badge-base" : "badge-wk";';
   put '  const tr = document.createElement("tr");';
   put '  tr.innerHTML = `';
   put '    <td><span class="badge ${badgeClass}">${r.label}</span></td>';
-  put '    <td style="color:var(--muted);font-family:var(--mono)">${r.date}</td>';
-  put '    <td>${fmtN(r.open)}</td>';
-  put '    <td>${r.closed_wk === 0 ? "&#8212;" : fmtN(r.closed_wk)}</td>';
-  put '    <td>${fmtN(r.cumul)}</td>';
-  put '    <td>${r.pct === 0 ? "&#8212;" : fmtP(r.pct)}</td>';
-  put '    <td style="font-family:var(--mono)">${fmtR(r.ocr)}</td>';
-  put '    <td style="font-family:var(--mono)">${r.ocr_red === 0 ? "&#8212;" : fmtR(r.ocr_red)}</td>';
+  put '    <td class="num" style="color:var(--text2)">${r.date}</td>';
+  put '    <td class="num">${fmtN(r.open + r.cumul)}</td>';
+  put '    <td class="num">${fmtN(r.open)}</td>';
+  put '    <td class="num">${r.closed_wk === 0 ? "<span style=color:var(--muted)>&#8212;</span>" : fmtN(r.closed_wk)}</td>';
+  put '    <td class="num">${fmtN(r.cumul)}</td>';
+  put '    <td class="num">${r.pct === 0 ? "<span style=color:var(--muted)>&#8212;</span>" : fmtP(r.pct)}</td>';
+  put '    <td class="num">${fmtR(r.ocr)}</td>';
+  put '    <td class="num ${r.ocr_red > 0 ? "pos" : ""}">${r.ocr_red === 0 ? "<span style=color:var(--muted)>&#8212;</span>" : "&#8595;\u00a0" + fmtR(r.ocr_red)}</td>';
   put '  `;';
   put '  tbody.appendChild(tr);';
   put '});';
 
-  /* Populate claims table */
+  /* Claims table */
   put 'let claimsData = CLAIMS;';
   put 'function renderClaims(data) {';
   put '  const cb = document.getElementById("claimsBody");';
   put '  cb.innerHTML = "";';
   put '  data.forEach(c => {';
+  put '    const mv = parseFloat(c.movement.replace(/[^0-9.\-]/g,""));';
+  put '    const mvClass = mv > 0 ? "neg" : mv < 0 ? "pos" : "";';
+  put '    const mvArrow = mv > 0 ? "&#8593;\u00a0" : mv < 0 ? "&#8595;\u00a0" : "";';
   put '    const tr = document.createElement("tr");';
   put '    tr.innerHTML = `';
-  put '      <td style="font-family:var(--mono)">${c.claim}</td>';
+  put '      <td class="num">${c.claim}</td>';
   put '      <td>${c.month}</td>';
   put '      <td>${c.handler}</td>';
-  put '      <td style="font-family:var(--mono)">${c.flagged_ocr}</td>';
-  put '      <td style="font-family:var(--mono)">${c.current_ocr}</td>';
-  put '      <td style="font-family:var(--mono)">${c.movement}</td>';
-  put '    `;';
+  put '      <td class="num">${c.flagged_ocr}</td>';
+  put '      <td class="num">${c.current_ocr}</td>';
+  put '      <td class="num ${mvClass}">${mvArrow}${c.movement}</td>`;';
   put '    cb.appendChild(tr);';
   put '  });';
   put '}';
   put 'renderClaims(claimsData);';
 
-  /* Toggle + search */
+  /* Toggle */
   put 'function toggleClaims(btn) {';
   put '  const s = document.getElementById("claimsSection");';
   put '  const open = s.style.display === "block";';
   put '  s.style.display = open ? "none" : "block";';
-  put '  btn.textContent = open ? "Show claims detail \u2193" : "Hide claims detail \u2191";';
+  put '  btn.textContent = open ? "Show detail \u2193" : "Hide detail \u2191";';
   put '}';
+
+  /* Search */
   put 'function filterClaims(q) {';
   put '  const lq = q.toLowerCase();';
   put '  renderClaims(claimsData.filter(c =>';
@@ -576,7 +576,7 @@ data _null_;
   put '  ));';
   put '}';
 
-  /* Charts */
+  /* Chart — OCR over cycle */
   put 'const labels     = TRACKER.map(r => r.label);';
   put 'const ocrVals    = TRACKER.map(r => r.ocr);';
   put 'const closedVals = TRACKER.map(r => r.closed_wk);';
@@ -586,33 +586,44 @@ data _null_;
   put '  data: { labels, datasets: [{';
   put '    data: ocrVals,';
   put '    borderColor: "#4f8ef7",';
-  put '    backgroundColor: "rgba(79,142,247,0.08)",';
-  put '    fill: true, tension: 0.35,';
-  put '    pointBackgroundColor: "#4f8ef7", pointRadius: 5, borderWidth: 2';
+  put '    backgroundColor: ctx => {';
+  put '      const g = ctx.chart.ctx.createLinearGradient(0,0,0,240);';
+  put '      g.addColorStop(0,"rgba(79,142,247,0.18)");';
+  put '      g.addColorStop(1,"rgba(79,142,247,0)");';
+  put '      return g;';
+  put '    },';
+  put '    fill: true, tension: 0.4,';
+  put '    pointBackgroundColor: "#4f8ef7",';
+  put '    pointBorderColor: "#080b10",';
+  put '    pointBorderWidth: 2,';
+  put '    pointRadius: 5, borderWidth: 2';
   put '  }]},';
-  put '  options: { responsive: true, maintainAspectRatio: false,';
-  put '    plugins: { legend: { display: false } },';
+  put '  options: { responsive:true, maintainAspectRatio:false,';
+  put '    plugins: { legend:{ display:false }, tooltip:{';
+  put '      backgroundColor:"#0e1219", borderColor:"rgba(255,255,255,0.1)", borderWidth:1,';
+  put '      callbacks:{ label: ctx => " R " + Number(ctx.raw).toLocaleString("en-ZA",{minimumFractionDigits:2}) } } },';
   put '    scales: {';
-  put '      y: { ticks: { color: "#6b7280", font: { size: 11 },';
-  put '                    callback: v => "R " + (v/1000).toFixed(0) + "k" },';
-  put '           grid: { color: "rgba(255,255,255,0.05)" } },';
-  put '      x: { ticks: { color: "#6b7280", font: { size: 11 } }, grid: { display: false } }';
+  put '      y: { ticks:{ callback: v => "R "+(v/1000).toFixed(0)+"k", color:"#4e5668" },';
+  put '           grid:{ color:"rgba(255,255,255,0.04)" }, border:{ display:false } },';
+  put '      x: { ticks:{ color:"#4e5668" }, grid:{ display:false }, border:{ display:false } }';
   put '    }}';
   put '});';
 
+  /* Chart — closed per week */
   put 'new Chart(document.getElementById("closedChart"), {';
   put '  type: "bar",';
   put '  data: { labels, datasets: [{';
   put '    data: closedVals,';
-  put '    backgroundColor: "#34d399",';
-  put '    borderRadius: 4, borderSkipped: false';
+  put '    backgroundColor: "rgba(62,207,142,0.7)",';
+  put '    hoverBackgroundColor: "#3ecf8e",';
+  put '    borderRadius: 5, borderSkipped: false';
   put '  }]},';
-  put '  options: { responsive: true, maintainAspectRatio: false,';
-  put '    plugins: { legend: { display: false } },';
+  put '  options: { responsive:true, maintainAspectRatio:false,';
+  put '    plugins: { legend:{ display:false }, tooltip:{';
+  put '      backgroundColor:"#0e1219", borderColor:"rgba(255,255,255,0.1)", borderWidth:1 } },';
   put '    scales: {';
-  put '      y: { ticks: { color: "#6b7280", font: { size: 11 } },';
-  put '           grid: { color: "rgba(255,255,255,0.05)" } },';
-  put '      x: { ticks: { color: "#6b7280", font: { size: 11 } }, grid: { display: false } }';
+  put '      y: { ticks:{ color:"#4e5668" }, grid:{ color:"rgba(255,255,255,0.04)" }, border:{ display:false } },';
+  put '      x: { ticks:{ color:"#4e5668" }, grid:{ display:false }, border:{ display:false } }';
   put '    }}';
   put '});';
 
@@ -621,4 +632,4 @@ data _null_;
   put '</html>';
 run;
 
-%put NOTE: Dashboard exported to &outfile.;
+%put NOTE: Dashboard V2 exported to &outfile.;
