@@ -1,32 +1,39 @@
 /*==============================================================
-  FILE: OCR_00_Backfill.sas
+  FILE: OCR_00_Backfill_FIXED.sas
   PURPOSE: One-time back-fill — inserts the Baseline + 3 weekly
            rows into OCR_Weekly_Tracker for the March 2026 cycle.
   RUN: Once only, manually, BEFORE the next OCR_03_Weekly.sas run.
   AFTER RUNNING: Verify with the check query at the bottom.
+
+  UPDATED: Now populates CycleID (202603) and WeekSequence
+           (0=Baseline, 1/2/3=weekly) on all inserted rows,
+           consistent with the new OCR_03_Weekly.sas logic.
 ==============================================================*/
 
 /*--------------------------------------------------------------
   !! FILL IN YOUR VALUES HERE BEFORE RUNNING !!
 --------------------------------------------------------------*/
 
+/* --- CYCLE --- */
+%let cycle_id            = 202603;         /* YYYYMM — March 2026 cycle */
+
 /* --- BASELINE (March 16, 2026) --- */
-%let bf_baseline_date    = 20260316;    /* do not change — YYYYMMDD, no hyphens */
+%let bf_baseline_date    = 20260316;       /* YYYYMMDD — do not change  */
 %let bf_baseline_claims  = 678;
 %let bf_baseline_ocr     = 3388533;
 
 /* --- WEEK 1 --- */
-%let bf_week1_date       = 20260323;    /* replace if actual run date differs — YYYYMMDD */
+%let bf_week1_date       = 20260323;       /* replace if actual run date differs */
 %let bf_week1_open       = 397;
 %let bf_week1_ocr        = 2013784;
 
 /* --- WEEK 2 --- */
-%let bf_week2_date       = 20260330;    /* replace if actual run date differs — YYYYMMDD */
+%let bf_week2_date       = 20260330;       /* replace if actual run date differs */
 %let bf_week2_open       = 249;
 %let bf_week2_ocr        = 1590398;
 
 /* --- WEEK 3 --- */
-%let bf_week3_date       = 20260406;    /* replace if actual run date differs — YYYYMMDD */
+%let bf_week3_date       = 20260406;       /* replace if actual run date differs */
 %let bf_week3_open       = 197;
 %let bf_week3_ocr        = 1256864;
 
@@ -77,47 +84,35 @@ Schema=&schema;
 
 /*--------------------------------------------------------------
   2. Wrap all logic in a macro so %abort cancel is valid.
-     (%abort cancel is illegal in open code — this was the
-      second bug in the previous version.)
+     (%abort cancel is illegal in open code.)
 --------------------------------------------------------------*/
 %macro run_backfill;
 
   /*------------------------------------------------------------
-    2a. Safety check — abort if rows already exist
+    2a. Safety check — abort if rows already exist for this cycle
   ------------------------------------------------------------*/
   proc sql noprint;
     select count(*)
     into :existing_rows trimmed
     from STI_WER.OCR_Weekly_Tracker
-    where RunDate between '16Mar2026'd and '06Apr2026'd;
+    where CycleID = "&cycle_id.";
   quit;
 
   %if &existing_rows. > 0 %then %do;
-    %put ERROR: &existing_rows. row(s) already exist for 16 Mar - 06 Apr 2026.;
+    %put ERROR: &existing_rows. row(s) already exist for CycleID=&cycle_id..;
     %put ERROR: Back-fill aborted. Delete existing rows first if you want to re-run.;
     %abort cancel;
   %end;
 
-  %put NOTE: No existing rows found for the back-fill range. Proceeding.;
+  %put NOTE: No existing rows found for CycleID=&cycle_id.. Proceeding.;
 
   /*------------------------------------------------------------
     2b. Convert YYYYMMDD strings to SAS date integers.
-
-        FIX for the 262-char / date conversion error:
-        The root cause was using EXECUTE...BY SQLSVR with
-        CONVERT(DATE, '&var.', 112) inside a long EXECUTE block.
-        The EXECUTE block's SQL is passed as one giant quoted
-        string; when it exceeded 262 chars, SAS's quote-tracking
-        broke, corrupting the date literal before SQL Server
-        ever saw it.
-
-        Solution: use PROC SQL INSERT INTO via the STI_WER libref
-        instead of EXECUTE...BY. Date values are passed as SAS
-        date integers (numeric), which the ODBC driver translates
-        natively — no quoted date strings in the SQL at all.
-
         %sysfunc(inputn(..., yymmdd8.)) reads an 8-digit YYYYMMDD
         number and returns the SAS date integer for that date.
+        The ODBC driver translates SAS date integers to SQL Server
+        DATE values natively — no quoted date strings in the SQL,
+        which avoids the 262-char quote-tracking bug.
   ------------------------------------------------------------*/
   %let sas_d0 = %sysfunc(inputn(&bf_baseline_date., yymmdd8.));
   %let sas_d1 = %sysfunc(inputn(&bf_week1_date.,    yymmdd8.));
@@ -126,33 +121,39 @@ Schema=&schema;
 
   /*------------------------------------------------------------
     2c. Insert via STI_WER libref — no CONNECT/EXECUTE needed.
-        PROC SQL translates the SAS date integers to SQL Server
-        DATE values through the ODBC driver automatically.
+        All four rows include CycleID and WeekSequence so the
+        new weekly logic can query by cycle rather than by month.
   ------------------------------------------------------------*/
   proc sql noprint;
 
-    /* Baseline */
+    /* Baseline — WeekSequence = 0 */
     insert into STI_WER.OCR_Weekly_Tracker
-      (WeekLabel, RunDate, Baseline_Claims, Open_Claims,
+      (WeekLabel, RunDate, CycleID, WeekSequence,
+       Baseline_Claims, Open_Claims,
        Current_OCR_Amt, Cumul_Closed, Closed_This_Week,
        OCR_Reduced_This_Week, Pct_Claims_Closed)
     values (
       'Baseline',
       &sas_d0.,
+      "&cycle_id.",
+      0,
       &bf_baseline_claims.,
       &bf_baseline_claims.,
       &bf_baseline_ocr.,
       0, 0, 0, 0.0
     );
 
-    /* Week 1 */
+    /* Week 1 — WeekSequence = 1 */
     insert into STI_WER.OCR_Weekly_Tracker
-      (WeekLabel, RunDate, Baseline_Claims, Open_Claims,
+      (WeekLabel, RunDate, CycleID, WeekSequence,
+       Baseline_Claims, Open_Claims,
        Current_OCR_Amt, Cumul_Closed, Closed_This_Week,
        OCR_Reduced_This_Week, Pct_Claims_Closed)
     values (
       'Week 1',
       &sas_d1.,
+      "&cycle_id.",
+      1,
       &bf_baseline_claims.,
       &bf_week1_open.,
       &bf_week1_ocr.,
@@ -162,14 +163,17 @@ Schema=&schema;
       &bf_week1_pct_closed.
     );
 
-    /* Week 2 */
+    /* Week 2 — WeekSequence = 2 */
     insert into STI_WER.OCR_Weekly_Tracker
-      (WeekLabel, RunDate, Baseline_Claims, Open_Claims,
+      (WeekLabel, RunDate, CycleID, WeekSequence,
+       Baseline_Claims, Open_Claims,
        Current_OCR_Amt, Cumul_Closed, Closed_This_Week,
        OCR_Reduced_This_Week, Pct_Claims_Closed)
     values (
       'Week 2',
       &sas_d2.,
+      "&cycle_id.",
+      2,
       &bf_baseline_claims.,
       &bf_week2_open.,
       &bf_week2_ocr.,
@@ -179,14 +183,17 @@ Schema=&schema;
       &bf_week2_pct_closed.
     );
 
-    /* Week 3 */
+    /* Week 3 — WeekSequence = 3 */
     insert into STI_WER.OCR_Weekly_Tracker
-      (WeekLabel, RunDate, Baseline_Claims, Open_Claims,
+      (WeekLabel, RunDate, CycleID, WeekSequence,
+       Baseline_Claims, Open_Claims,
        Current_OCR_Amt, Cumul_Closed, Closed_This_Week,
        OCR_Reduced_This_Week, Pct_Claims_Closed)
     values (
       'Week 3',
       &sas_d3.,
+      "&cycle_id.",
+      3,
       &bf_baseline_claims.,
       &bf_week3_open.,
       &bf_week3_ocr.,
@@ -199,23 +206,25 @@ Schema=&schema;
   quit;
 
   /*------------------------------------------------------------
-    2d. PROC SQL (libref INSERT) sets &sqlrc. on failure.
-        Note: EXECUTE...BY sets &sqlxrc. — different variable.
+    2d. Abort on insert failure.
+        PROC SQL (libref INSERT) sets &sqlrc. on failure.
   ------------------------------------------------------------*/
   %if &sqlrc. ne 0 %then %do;
-    %put ERROR: One or more INSERT statements failed. SQLRC=&sqlrc.;
+    %put ERROR: One or more INSERT statements failed. SQLRC=&sqlrc..;
     %abort cancel;
   %end;
 
-  %put NOTE: Back-fill complete. Baseline + Week 1 + Week 2 + Week 3 inserted (16 Mar - 06 Apr 2026).;
+  %put NOTE: Back-fill complete. Baseline + Week 1 + Week 2 + Week 3 inserted for CycleID=&cycle_id..;
 
   /*------------------------------------------------------------
     3. Verification — print what was inserted
   ------------------------------------------------------------*/
   proc sql;
-    title "OCR_Weekly_Tracker - March/April 2026 Back-fill Verification";
+    title "OCR_Weekly_Tracker - CycleID &cycle_id. Back-fill Verification";
     select WeekLabel,
+           WeekSequence,
            RunDate                format=date9.,
+           CycleID,
            Baseline_Claims,
            Open_Claims,
            Current_OCR_Amt        format=comma18.2,
@@ -224,8 +233,8 @@ Schema=&schema;
            OCR_Reduced_This_Week  format=comma18.2,
            Pct_Claims_Closed      format=percent8.2
     from STI_WER.OCR_Weekly_Tracker
-    where RunDate between '16Mar2026'd and '06Apr2026'd
-    order by RunDate;
+    where CycleID = "&cycle_id."
+    order by WeekSequence;
     title;
   quit;
 
