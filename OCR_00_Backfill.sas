@@ -1,249 +1,234 @@
-/*==============================================================
-  FILE: OCR_00_Backfill.sas
-  PURPOSE: One-time back-fill — inserts the Baseline + 3 weekly
-           rows into OCR_Weekly_Tracker for the March 2026 cycle.
-  RUN: Once only, manually, BEFORE the next OCR_03_Weekly.sas run.
-  AFTER RUNNING: Verify with the check query at the bottom.
-==============================================================*/
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/02 Advisory
+NOTE: Libref WH_ADHOC was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/08 Adhoc
+NOTE: Libref WH_IFRS was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/10 IFRS17
+NOTE: Libref W_POL was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/01 Policy
+NOTE: Libref W_ROLE was successfully assigned as follows: 
+      Engine:        V9 
+2                                                          The SAS System                               14:13 Tuesday, April 7, 2026
 
-/*--------------------------------------------------------------
-  !! FILL IN YOUR VALUES HERE BEFORE RUNNING !!
---------------------------------------------------------------*/
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/02 Role
+NOTE: Libref W_COVER was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/03 Cover
+NOTE: Libref W_PERS was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/04 Personal
+NOTE: Libref W_CONT was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/05 Contact
+NOTE: Libref W_COL was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/06 Collections
+NOTE: Libref W_CLM was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/07 Claims
+NOTE: Libref W_PRD was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/08 Product
+NOTE: Libref W_LOOKUP was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/09 Lookups
+NOTE: Libref W_TRANS was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/02 Common/99 Transactional
+NOTE: Libref W_RAWUVW was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw UserVW
+NOTE: Libref W_RAWUVL was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw UserVW/LOGS
+NOTE: Libref W_RUNMET was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/00 Metadata
+NOTE: Libref W_R_METD refers to the same physical library as W_RUNMD1.
+NOTE: Libref W_R_METD was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/Run Meta/Daily Logs
+NOTE: Libref W_REP_L was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/04 Reporting Summaries/Lookups
+NOTE: Libref W_REP_R was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/04 Reporting Summaries/Raw
+NOTE: Libref W_REP_M was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/04 Reporting Summaries/Logs
+NOTE: Libref W_ENHRAW was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/03 Enhanced/Underlying Data
+NOTE: Libref W_WORKF was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Workflow
+NOTE: Libref W_WF_CLM was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Workflow/Claims
+NOTE: Libref W_REPORT refers to the same physical library as WH_REP.
+NOTE: Libref W_REPORT was successfully assigned as follows: 
+3                                                          The SAS System                               14:13 Tuesday, April 7, 2026
 
-/* --- BASELINE (March 16, 2026) --- */
-%let bf_baseline_date    = 20260316;    /* do not change — YYYYMMDD, no hyphens */
-%let bf_baseline_claims  = 678;
-%let bf_baseline_ocr     = 3388533;
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/04 Reporting Summaries
+NOTE: Libref W_RUNMD1 refers to the same physical library as W_R_METD.
+NOTE: Libref W_RUNMD1 was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/Run Meta/Daily Logs
+NOTE: Libref W_RUNMD2 was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw ALIS/Run Meta/Daily Logs
+NOTE: Libref W_RUNMD3 was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw MINT/Daily Logs
+NOTE: Libref W_RUNMD4 was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw DWS-Sybase/Daily Logs
+NOTE: Libref W_RUNMD4 was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw DWS-Sybase/Daily Logs
+NOTE: Libref W_RAW_CL was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Credit Life Product table
+NOTE: Libref W_RAW_CL was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Credit Life Product table
+NOTE: Libref W_RAW_ST was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Short Term Product table
+NOTE: Libref W_ALIS was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/CL/InForce_Stacks/Daily/Common Tables
+NOTE: Libref W_IDIT refers to the same physical library as WH_SS.
+NOTE: Libref W_IDIT was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/IDIT
+NOTE: Libref W_MTV was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/MTV
+NOTE: Libref W_IDIT_T was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/IDIT_TEST
+NOTE: Libref W_FICA was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance/Business Intelligence/AD_HOC/New folder
+NOTE: Libref W_NAM refers to the same physical library as WH_SS_NM.
+NOTE: Libref W_NAM was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/IDIT_NAMIBIA
+NOTE: Libref WH_SS_NM refers to the same physical library as W_NAM.
+NOTE: Libref WH_SS_NM was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/IDIT_NAMIBIA
+NOTE: Libref STI_PBI was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref STI_LOC was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref STI_OPS was successfully assigned as follows: 
+4                                                          The SAS System                               14:13 Tuesday, April 7, 2026
 
-/* --- WEEK 1 --- */
-%let bf_week1_date       = 20260323;    /* replace if actual run date differs — YYYYMMDD */
-%let bf_week1_open       = 397;
-%let bf_week1_ocr        = 2013784;
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref STI_META was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref STI_SC was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref AN_OPS was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref STI_STAG was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref STI_DBO was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref STI_AN was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref CA was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref STI_SL was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref STI_COM was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref STI_CA was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref STI_FLOW was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref LIFE_OPS was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref STI_BGA was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref STI_LC was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref STI_BEV was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref STI_CAR was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref MVCLAIM was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref HSL_AIP was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref CON was successfully assigned as follows: 
+      Engine:        ODBC 
+5                                                          The SAS System                               14:13 Tuesday, April 7, 2026
 
-/* --- WEEK 2 --- */
-%let bf_week2_date       = 20260330;    /* replace if actual run date differs — YYYYMMDD */
-%let bf_week2_open       = 249;
-%let bf_week2_ocr        = 1590398;
+      Physical Name: 
+NOTE: Libref STI_RES was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: Libref STI_WER was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.17 seconds
+      cpu time            0.11 seconds
+      
 
-/* --- WEEK 3 --- */
-%let bf_week3_date       = 20260406;    /* replace if actual run date differs — YYYYMMDD */
-%let bf_week3_open       = 197;
-%let bf_week3_ocr        = 1256864;
+NOTE: No existing rows found for the back-fill range. Proceeding.
+NOTE: The quoted string currently being processed has become more than 262 characters long.  You might have unbalanced quotation 
+      marks.
+ERROR: CLI execute error: [SAS][ODBC SQL Server Wire Protocol driver][Microsoft SQL Server]Conversion failed when converting date 
+       and/or time from character string.
+NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
+NOTE: Statement not executed due to NOEXEC option.
+NOTE: Statement not executed due to NOEXEC option.
+NOTE: Statement not executed due to NOEXEC option.
+NOTE: Statement not executed due to NOEXEC option.
+NOTE: The SAS System stopped processing this step because of errors.
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.03 seconds
+      cpu time            0.02 seconds
+      
+ERROR: One or more INSERT statements failed. SQLXRC=22007 MSG=[SAS][ODBC SQL Server Wire Protocol driver][Microsoft SQL 
+      Server]Conversion failed when converting date and/or time from character string.
+ERROR: The %ABORT statement is not valid in open code.
+NOTE: Back-fill complete. Baseline + Week 1 + Week 2 + Week 3 inserted (16 Mar – 06 Apr 2026).
 
-/*--------------------------------------------------------------
-  Derived metrics — calculated automatically, do not edit
---------------------------------------------------------------*/
 
-/* Week 1 derived */
-%let bf_week1_cumul_closed     = %sysevalf(&bf_baseline_claims. - &bf_week1_open.);
-%let bf_week1_closed_this_week = %sysevalf(&bf_baseline_claims. - &bf_week1_open.);  /* vs baseline */
-%let bf_week1_ocr_reduced      = %sysevalf(&bf_baseline_ocr.    - &bf_week1_ocr.);
-%let bf_week1_pct_closed       = %sysevalf(&bf_week1_cumul_closed. / &bf_baseline_claims.);
+NOTE: No rows were selected.
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.16 seconds
+      cpu time            0.12 seconds
+      
 
-/* Week 2 derived */
-%let bf_week2_cumul_closed     = %sysevalf(&bf_baseline_claims. - &bf_week2_open.);
-%let bf_week2_closed_this_week = %sysevalf(&bf_week1_open.      - &bf_week2_open.);
-%let bf_week2_ocr_reduced      = %sysevalf(&bf_week1_ocr.       - &bf_week2_ocr.);
-%let bf_week2_pct_closed       = %sysevalf(&bf_week2_cumul_closed. / &bf_baseline_claims.);
-
-/* Week 3 derived */
-%let bf_week3_cumul_closed     = %sysevalf(&bf_baseline_claims. - &bf_week3_open.);
-%let bf_week3_closed_this_week = %sysevalf(&bf_week2_open.      - &bf_week3_open.);
-%let bf_week3_ocr_reduced      = %sysevalf(&bf_week2_ocr.       - &bf_week3_ocr.);
-%let bf_week3_pct_closed       = %sysevalf(&bf_week3_cumul_closed. / &bf_baseline_claims.);
-
-/*--------------------------------------------------------------
-  1. Libname
---------------------------------------------------------------*/
-%include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
-
-%macro logging(libname, database, schema, server);
-LIBNAME &libname odbc noprompt="
-  Driver=MSSQL;
-  AnsiNPW=1;
-  AuthenticationMethod=10;
-  ApplicationUsingThreads=1;
-  BulkLoadOptions=2;
-  Database=&database;
-  FetchTWFSasTime=1;
-  HostName=&server;
-  PortNumber=1433;
-  UID=&User.;
-  PWD=&FNB_Login."
-Schema=&schema;
-%mend;
-
-%logging(STI_WER, FNB_STI_Analytics, Claims, LFE-RBPREATLDB1);
-
-/*--------------------------------------------------------------
-  2. Safety check — abort if March/April 2026 rows already exist
---------------------------------------------------------------*/
-proc sql noprint;
-  select count(*)
-  into :existing_rows trimmed
-  from STI_WER.OCR_Weekly_Tracker
-  where RunDate between '16Mar2026'd and '06Apr2026'd;
-quit;
-
-%if &existing_rows. > 0 %then %do;
-  %put ERROR: &existing_rows. row(s) already exist in OCR_Weekly_Tracker for the back-fill date range (16 Mar – 06 Apr 2026).;
-  %put ERROR: Back-fill aborted. Delete existing rows first if you want to re-run.;
-  %abort cancel;
-%end;
-
-%put NOTE: No existing rows found for the back-fill range. Proceeding.;
-
-/*--------------------------------------------------------------
-  3. Pre-resolve all values into simple macro variables
-     so that no macro functions sit inside quoted SQL strings.
---------------------------------------------------------------*/
-
-/* Numeric values as plain strings */
-%let r_baseline_claims  = &bf_baseline_claims.;
-%let r_baseline_ocr     = &bf_baseline_ocr.;
-%let r_w1_open          = &bf_week1_open.;
-%let r_w1_ocr           = &bf_week1_ocr.;
-%let r_w1_cumcl         = &bf_week1_cumul_closed.;
-%let r_w1_clwk          = &bf_week1_closed_this_week.;
-%let r_w1_ocrred        = &bf_week1_ocr_reduced.;
-%let r_w1_pct           = &bf_week1_pct_closed.;
-%let r_w2_open          = &bf_week2_open.;
-%let r_w2_ocr           = &bf_week2_ocr.;
-%let r_w2_cumcl         = &bf_week2_cumul_closed.;
-%let r_w2_clwk          = &bf_week2_closed_this_week.;
-%let r_w2_ocrred        = &bf_week2_ocr_reduced.;
-%let r_w2_pct           = &bf_week2_pct_closed.;
-%let r_w3_open          = &bf_week3_open.;
-%let r_w3_ocr           = &bf_week3_ocr.;
-%let r_w3_cumcl         = &bf_week3_cumul_closed.;
-%let r_w3_clwk          = &bf_week3_closed_this_week.;
-%let r_w3_ocrred        = &bf_week3_ocr_reduced.;
-%let r_w3_pct           = &bf_week3_pct_closed.;
-
-/* Convert YYYYMMDD to YYYY-MM-DD so SQL Server CAST(... AS DATE) is unambiguous */
-/* This avoids CONVERT style-code 112 inside a quoted EXECUTE block (262-char bug) */
-%let r_d0 = %sysfunc(substr(&bf_baseline_date.,1,4))-%sysfunc(substr(&bf_baseline_date.,5,2))-%sysfunc(substr(&bf_baseline_date.,7,2));
-%let r_d1 = %sysfunc(substr(&bf_week1_date.,1,4))-%sysfunc(substr(&bf_week1_date.,5,2))-%sysfunc(substr(&bf_week1_date.,7,2));
-%let r_d2 = %sysfunc(substr(&bf_week2_date.,1,4))-%sysfunc(substr(&bf_week2_date.,5,2))-%sysfunc(substr(&bf_week2_date.,7,2));
-%let r_d3 = %sysfunc(substr(&bf_week3_date.,1,4))-%sysfunc(substr(&bf_week3_date.,5,2))-%sysfunc(substr(&bf_week3_date.,7,2));
-
-/*--------------------------------------------------------------
-  4. Insert all four rows in one pass
---------------------------------------------------------------*/
-proc sql;
-  connect to odbc as sqlsvr (
-    noprompt="Driver=MSSQL;
-              AnsiNPW=1;
-              AuthenticationMethod=10;
-              Database=FNB_STI_Analytics;
-              HostName=LFE-RBPREATLDB1;
-              PortNumber=1433;
-              UID=&User.;
-              PWD=&FNB_Login."
-  );
-
-  /* --- Baseline row --- */
-  /* NOTE: CAST('YYYY-MM-DD' AS DATE) is unambiguous for SQL Server — avoids   */
-  /* the CONVERT style-code 112 that triggered the 262-char / quote-mangling bug */
-  execute (
-    INSERT INTO FNB_STI_Analytics.Claims.OCR_Weekly_Tracker
-      (WeekLabel, RunDate, Baseline_Claims, Open_Claims,
-       Current_OCR_Amt, Cumul_Closed, Closed_This_Week,
-       OCR_Reduced_This_Week, Pct_Claims_Closed)
-    VALUES (
-      'Baseline',
-      CAST('&r_d0.' AS DATE),
-      &r_baseline_claims.,
-      &r_baseline_claims.,
-      &r_baseline_ocr.,
-      0, 0, 0, 0.0
-    )
-  ) by sqlsvr;
-
-  /* --- Week 1 row --- */
-  execute (
-    INSERT INTO FNB_STI_Analytics.Claims.OCR_Weekly_Tracker
-      (WeekLabel, RunDate, Baseline_Claims, Open_Claims,
-       Current_OCR_Amt, Cumul_Closed, Closed_This_Week,
-       OCR_Reduced_This_Week, Pct_Claims_Closed)
-    VALUES (
-      'Week 1',
-      CAST('&r_d1.' AS DATE),
-      &r_baseline_claims.,
-      &r_w1_open.,
-      &r_w1_ocr.,
-      &r_w1_cumcl.,
-      &r_w1_clwk.,
-      &r_w1_ocrred.,
-      &r_w1_pct.
-    )
-  ) by sqlsvr;
-
-  /* --- Week 2 row --- */
-  execute (
-    INSERT INTO FNB_STI_Analytics.Claims.OCR_Weekly_Tracker
-      (WeekLabel, RunDate, Baseline_Claims, Open_Claims,
-       Current_OCR_Amt, Cumul_Closed, Closed_This_Week,
-       OCR_Reduced_This_Week, Pct_Claims_Closed)
-    VALUES (
-      'Week 2',
-      CAST('&r_d2.' AS DATE),
-      &r_baseline_claims.,
-      &r_w2_open.,
-      &r_w2_ocr.,
-      &r_w2_cumcl.,
-      &r_w2_clwk.,
-      &r_w2_ocrred.,
-      &r_w2_pct.
-    )
-  ) by sqlsvr;
-
-  /* --- Week 3 row --- */
-  execute (
-    INSERT INTO FNB_STI_Analytics.Claims.OCR_Weekly_Tracker
-      (WeekLabel, RunDate, Baseline_Claims, Open_Claims,
-       Current_OCR_Amt, Cumul_Closed, Closed_This_Week,
-       OCR_Reduced_This_Week, Pct_Claims_Closed)
-    VALUES (
-      'Week 3',
-      CAST('&r_d3.' AS DATE),
-      &r_baseline_claims.,
-      &r_w3_open.,
-      &r_w3_ocr.,
-      &r_w3_cumcl.,
-      &r_w3_clwk.,
-      &r_w3_ocrred.,
-      &r_w3_pct.
-    )
-  ) by sqlsvr;
-
-  disconnect from sqlsvr;
-quit;
-
-/* Check for SQL errors — &sqlxrc. is set by EXECUTE...BY after each step */
-%if &sqlxrc. ne 0 %then %do;
-  %put ERROR: One or more INSERT statements failed. SQLXRC=&sqlxrc. MSG=&sqlxmsg.;
-  %abort cancel;
-%end;
-
-%put NOTE: Back-fill complete. Baseline + Week 1 + Week 2 + Week 3 inserted (16 Mar – 06 Apr 2026).;
-
-/*--------------------------------------------------------------
-  4. Verification — print what was inserted
---------------------------------------------------------------*/
-proc sql;
-  title "OCR_Weekly_Tracker — March/April 2026 Back-fill Verification";
-  select WeekLabel,
-         RunDate        format=date9.,
-         Baseline_Claims,
-         Open_Claims,
-         Current_OCR_Amt       format=comma18.2,
-         Cumul_Closed,
-         Closed_This_Week,
-         OCR_Reduced_This_Week format=comma18.2,
-         Pct_Claims_Closed     format=percent8.2
-  from STI_WER.OCR_Weekly_Tracker
-  where RunDate between '16Mar2026'd and '06Apr2026'd
-  order by RunDate;
-  title;
-quit;
