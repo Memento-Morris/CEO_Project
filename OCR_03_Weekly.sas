@@ -8,6 +8,14 @@
            5. Sends email
   SCHEDULE: Weekly — every Monday (or agreed day), after the
             16th baseline has run for that month.
+
+  UPDATED:
+    - Week number now derived from CycleID (not calendar month)
+      so the job is safe to run across month boundaries.
+    - Audit logging via %ocr_log (requires OCR_00_Logging.sas).
+    - Both %include paths below must be correct before running.
+
+  EACH NEW CYCLE: Update &baseline_date. and confirm &cycle_id.
 ==============================================================*/
 
 /*--------------------------------------------------------------
@@ -34,25 +42,61 @@ Schema=&schema;
 %logging(STI_WER, FNB_STI_Analytics, Claims, LFE-RBPREATLDB1);
 
 /*--------------------------------------------------------------
-  2. Run date & week number
+  Load logging macro — must come after libname is established
+  so %ocr_log can INSERT into STI_WER.OCR_Run_Log.
+--------------------------------------------------------------*/
+%include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/OCR_00_Logging.sas";
+
+%ocr_log(JOB_START, STARTED, info=Weekly OCR job initiated);
+
+/*--------------------------------------------------------------
+  2. Run date
 --------------------------------------------------------------*/
 %if not %symexist(rd) %then %do;
   %let rd = %sysfunc(today(), yymmddn8.);
 %end;
 
-/* Determine week number = rows already in tracker this month + 1
-   (Baseline row counts as row 0 effectively, Week 1 = first weekly run) */
+/*--------------------------------------------------------------
+  3. Determine current cycle and week number.
+
+  KEY CHANGE from previous version:
+    Old logic used year(RunDate) = today's year AND
+    month(RunDate) = today's month.  This broke when a run
+    happened in a different calendar month to the baseline
+    (e.g. baseline March 16, run April 2 => no rows found,
+    week_num resolved to 0).
+
+    New logic:
+      - cycle_id  is set from the BASELINE DATE (hardcoded).
+      - week_num  = number of rows already in tracker for this
+                    CycleID (Baseline counts as row 0, so the
+                    count equals the next week number to insert).
+      - All queries filter by CycleID, not by calendar month.
+
+  EACH NEW CYCLE: update baseline_date below.
+  cycle_id is derived automatically — do not edit it manually.
+--------------------------------------------------------------*/
+%let baseline_date = '16Mar2026'd;
+%let cycle_id      = %sysfunc(putn(&baseline_date., yymmn6.));  /* => 202603 */
+
+%put NOTE: Cycle ID   = &cycle_id.;
+
 proc sql noprint;
+  /*----------------------------------------------------------
+    Count rows already in tracker for this cycle.
+    Baseline row = WeekSequence 0, so count of all rows
+    = the next WeekSequence to insert = week_num.
+  ----------------------------------------------------------*/
   select count(*)
   into :existing_rows trimmed
   from STI_WER.OCR_Weekly_Tracker
-  where YEAR(RunDate)  = %sysfunc(year(%sysfunc(today())))
-    and MONTH(RunDate) = %sysfunc(month(%sysfunc(today())));
+  where CycleID = "&cycle_id.";
 
-  /* Baseline row is already there, so week_num = existing rows (not +1) */
   %let week_num = &existing_rows.;
 
-  /* Pull baseline stats for this month */
+  /*----------------------------------------------------------
+    Pull baseline stats for this cycle.
+  ----------------------------------------------------------*/
   select Baseline_Claims,
          Current_OCR_Amt,
          Open_Claims
@@ -60,30 +104,37 @@ proc sql noprint;
        :baseline_ocr    trimmed,
        :prev_open       trimmed
   from STI_WER.OCR_Weekly_Tracker
-  where YEAR(RunDate)  = %sysfunc(year(%sysfunc(today())))
-    and MONTH(RunDate) = %sysfunc(month(%sysfunc(today())))
-    and WeekLabel      = 'Baseline';
+  where CycleID  = "&cycle_id."
+    and WeekLabel = 'Baseline';
 
-  /* Pull last week's OCR and open count for delta */
+  /*----------------------------------------------------------
+    Pull the most recent week's values for delta calculation.
+    (This is whichever row has the latest RunDate in this cycle,
+    which may be in a different calendar month — that's fine.)
+  ----------------------------------------------------------*/
   select Open_Claims,
          Current_OCR_Amt
   into :prev_open    trimmed,
        :prev_ocr_amt trimmed
   from STI_WER.OCR_Weekly_Tracker
-  where RunDate = (
-      select max(RunDate)
-      from STI_WER.OCR_Weekly_Tracker
-      where YEAR(RunDate)  = %sysfunc(year(%sysfunc(today())))
-        and MONTH(RunDate) = %sysfunc(month(%sysfunc(today())))
-  );
+  where CycleID = "&cycle_id."
+    and RunDate  = (
+        select max(RunDate)
+        from STI_WER.OCR_Weekly_Tracker
+        where CycleID = "&cycle_id."
+    );
 quit;
 
 %put NOTE: Week number  = &week_num.;
 %put NOTE: Prev open    = &prev_open.;
 %put NOTE: Prev OCR amt = &prev_ocr_amt.;
 
+%ocr_log(WEEK_RESOLVE, SUCCESS,
+         records=&week_num.,
+         info=CycleID=&cycle_id. PrevOpen=&prev_open.);
+
 /*--------------------------------------------------------------
-  3. Pull snapshot — Motor + Retail from Investigate_Claims
+  4. Pull snapshot — Motor + Retail from Investigate_Claims
 --------------------------------------------------------------*/
 data work.snapshot;
   set STI_WER.Investigate_Claims(
@@ -94,8 +145,10 @@ data work.snapshot;
   if upcase(strip(Division))         ne 'RETAIL' then delete;
 run;
 
+%ocr_log(EXTRACT_SNAPSHOT, SUCCESS, records=&sysnobs.);
+
 /*--------------------------------------------------------------
-  4. Pull current estimates from live view
+  5. Pull current estimates from live view
 --------------------------------------------------------------*/
 data work.current_est;
   set STI_WER.vw_OpsClaimsReport(
@@ -103,8 +156,10 @@ data work.current_est;
   );
 run;
 
+%ocr_log(EXTRACT_ESTIMATES, SUCCESS, records=&sysnobs.);
+
 /*--------------------------------------------------------------
-  5. Build final claims detail (not paid off only)
+  6. Build final claims detail (not paid off only)
 --------------------------------------------------------------*/
 proc sql;
   create table work.MotorClaims_Final as
@@ -122,8 +177,10 @@ proc sql;
   order by c.ReportMonth desc;
 quit;
 
+%ocr_log(BUILD_CLAIMS_DETAIL, SUCCESS, records=&sqlobs.);
+
 /*--------------------------------------------------------------
-  6. Compute this week's summary metrics
+  7. Compute this week's summary metrics
 --------------------------------------------------------------*/
 proc sql noprint;
   select count(distinct ClaimCode),
@@ -147,61 +204,68 @@ quit;
 %put NOTE: OCR reduced      = &ocr_reduced.;
 %put NOTE: Pct closed       = &pct_closed.;
 
+%ocr_log(CALC_METRICS, SUCCESS,
+         records=&open_this_week.,
+         metric=&ocr_this_week.);
+
 /*--------------------------------------------------------------
-  7. Insert weekly row into tracker
+  8. Insert weekly row into tracker.
+     Uses PROC SQL INSERT via STI_WER libref — SAS date integer
+     passed directly, no quoted date strings in the SQL.
+     Now includes CycleID and WeekSequence on every insert.
 --------------------------------------------------------------*/
-proc sql;
-  connect to odbc as sqlsvr (
-    noprompt="Driver=MSSQL;
-              AnsiNPW=1;
-              AuthenticationMethod=10;
-              Database=FNB_STI_Analytics;
-              HostName=LFE-RBPREATLDB1;
-              PortNumber=1433;
-              UID=&User.;
-              PWD=&FNB_Login."
+%let sas_rd = %sysfunc(inputn(&rd., yymmdd8.));
+
+proc sql noprint;
+  insert into STI_WER.OCR_Weekly_Tracker
+    (WeekLabel, RunDate, CycleID, WeekSequence,
+     Baseline_Claims, Open_Claims,
+     Current_OCR_Amt, Cumul_Closed, Closed_This_Week,
+     OCR_Reduced_This_Week, Pct_Claims_Closed)
+  values (
+    "Week &week_num.",
+    &sas_rd.,
+    "&cycle_id.",
+    &week_num.,
+    &baseline_claims.,
+    &open_this_week.,
+    &ocr_this_week.,
+    &cumul_closed.,
+    &closed_this_week.,
+    &ocr_reduced.,
+    &pct_closed.
   );
-
-  execute (
-    INSERT INTO FNB_STI_Analytics.Claims.OCR_Weekly_Tracker
-      (WeekLabel, RunDate, Baseline_Claims, Open_Claims,
-       Current_OCR_Amt, Cumul_Closed, Closed_This_Week,
-       OCR_Reduced_This_Week, Pct_Claims_Closed)
-    VALUES (
-      %unquote('Week &week_num.'),
-      CAST(GETDATE() AS DATE),
-      %unquote(&baseline_claims.),
-      %unquote(&open_this_week.),
-      %unquote(&ocr_this_week.),
-      %unquote(&cumul_closed.),
-      %unquote(&closed_this_week.),
-      %unquote(&ocr_reduced.),
-      %unquote(&pct_closed.)
-    )
-  ) by sqlsvr;
-
-  disconnect from sqlsvr;
 quit;
 
-%put NOTE: Week &week_num. row inserted into OCR_Weekly_Tracker.;
+/* Abort if insert failed — avoids silently emailing stale data */
+%if &sqlrc. ne 0 %then %do;
+  %ocr_log(INSERT_TRACKER, FAILED,
+           error=INSERT into OCR_Weekly_Tracker failed SQLRC=&sqlrc.);
+  %put ERROR: INSERT into OCR_Weekly_Tracker failed. SQLRC=&sqlrc.. Aborting.;
+  %abort cancel;
+%end;
+
+%ocr_log(INSERT_TRACKER, SUCCESS);
+%put NOTE: Week &week_num. row inserted into OCR_Weekly_Tracker (CycleID=&cycle_id.).;
 
 /*--------------------------------------------------------------
-  8. Pull full tracker for this month (for report + charts)
+  9. Pull full tracker for this cycle (for report + charts).
+     Filters by CycleID — not by calendar month — so all weeks
+     appear correctly even when the cycle spans two months.
 --------------------------------------------------------------*/
 proc sql;
-  create table work.tracker_this_month as
+  create table work.tracker_this_cycle as
   select *
   from STI_WER.OCR_Weekly_Tracker
-  where YEAR(RunDate)  = %sysfunc(year(%sysfunc(today())))
-    and MONTH(RunDate) = %sysfunc(month(%sysfunc(today())))
-  order by RunDate;
+  where CycleID = "&cycle_id."
+  order by WeekSequence;
 quit;
 
 /*--------------------------------------------------------------
-  9. Pivot tracker wide (metrics as rows, weeks as columns)
-     Matches the layout of your Excel table
+  10. Pivot tracker wide (metrics as rows, weeks as columns)
+      Matches the layout of your Excel table.
 --------------------------------------------------------------*/
-proc transpose data=work.tracker_this_month
+proc transpose data=work.tracker_this_cycle
                out=work.tracker_wide(drop=_label_)
                prefix=Col_;
   id WeekLabel;
@@ -209,21 +273,19 @@ proc transpose data=work.tracker_this_month
       Closed_This_Week OCR_Reduced_This_Week Pct_Claims_Closed;
 run;
 
-/* Rename _NAME_ to Metric */
 data work.tracker_wide;
   set work.tracker_wide;
   rename _NAME_ = Metric;
 run;
 
 /*--------------------------------------------------------------
-  10. Charts
+  11. Charts
 --------------------------------------------------------------*/
-/* Output charts to PNG files for embedding in email */
 ods graphics on / width=800px height=400px imagename="ocr_trend" outputfmt=png
                imagepath="/data/fnbinsurance/Short_Term/Monitoring/";
 
 /* Chart 1 — OCR Amount declining over weeks */
-proc sgplot data=work.tracker_this_month;
+proc sgplot data=work.tracker_this_cycle;
   series x=WeekLabel y=Current_OCR_Amt /
     markers
     markerattrs=(symbol=circlefilled size=10 color=darkblue)
@@ -232,7 +294,7 @@ proc sgplot data=work.tracker_this_month;
         grid
         valuesformat=comma18.;
   xaxis label="Week" discreteorder=data;
-  title "OCR Amount Movement — Motor Retail";
+  title "OCR Amount Movement -- Motor Retail (CycleID &cycle_id.)";
   footnote j=left "Baseline: R %sysfunc(putn(&baseline_ocr., comma18.2))  |  "
                   "Claims: &baseline_claims.  |  Run: &rd.";
 run;
@@ -240,23 +302,26 @@ run;
 ods graphics on / imagename="claims_closed";
 
 /* Chart 2 — Claims closed per week */
-proc sgplot data=work.tracker_this_month;
+proc sgplot data=work.tracker_this_cycle;
   vbar WeekLabel / response=Closed_This_Week
     fillattrs=(color=steelblue)
     datalabel
     datalabelattrs=(size=10 weight=bold);
   yaxis label="Claims Closed This Week" grid;
   xaxis label="Week" discreteorder=data;
-  title "Claims Closed Per Week — Motor Retail";
+  title "Claims Closed Per Week -- Motor Retail (CycleID &cycle_id.)";
 run;
 
 ods graphics off;
 
+%ocr_log(CHARTS, SUCCESS);
+
 /*--------------------------------------------------------------
-  11. Export to Excel — 3 sheets:
+  12. Export to Excel — 4 sheets:
       Sheet 1: Summary tracker table
       Sheet 2: Claims detail
-      Sheet 3: (Charts embedded manually or via ODS Excel)
+      Sheet 3: OCR Trend Chart
+      Sheet 4: Claims Closed Chart
 --------------------------------------------------------------*/
 %let outfile = /data/fnbinsurance/Short_Term/Monitoring/MotorOCR_Tracker_&rd..xlsx;
 
@@ -269,12 +334,12 @@ ods excel file="&outfile."
     flow              = "tables"
   );
 
-  title "OCR Weekly Performance Tracker — Motor Retail — Week &week_num.";
+  title "OCR Weekly Performance Tracker -- Motor Retail -- Week &week_num. (Cycle &cycle_id.)";
   proc print data=work.tracker_wide noobs label; run;
 
 ods excel options(sheet_name="Claims Detail" autofilter="yes");
 
-  title "Motor Retail Claims Under Investigation — Week &week_num.";
+  title "Motor Retail Claims Under Investigation -- Week &week_num.";
   proc print data=work.MotorClaims_Final noobs label;
     format Estimate_OCR_When_Flagged
            Current_Estimate_OCR
@@ -282,34 +347,35 @@ ods excel options(sheet_name="Claims Detail" autofilter="yes");
   run;
 
 ods excel options(sheet_name="OCR Trend Chart");
-  proc sgplot data=work.tracker_this_month;
+  proc sgplot data=work.tracker_this_cycle;
     series x=WeekLabel y=Current_OCR_Amt /
       markers
       markerattrs=(symbol=circlefilled size=10 color=darkblue)
       lineattrs=(thickness=2 color=darkblue);
     yaxis label="Current OCR Amount (R)" grid valuesformat=comma18.;
     xaxis label="Week" discreteorder=data;
-    title "OCR Amount Movement — Motor Retail";
+    title "OCR Amount Movement -- Motor Retail";
   run;
 
 ods excel options(sheet_name="Claims Closed Chart");
-  proc sgplot data=work.tracker_this_month;
+  proc sgplot data=work.tracker_this_cycle;
     vbar WeekLabel / response=Closed_This_Week
       fillattrs=(color=steelblue)
       datalabel
       datalabelattrs=(size=10 weight=bold);
     yaxis label="Claims Closed This Week" grid;
     xaxis label="Week" discreteorder=data;
-    title "Claims Closed Per Week — Motor Retail";
+    title "Claims Closed Per Week -- Motor Retail";
   run;
 
 ods excel close;
 title; footnote;
 
 %put NOTE: Excel report written to &outfile.;
+%ocr_log(EXPORT_EXCEL, SUCCESS, info=&outfile.);
 
 /*--------------------------------------------------------------
-  12. Email
+  13. Email
 --------------------------------------------------------------*/
 filename outbox email;
 
@@ -317,7 +383,7 @@ data _null_;
   file outbox
     to      = ("morris.nkomo@fnb.co.za")
     from    = ("FNB ST Analytics <fnbst-analytics@fnb.co.za>")
-    subject = "Motor OCR Tracker — Week &week_num. (&rd.)"
+    subject = "Motor OCR Tracker -- Week &week_num. (&rd.) [Cycle &cycle_id.]"
     attach  = (
       "&outfile."
       content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -336,9 +402,9 @@ data _null_;
   put " ";
   put "Please find attached the Motor Retail OCR Tracker for Week &week_num..";
   put " ";
-  put "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
-  put "  WEEK &week_num. SUMMARY";
-  put "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
+  put "=====================================";
+  put "  WEEK &week_num. SUMMARY  (Cycle &cycle_id.)";
+  put "=====================================";
   put "  Baseline Claims         : " baseline_fmt;
   put "  Open Claims This Week   : " open_fmt;
   put "  Closed This Week        : " closed_fmt;
@@ -347,10 +413,10 @@ data _null_;
   put " ";
   put "  Current OCR Amount      : R " ocr_fmt;
   put "  OCR Reduced This Week   : R " reduced_fmt;
-  put "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
+  put "=====================================";
   put " ";
   put "The attached Excel file contains:";
-  put "  - Summary tracker table (all weeks this month)";
+  put "  - Summary tracker table (all weeks this cycle)";
   put "  - Full claims detail list";
   put "  - OCR Amount trend chart";
   put "  - Claims closed per week chart";
@@ -362,3 +428,12 @@ data _null_;
 run;
 
 %put NOTE: Email sent for Week &week_num.;
+
+%ocr_log(EMAIL, SUCCESS,
+         records=&open_this_week.,
+         metric=&ocr_this_week.,
+         info=Week &week_num. email sent to morris.nkomo@fnb.co.za);
+
+%ocr_log(JOB_END, SUCCESS,
+         records=&open_this_week.,
+         metric=&ocr_this_week.);
