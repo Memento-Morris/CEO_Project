@@ -1,10 +1,4 @@
-/*==============================================================
-  FILE: OCR_00_Logging.sas
-  PURPOSE: Audit logging macro for OCR tracking jobs.
-           %include this at the top of OCR_03_Weekly.sas,
-           after the libname is established.
-
-  USAGE:1                                                          The SAS System                             20:33 Saturday, April 11, 2026
+1                                                          The SAS System                             20:33 Saturday, April 11, 2026
 
 NOTE: Writing HTML5(EGHTML) Body file: EGHTML
 84             );
@@ -31,59 +25,3 @@ ERROR: CycleID=202603 already exists in OCR_Cycle_Control.
 ERROR: Backfill aborted. If this cycle needs to be corrected, adjust
 ERROR: the existing rows directly rather than re-running the backfill.
 ERROR: Execution canceled by an %ABORT CANCEL statement.
-
-    %ocr_log(STEP_NAME, STATUS)
-    %ocr_log(STEP_NAME, STATUS, records=123, metric=456789.00)
-    %ocr_log(STEP_NAME, FAILED, error=INSERT failed SQLRC=8)
-
-  VALID STATUS VALUES: STARTED / SUCCESS / WARNING / FAILED
-
-  NOTES:
-    - week_num and cycle_id are read from macro scope if they
-      exist at call time; if not yet set, they log as missing.
-    - Do NOT wrap in timing logic across separate macro calls —
-      SAS macro variables are not block-scoped. Timing can be
-      derived from RunDate in the DB (DATEDIFF between log rows).
-==============================================================*/
-
-%macro ocr_log(step, status, records=, metric=, error=, info=);
-
-    /* Resolve context variables defensively — they may not
-       exist yet if logging is called before they are set.    */
-    %local _week _cycle;
-
-    %if %symexist(week_num)  %then %let _week  = &week_num.;
-    %else                          %let _week  = .;
-
-    %if %symexist(cycle_id)  %then %let _cycle = "&cycle_id.";
-    %else                          %let _cycle = NULL;
-
-    proc sql noprint;
-        insert into STI_WER.OCR_Run_Log
-            (WeekNum,
-             CycleID,
-             ProcessStep,
-             Status,
-             RecordsProcessed,
-             MetricValue,
-             ErrorMessage,
-             AdditionalInfo)
-        values (
-            &_week.,
-            &_cycle.,
-            "&step.",
-            "&status.",
-            %if %length(&records.) > 0 %then &records.; %else .;,
-            %if %length(&metric.)  > 0 %then &metric.;  %else .;,
-            %if %length(&error.)   > 0 %then "&error."; %else NULL;,
-            %if %length(&info.)    > 0 %then "&info.";  %else NULL;
-        );
-    quit;
-
-    /* Echo to SAS log for immediate visibility */
-    %put NOTE: [OCR_LOG] Step=&step. | Status=&status.
-         %if %length(&records.) > 0 %then | Records=&records.;
-         %if %length(&metric.)  > 0 %then | Metric=&metric.;
-         %if %length(&error.)   > 0 %then | Error=&error.;;
-
-%mend ocr_log;
