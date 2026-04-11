@@ -21,7 +21,17 @@ NOTE: PROCEDURE SQL used (Total process time):
       cpu time            0.08 seconds
       
 
-ERROR: CycleID=202603 already exists in OCR_Cycle_Control.
-ERROR: Backfill aborted. If this cycle needs to be corrected, adjust
-ERROR: the existing rows directly rather than re-running the backfill.
+NOTE: No existing record for CycleID=202603. Proceeding.
+ERROR: CLI execute error: [SAS][ODBC SQL Server Wire Protocol driver][Microsoft SQL Server]Cannot insert the value NULL into column 
+       'BaselineDate', table 'FNB_STI_Analytics.Claims.OCR_Cycle_Control'; column does not allow nulls. INSERT fails. : [SAS][ODBC 
+       SQL Server Wire Protocol driver][Microsoft SQL Server]The statement has been terminated.
+NOTE: This insert failed while attempting to add data from VALUES clause 1 to the data set.
+ERROR: ROLLBACK issued due to errors for data set STI_WER.OCR_Cycle_Control.DATA.
+NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
+NOTE: The SAS System stopped processing this step because of errors.
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.17 seconds
+      cpu time            0.11 seconds
+      
+ERROR: INSERT into OCR_Cycle_Control failed. SQLRC=24.
 ERROR: Execution canceled by an %ABORT CANCEL statement.
