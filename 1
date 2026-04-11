@@ -4,7 +4,34 @@
            %include this at the top of OCR_03_Weekly.sas,
            after the libname is established.
 
-  USAGE:
+  USAGE:1                                                          The SAS System                             20:33 Saturday, April 11, 2026
+
+NOTE: Writing HTML5(EGHTML) Body file: EGHTML
+84             );
+               _
+               180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+85         ==============================================================*/
+           _
+           180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+NOTE: Libref STI_WER was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.12 seconds
+      cpu time            0.08 seconds
+      
+
+ERROR: CycleID=202603 already exists in OCR_Cycle_Control.
+ERROR: Backfill aborted. If this cycle needs to be corrected, adjust
+ERROR: the existing rows directly rather than re-running the backfill.
+ERROR: Execution canceled by an %ABORT CANCEL statement.
+
     %ocr_log(STEP_NAME, STATUS)
     %ocr_log(STEP_NAME, STATUS, records=123, metric=456789.00)
     %ocr_log(STEP_NAME, FAILED, error=INSERT failed SQLRC=8)
