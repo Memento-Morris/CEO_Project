@@ -22,15 +22,25 @@
       (CycleID, WeekSequence) provides the database-level guard.
 
   CHANGES:
-    Bug 2 fixed — division by zero guard added to all pct_closed
-                  calculations.
-    Bug 3 fixed — date informat changed from yymmdd8. to
-                  yymmddN8. to correctly parse packed YYYYMMDD
-                  strings without delimiters.
-    Bug 5 fixed — paired validation added: if weekN_open is
-                  supplied without weekN_date the macro now
-                  aborts with a clear message instead of
-                  silently using an uninitialised date variable.
+    Bug 2 fixed -- division by zero guard added to all pct_closed
+                   calculations.
+    Bug 3 fixed -- date informat changed from yymmdd8. to
+                   yymmddN8. to correctly parse packed YYYYMMDD
+                   strings without delimiters.
+    Bug 5 fixed -- paired validation added: if weekN_open is
+                   supplied without weekN_date the macro now
+                   aborts with a clear message instead of
+                   silently using an uninitialised date variable.
+    Bug 7 fixed -- nested block comment in example call replaced
+                   with a line-style comment. A nested /* inside
+                   a /* block terminates the outer comment early
+                   in SAS, exposing the closing ); as live code
+                   and causing ERROR 180-322. Also added explicit
+                   validation that inputn() produced a non-missing
+                   SAS date before any INSERT is attempted, so a
+                   bad date string aborts with a clear message
+                   rather than a NULL constraint violation from
+                   SQL Server.
 
   EXAMPLE CALL (add weeks as needed up to the last run):
     %ocr_backfill(
@@ -52,8 +62,8 @@
       week3_open       = 197,
       week3_ocr        = 1256864,
 
-      cycle_status     = CLOSED     /* CLOSED if cycle is done,
-                                       ACTIVE if still running */
+      *-- cycle_status: CLOSED if cycle is done, ACTIVE if still running
+      cycle_status     = CLOSED
     );
 ==============================================================*/
 
@@ -150,7 +160,7 @@ Schema=&schema;
   %_check_week_params(5);
 
   /*------------------------------------------------------------
-    2b. Safety check — abort if this cycle already exists in
+    2b. Safety check -- abort if this cycle already exists in
         OCR_Cycle_Control (protects live data from accidental
         overwrite).
   ------------------------------------------------------------*/
@@ -165,6 +175,7 @@ Schema=&schema;
     %put ERROR: CycleID=&cycle_id. already exists in OCR_Cycle_Control.;
     %put ERROR: Backfill aborted. If this cycle needs to be corrected, adjust;
     %put ERROR: the existing rows directly rather than re-running the backfill.;
+    %put ERROR: Use OCR_99_ClearTables.sas to remove the existing rows first.;
     %abort cancel;
   %end;
 
@@ -172,22 +183,60 @@ Schema=&schema;
 
   /*------------------------------------------------------------
     Bug 3 fix: use yymmddN8. informat (no separators) instead
-    of yymmdd8. which expects dashes or slashes.  baseline_date
-    and all weekN_date values are supplied as packed YYYYMMDD
-    strings (e.g. 20260316).
+    of yymmdd8. which expects dashes or slashes.
+    Bug 7 fix: validate the converted date is non-missing before
+    proceeding. inputn() returns missing (.) if the string does
+    not match the informat -- this would silently pass a NULL to
+    SQL Server and fail with a constraint violation. Aborting
+    here gives a clear, actionable error message instead.
   ------------------------------------------------------------*/
-  %let sas_d0 = %sysfunc(inputn(&baseline_date., yymmddN8.));
+  %let sas_d0 = %sysfunc(inputn(%sysfunc(strip(&baseline_date.)), yymmddN8.));
 
-  %if %length(&week1_date.) > 0 %then
-    %let sas_d1 = %sysfunc(inputn(&week1_date., yymmddN8.));
-  %if %length(&week2_date.) > 0 %then
-    %let sas_d2 = %sysfunc(inputn(&week2_date., yymmddN8.));
-  %if %length(&week3_date.) > 0 %then
-    %let sas_d3 = %sysfunc(inputn(&week3_date., yymmddN8.));
-  %if %length(&week4_date.) > 0 %then
-    %let sas_d4 = %sysfunc(inputn(&week4_date., yymmddN8.));
-  %if %length(&week5_date.) > 0 %then
-    %let sas_d5 = %sysfunc(inputn(&week5_date., yymmddN8.));
+  %if &sas_d0. = . %then %do;
+    %put ERROR: baseline_date=&baseline_date. could not be converted to a SAS date.;
+    %put ERROR: Supply dates as an 8-digit packed YYYYMMDD string, e.g. 20260316.;
+    %abort cancel;
+  %end;
+
+  %if %length(&week1_date.) > 0 %then %do;
+    %let sas_d1 = %sysfunc(inputn(%sysfunc(strip(&week1_date.)), yymmddN8.));
+    %if &sas_d1. = . %then %do;
+      %put ERROR: week1_date=&week1_date. could not be converted to a SAS date.;
+      %abort cancel;
+    %end;
+  %end;
+
+  %if %length(&week2_date.) > 0 %then %do;
+    %let sas_d2 = %sysfunc(inputn(%sysfunc(strip(&week2_date.)), yymmddN8.));
+    %if &sas_d2. = . %then %do;
+      %put ERROR: week2_date=&week2_date. could not be converted to a SAS date.;
+      %abort cancel;
+    %end;
+  %end;
+
+  %if %length(&week3_date.) > 0 %then %do;
+    %let sas_d3 = %sysfunc(inputn(%sysfunc(strip(&week3_date.)), yymmddN8.));
+    %if &sas_d3. = . %then %do;
+      %put ERROR: week3_date=&week3_date. could not be converted to a SAS date.;
+      %abort cancel;
+    %end;
+  %end;
+
+  %if %length(&week4_date.) > 0 %then %do;
+    %let sas_d4 = %sysfunc(inputn(%sysfunc(strip(&week4_date.)), yymmddN8.));
+    %if &sas_d4. = . %then %do;
+      %put ERROR: week4_date=&week4_date. could not be converted to a SAS date.;
+      %abort cancel;
+    %end;
+  %end;
+
+  %if %length(&week5_date.) > 0 %then %do;
+    %let sas_d5 = %sysfunc(inputn(%sysfunc(strip(&week5_date.)), yymmddN8.));
+    %if &sas_d5. = . %then %do;
+      %put ERROR: week5_date=&week5_date. could not be converted to a SAS date.;
+      %abort cancel;
+    %end;
+  %end;
 
   /*------------------------------------------------------------
     Bug 2 fix: division by zero guard added to all pct_closed
@@ -381,7 +430,7 @@ Schema=&schema;
   %end;
 
   /*------------------------------------------------------------
-    2h. Verification — print what was inserted for this cycle.
+    2h. Verification -- print what was inserted for this cycle.
   ------------------------------------------------------------*/
   proc sql;
     title "OCR_Weekly_Tracker - CycleID &cycle_id. Backfill Verification";
