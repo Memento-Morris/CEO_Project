@@ -1,24 +1,22 @@
 /*==============================================================
   FILE: OCR_01_Setup.sas
   PURPOSE: One-time setup — creates all OCR tables in SQL Server
-           if they do not already exist.
+           if they do not already exist. Covers both Motor and
+           Non-Motor trackers.
            Safe to re-run — all DDL is guarded with IF NOT EXISTS.
 
   TABLES CREATED:
-    OCR_Cycle_Control   — one row per cycle; tracks active cycle
-                          so no hardcoding is ever needed in
-                          downstream jobs.
-    OCR_Weekly_Tracker  — one row per week per cycle; full history
-                          kept forever, nothing is deleted.
-    OCR_Run_Log         — audit log for every job step.
+    OCR_Cycle_Control   — Motor: one row per cycle.
+    OCR_Weekly_Tracker  — Motor: one row per week per cycle.
+    NM_Cycle_Control    — Non-Motor: one row per cycle.
+    NM_Weekly_Tracker   — Non-Motor: one row per week per cycle.
+    OCR_Run_Log         — Shared audit log for all job steps.
 
   RUN: Once, manually, before any other files are executed.
-
-  CHANGES: No bugs found in this file. No changes.
 ==============================================================*/
 
 /*--------------------------------------------------------------
-  1. Libname
+  Libname
 --------------------------------------------------------------*/
 %include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
 
@@ -41,8 +39,8 @@ Schema=&schema;
 %logging(STI_WER, FNB_STI_Analytics, Claims, LFE-RBPREATLDB1);
 
 /*--------------------------------------------------------------
-  2. Pass-through DDL — sent directly to SQL Server.
-     Each statement is guarded so this file is safe to re-run.
+  Pass-through DDL — sent directly to SQL Server.
+  Each statement is guarded so this file is safe to re-run.
 --------------------------------------------------------------*/
 proc sql;
   connect to odbc as sqlsvr (
@@ -57,68 +55,42 @@ proc sql;
   );
 
   /*------------------------------------------------------------
-    2a. OCR_Cycle_Control
-        One row per cycle. The Baseline job inserts a row here
-        on the 16th; the Weekly job reads from here to know the
-        active CycleID — no hardcoding required anywhere.
-
-        Columns:
-          CycleID        YYYYMM — primary key, matches tracker.
-          BaselineDate   The date the baseline was captured.
-          BaselineClaims Snapshot claim count at baseline.
-          BaselineOCR    Snapshot OCR amount at baseline.
-          Status         ACTIVE | CLOSED
-                           ACTIVE  = cycle is in progress.
-                           CLOSED  = all weeks complete (set
-                                     manually or by a future
-                                     close-off job).
-          CreatedAt      Timestamp the row was first created.
-          UpdatedAt      Timestamp of the last status change.
+    MOTOR: OCR_Cycle_Control
   ------------------------------------------------------------*/
   execute (
     IF NOT EXISTS (
-      SELECT 1
-      FROM INFORMATION_SCHEMA.TABLES
-      WHERE TABLE_SCHEMA = 'Claims'
-        AND TABLE_NAME   = 'OCR_Cycle_Control'
+      SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA = 'Claims' AND TABLE_NAME = 'OCR_Cycle_Control'
     )
     BEGIN
       CREATE TABLE FNB_STI_Analytics.Claims.OCR_Cycle_Control (
-          CycleID        VARCHAR(6)    NOT NULL,  /* YYYYMM            */
-          BaselineDate   DATE          NOT NULL,  /* Date of baseline  */
-          BaselineClaims INT           NOT NULL,  /* Claim count       */
-          BaselineOCR    DECIMAL(18,2) NOT NULL,  /* OCR amount        */
-          Status         VARCHAR(10)   NOT NULL   /* ACTIVE | CLOSED   */
-                           DEFAULT 'ACTIVE',
-          CreatedAt      DATETIME2     NOT NULL
-                           DEFAULT GETDATE(),
-          UpdatedAt      DATETIME2     NOT NULL
-                           DEFAULT GETDATE(),
+          CycleID        VARCHAR(6)    NOT NULL,
+          BaselineDate   DATE          NOT NULL,
+          BaselineClaims INT           NOT NULL,
+          BaselineOCR    DECIMAL(18,2) NOT NULL,
+          Status         VARCHAR(10)   NOT NULL DEFAULT 'ACTIVE',
+          CreatedAt      DATETIME2     NOT NULL DEFAULT GETDATE(),
+          UpdatedAt      DATETIME2     NOT NULL DEFAULT GETDATE(),
           CONSTRAINT PK_OCR_Cycle_Control PRIMARY KEY (CycleID)
       )
     END
   ) by sqlsvr;
 
   /*------------------------------------------------------------
-    2b. OCR_Weekly_Tracker
-        One row per week per cycle. Rows are NEVER deleted —
-        the full history of every cycle is preserved here.
-        CycleID is a foreign key to OCR_Cycle_Control.
+    MOTOR: OCR_Weekly_Tracker
   ------------------------------------------------------------*/
   execute (
     IF NOT EXISTS (
-      SELECT 1
-      FROM INFORMATION_SCHEMA.TABLES
-      WHERE TABLE_SCHEMA = 'Claims'
-        AND TABLE_NAME   = 'OCR_Weekly_Tracker'
+      SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA = 'Claims' AND TABLE_NAME = 'OCR_Weekly_Tracker'
     )
     BEGIN
       CREATE TABLE FNB_STI_Analytics.Claims.OCR_Weekly_Tracker (
           TrackerID             INT IDENTITY(1,1) PRIMARY KEY,
-          CycleID               VARCHAR(6)     NOT NULL,  /* FK to OCR_Cycle_Control */
-          WeekSequence          INT            NOT NULL,  /* 0=Baseline, 1,2,3...    */
-          WeekLabel             VARCHAR(20)    NOT NULL,  /* 'Baseline','Week 1'...  */
-          RunDate               DATE           NOT NULL,  /* Date this row was run   */
+          CycleID               VARCHAR(6)     NOT NULL,
+          WeekSequence          INT            NOT NULL,
+          WeekLabel             VARCHAR(20)    NOT NULL,
+          RunDate               DATE           NOT NULL,
           Baseline_Claims       INT            NOT NULL,
           Open_Claims           INT            NOT NULL,
           Current_OCR_Amt       DECIMAL(18,2)  NOT NULL,
@@ -126,18 +98,14 @@ proc sql;
           Closed_This_Week      INT            NOT NULL,
           OCR_Reduced_This_Week DECIMAL(18,2)  NOT NULL,
           Pct_Claims_Closed     DECIMAL(10,6)  NOT NULL,
-          CONSTRAINT UQ_OCR_Tracker_CycleWeek
-            UNIQUE (CycleID, WeekSequence)
+          CONSTRAINT UQ_OCR_Tracker_CycleWeek UNIQUE (CycleID, WeekSequence)
       )
     END
   ) by sqlsvr;
 
   /*------------------------------------------------------------
-    2c. Migrate any legacy rows that predate OCR_Cycle_Control.
-        Backfill CycleID from RunDate and WeekSequence from
-        WeekLabel where they are NULL (old schema rows only).
-        Safe to re-run — WHERE CycleID IS NULL means it only
-        touches rows not yet migrated.
+    MOTOR: Migrate any legacy tracker rows (backfill CycleID /
+    WeekSequence where NULL from old schema).
   ------------------------------------------------------------*/
   execute (
     UPDATE FNB_STI_Analytics.Claims.OCR_Weekly_Tracker
@@ -156,38 +124,81 @@ proc sql;
   ) by sqlsvr;
 
   /*------------------------------------------------------------
-    2d. Backfill OCR_Cycle_Control from any legacy tracker rows
-        that have no corresponding control record yet.
-        Groups the tracker by CycleID to derive the baseline row
-        and inserts a CLOSED record for each historical cycle.
+    MOTOR: Backfill OCR_Cycle_Control from legacy tracker rows.
   ------------------------------------------------------------*/
   execute (
     INSERT INTO FNB_STI_Analytics.Claims.OCR_Cycle_Control
         (CycleID, BaselineDate, BaselineClaims, BaselineOCR, Status)
-    SELECT
-        t.CycleID,
-        t.RunDate          AS BaselineDate,
-        t.Baseline_Claims  AS BaselineClaims,
-        t.Current_OCR_Amt  AS BaselineOCR,
-        'CLOSED'           AS Status
+    SELECT t.CycleID, t.RunDate, t.Baseline_Claims, t.Current_OCR_Amt, 'CLOSED'
     FROM FNB_STI_Analytics.Claims.OCR_Weekly_Tracker t
-    WHERE t.WeekSequence = 0          /* Baseline rows only */
+    WHERE t.WeekSequence = 0
       AND NOT EXISTS (
-        SELECT 1
-        FROM FNB_STI_Analytics.Claims.OCR_Cycle_Control c
+        SELECT 1 FROM FNB_STI_Analytics.Claims.OCR_Cycle_Control c
         WHERE c.CycleID = t.CycleID
       )
   ) by sqlsvr;
 
   /*------------------------------------------------------------
-    2e. OCR_Run_Log — audit trail for every job step.
+    NON-MOTOR: NM_Cycle_Control
+    Identical structure to OCR_Cycle_Control — kept separate so
+    Motor and Non-Motor cycle histories never intermingle.
   ------------------------------------------------------------*/
   execute (
     IF NOT EXISTS (
-      SELECT 1
-      FROM INFORMATION_SCHEMA.TABLES
-      WHERE TABLE_SCHEMA = 'Claims'
-        AND TABLE_NAME   = 'OCR_Run_Log'
+      SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA = 'Claims' AND TABLE_NAME = 'NM_Cycle_Control'
+    )
+    BEGIN
+      CREATE TABLE FNB_STI_Analytics.Claims.NM_Cycle_Control (
+          CycleID        VARCHAR(6)    NOT NULL,
+          BaselineDate   DATE          NOT NULL,
+          BaselineClaims INT           NOT NULL,
+          BaselineOCR    DECIMAL(18,2) NOT NULL,
+          Status         VARCHAR(10)   NOT NULL DEFAULT 'ACTIVE',
+          CreatedAt      DATETIME2     NOT NULL DEFAULT GETDATE(),
+          UpdatedAt      DATETIME2     NOT NULL DEFAULT GETDATE(),
+          CONSTRAINT PK_NM_Cycle_Control PRIMARY KEY (CycleID)
+      )
+    END
+  ) by sqlsvr;
+
+  /*------------------------------------------------------------
+    NON-MOTOR: NM_Weekly_Tracker
+    Identical structure to OCR_Weekly_Tracker — separate table,
+    separate history.
+  ------------------------------------------------------------*/
+  execute (
+    IF NOT EXISTS (
+      SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA = 'Claims' AND TABLE_NAME = 'NM_Weekly_Tracker'
+    )
+    BEGIN
+      CREATE TABLE FNB_STI_Analytics.Claims.NM_Weekly_Tracker (
+          TrackerID             INT IDENTITY(1,1) PRIMARY KEY,
+          CycleID               VARCHAR(6)     NOT NULL,
+          WeekSequence          INT            NOT NULL,
+          WeekLabel             VARCHAR(20)    NOT NULL,
+          RunDate               DATE           NOT NULL,
+          Baseline_Claims       INT            NOT NULL,
+          Open_Claims           INT            NOT NULL,
+          Current_OCR_Amt       DECIMAL(18,2)  NOT NULL,
+          Cumul_Closed          INT            NOT NULL,
+          Closed_This_Week      INT            NOT NULL,
+          OCR_Reduced_This_Week DECIMAL(18,2)  NOT NULL,
+          Pct_Claims_Closed     DECIMAL(10,6)  NOT NULL,
+          CONSTRAINT UQ_NM_Tracker_CycleWeek UNIQUE (CycleID, WeekSequence)
+      )
+    END
+  ) by sqlsvr;
+
+  /*------------------------------------------------------------
+    SHARED: OCR_Run_Log — audit trail for all job steps
+    (Motor and Non-Motor both write here via %ocr_log).
+  ------------------------------------------------------------*/
+  execute (
+    IF NOT EXISTS (
+      SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA = 'Claims' AND TABLE_NAME = 'OCR_Run_Log'
     )
     BEGIN
       CREATE TABLE FNB_STI_Analytics.Claims.OCR_Run_Log (
@@ -208,4 +219,5 @@ proc sql;
   disconnect from sqlsvr;
 quit;
 
-%put NOTE: Setup complete. OCR_Cycle_Control, OCR_Weekly_Tracker, and OCR_Run_Log are ready.;
+%put NOTE: Setup complete. Motor tables (OCR_Cycle_Control, OCR_Weekly_Tracker),;
+%put NOTE: Non-Motor tables (NM_Cycle_Control, NM_Weekly_Tracker), and OCR_Run_Log are ready.;
