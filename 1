@@ -1,7 +1,317 @@
+%include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
 
-NOTE: The quoted string currently being processed has become more than 262 characters long.  You might have unbalanced quotation 
-      marks.
-Error: Integration technologies failed to submit the code. [Error] Failed to transcode data from U_UTF8_CE to U_LATIN1_CE encoding because it contained characters which are not supported by your SAS session encoding.  Please review your encoding= and locale= SAS system options to ensure that they can accommodate the data that you want to process.  A portion of the source string, in hex representation is:
-[None] 14ee4c04a624: 3b 2a 27 3b 2a 22 3b 2a 2f 3b 71 75 69 74 3b 72 |;*';*";*/;quit;r|
-[None] 14ee4c04a634: 75 6e 3b 0d 0a 4f 50 54 49 4f 4e 53 20 50 41 47 |un;..OPTIONS PAG|
-[Error] Some code points did not transcode.
+%macro logging(libname, database, schema, server);
+LIBNAME &libname odbc noprompt="
+  Driver=MSSQL;
+  AnsiNPW=1;
+  AuthenticationMethod=10;
+  ApplicationUsingThreads=1;
+  BulkLoadOptions=2;
+  Database=&database;
+  FetchTWFSasTime=1;
+  HostName=&server;
+  PortNumber=1433;
+  UID=&User.;
+  PWD=&FNB_Login."
+Schema=&schema;
+%mend;
+
+%logging(STI_WER, FNB_STI_Analytics, Claims, LFE-RBPREATLDB1);
+
+%macro nm_backfill(
+  cycle_id         =,
+  baseline_date    =,
+  baseline_claims  =,
+  baseline_ocr     =,
+  week1_date=, week1_open=, week1_ocr=,
+  week2_date=, week2_open=, week2_ocr=,
+  week3_date=, week3_open=, week3_ocr=,
+  week4_date=, week4_open=, week4_ocr=,
+  week5_date=, week5_open=, week5_ocr=,
+  cycle_status     = ACTIVE
+);
+
+  /* Required parameter validation */
+  %if %length(&cycle_id.)        = 0 or
+      %length(&baseline_date.)   = 0 or
+      %length(&baseline_claims.) = 0 or
+      %length(&baseline_ocr.)    = 0 %then %do;
+    %put ERROR: cycle_id, baseline_date, baseline_claims, baseline_ocr are all required.;
+    %abort cancel;
+  %end;
+
+  /* Week parameter pair/triplet validation */
+  %macro _check_week_params(n);
+    %if %length(&&week&n._open.) > 0 and %length(&&week&n._date.) = 0 %then %do;
+      %put ERROR: week&n._open supplied but week&n._date is missing.;
+      %abort cancel;
+    %end;
+    %if %length(&&week&n._open.) = 0 and %length(&&week&n._date.) > 0 %then %do;
+      %put ERROR: week&n._date supplied but week&n._open is missing.;
+      %abort cancel;
+    %end;
+    %if %length(&&week&n._open.) > 0 and %length(&&week&n._ocr.) = 0 %then %do;
+      %put ERROR: week&n._open supplied but week&n._ocr is missing.;
+      %abort cancel;
+    %end;
+  %mend _check_week_params;
+
+  %_check_week_params(1);
+  %_check_week_params(2);
+  %_check_week_params(3);
+  %_check_week_params(4);
+  %_check_week_params(5);
+
+  /* Duplicate cycle guard */
+  proc sql noprint;
+    select count(*) into :cycle_exists trimmed
+    from STI_WER.NM_Cycle_Control
+    where CycleID = "&cycle_id.";
+  quit;
+
+  %if &cycle_exists. > 0 %then %do;
+    %put ERROR: CycleID=&cycle_id. already exists in NM_Cycle_Control. Backfill aborted.;
+    %abort cancel;
+  %end;
+
+  /* Date conversion: YYYYMMDD string to SAS date integer.
+     FIX: was yymmddN8. (invalid informat); corrected to yymmdd8. */
+  %let sas_d0 = %sysfunc(inputn(&baseline_date., yymmdd8.));
+  %if &sas_d0. = . %then %do;
+    %put ERROR: baseline_date (&baseline_date.) could not be parsed. Ensure format is YYYYMMDD.;
+    %abort cancel;
+  %end;
+
+  %if %length(&week1_date.) > 0 %then %do;
+    %let sas_d1 = %sysfunc(inputn(&week1_date., yymmdd8.));
+    %if &sas_d1. = . %then %do;
+      %put ERROR: week1_date (&week1_date.) could not be parsed. Ensure format is YYYYMMDD.;
+      %abort cancel;
+    %end;
+  %end;
+
+  %if %length(&week2_date.) > 0 %then %do;
+    %let sas_d2 = %sysfunc(inputn(&week2_date., yymmdd8.));
+    %if &sas_d2. = . %then %do;
+      %put ERROR: week2_date (&week2_date.) could not be parsed. Ensure format is YYYYMMDD.;
+      %abort cancel;
+    %end;
+  %end;
+
+  %if %length(&week3_date.) > 0 %then %do;
+    %let sas_d3 = %sysfunc(inputn(&week3_date., yymmdd8.));
+    %if &sas_d3. = . %then %do;
+      %put ERROR: week3_date (&week3_date.) could not be parsed. Ensure format is YYYYMMDD.;
+      %abort cancel;
+    %end;
+  %end;
+
+  %if %length(&week4_date.) > 0 %then %do;
+    %let sas_d4 = %sysfunc(inputn(&week4_date., yymmdd8.));
+    %if &sas_d4. = . %then %do;
+      %put ERROR: week4_date (&week4_date.) could not be parsed. Ensure format is YYYYMMDD.;
+      %abort cancel;
+    %end;
+  %end;
+
+  %if %length(&week5_date.) > 0 %then %do;
+    %let sas_d5 = %sysfunc(inputn(&week5_date., yymmdd8.));
+    %if &sas_d5. = . %then %do;
+      %put ERROR: week5_date (&week5_date.) could not be parsed. Ensure format is YYYYMMDD.;
+      %abort cancel;
+    %end;
+  %end;
+
+  /* Derived weekly metrics */
+  %if %length(&week1_open.) > 0 %then %do;
+    %let w1_cumul_closed     = %sysevalf(&baseline_claims. - &week1_open.);
+    %let w1_closed_this_week = %sysevalf(&baseline_claims. - &week1_open.);
+    %let w1_ocr_reduced      = %sysevalf(&baseline_ocr.    - &week1_ocr.);
+    %if &baseline_claims. > 0 %then %let w1_pct_closed = %sysevalf(&w1_cumul_closed. / &baseline_claims.);
+    %else %let w1_pct_closed = 0;
+  %end;
+
+  %if %length(&week2_open.) > 0 %then %do;
+    %let w2_cumul_closed     = %sysevalf(&baseline_claims. - &week2_open.);
+    %let w2_closed_this_week = %sysevalf(&week1_open.      - &week2_open.);
+    %let w2_ocr_reduced      = %sysevalf(&week1_ocr.       - &week2_ocr.);
+    %if &baseline_claims. > 0 %then %let w2_pct_closed = %sysevalf(&w2_cumul_closed. / &baseline_claims.);
+    %else %let w2_pct_closed = 0;
+  %end;
+
+  %if %length(&week3_open.) > 0 %then %do;
+    %let w3_cumul_closed     = %sysevalf(&baseline_claims. - &week3_open.);
+    %let w3_closed_this_week = %sysevalf(&week2_open.      - &week3_open.);
+    %let w3_ocr_reduced      = %sysevalf(&week2_ocr.       - &week3_ocr.);
+    %if &baseline_claims. > 0 %then %let w3_pct_closed = %sysevalf(&w3_cumul_closed. / &baseline_claims.);
+    %else %let w3_pct_closed = 0;
+  %end;
+
+  %if %length(&week4_open.) > 0 %then %do;
+    %let w4_cumul_closed     = %sysevalf(&baseline_claims. - &week4_open.);
+    %let w4_closed_this_week = %sysevalf(&week3_open.      - &week4_open.);
+    %let w4_ocr_reduced      = %sysevalf(&week3_ocr.       - &week4_ocr.);
+    %if &baseline_claims. > 0 %then %let w4_pct_closed = %sysevalf(&w4_cumul_closed. / &baseline_claims.);
+    %else %let w4_pct_closed = 0;
+  %end;
+
+  %if %length(&week5_open.) > 0 %then %do;
+    %let w5_cumul_closed     = %sysevalf(&baseline_claims. - &week5_open.);
+    %let w5_closed_this_week = %sysevalf(&week4_open.      - &week5_open.);
+    %let w5_ocr_reduced      = %sysevalf(&week4_ocr.       - &week5_ocr.);
+    %if &baseline_claims. > 0 %then %let w5_pct_closed = %sysevalf(&w5_cumul_closed. / &baseline_claims.);
+    %else %let w5_pct_closed = 0;
+  %end;
+
+  /* Insert cycle header row */
+  proc sql noprint;
+    insert into STI_WER.NM_Cycle_Control
+      (CycleID, BaselineDate, BaselineClaims, BaselineOCR, Status)
+    values ("&cycle_id.", &sas_d0., &baseline_claims., &baseline_ocr., "&cycle_status.");
+  quit;
+
+  %if &sqlrc. ne 0 %then %do;
+    %put ERROR: INSERT into NM_Cycle_Control failed. SQLRC=&sqlrc..;
+    %abort cancel;
+  %end;
+
+  /* Insert baseline row (Week 0) */
+  proc sql noprint;
+    insert into STI_WER.NM_Weekly_Tracker
+      (CycleID, WeekSequence, WeekLabel, RunDate,
+       Baseline_Claims, Open_Claims, Current_OCR_Amt,
+       Cumul_Closed, Closed_This_Week, OCR_Reduced_This_Week, Pct_Claims_Closed)
+    values ("&cycle_id.", 0, 'Baseline', &sas_d0.,
+            &baseline_claims., &baseline_claims., &baseline_ocr., 0, 0, 0, 0.0);
+  quit;
+
+  %if &sqlrc. ne 0 %then %do;
+    %put ERROR: INSERT of Baseline row into NM_Weekly_Tracker failed. SQLRC=&sqlrc..;
+    %abort cancel;
+  %end;
+
+  /* Insert Week 1 */
+  %if %length(&week1_open.) > 0 %then %do;
+    proc sql noprint;
+      insert into STI_WER.NM_Weekly_Tracker
+        (CycleID, WeekSequence, WeekLabel, RunDate,
+         Baseline_Claims, Open_Claims, Current_OCR_Amt,
+         Cumul_Closed, Closed_This_Week, OCR_Reduced_This_Week, Pct_Claims_Closed)
+      values ("&cycle_id.", 1, 'Week 1', &sas_d1.,
+              &baseline_claims., &week1_open., &week1_ocr.,
+              &w1_cumul_closed., &w1_closed_this_week., &w1_ocr_reduced., &w1_pct_closed.);
+    quit;
+    %if &sqlrc. ne 0 %then %do;
+      %put ERROR: INSERT of Week 1 row into NM_Weekly_Tracker failed. SQLRC=&sqlrc..;
+      %abort cancel;
+    %end;
+  %end;
+
+  /* Insert Week 2 */
+  %if %length(&week2_open.) > 0 %then %do;
+    proc sql noprint;
+      insert into STI_WER.NM_Weekly_Tracker
+        (CycleID, WeekSequence, WeekLabel, RunDate,
+         Baseline_Claims, Open_Claims, Current_OCR_Amt,
+         Cumul_Closed, Closed_This_Week, OCR_Reduced_This_Week, Pct_Claims_Closed)
+      values ("&cycle_id.", 2, 'Week 2', &sas_d2.,
+              &baseline_claims., &week2_open., &week2_ocr.,
+              &w2_cumul_closed., &w2_closed_this_week., &w2_ocr_reduced., &w2_pct_closed.);
+    quit;
+    %if &sqlrc. ne 0 %then %do;
+      %put ERROR: INSERT of Week 2 row into NM_Weekly_Tracker failed. SQLRC=&sqlrc..;
+      %abort cancel;
+    %end;
+  %end;
+
+  /* Insert Week 3 */
+  %if %length(&week3_open.) > 0 %then %do;
+    proc sql noprint;
+      insert into STI_WER.NM_Weekly_Tracker
+        (CycleID, WeekSequence, WeekLabel, RunDate,
+         Baseline_Claims, Open_Claims, Current_OCR_Amt,
+         Cumul_Closed, Closed_This_Week, OCR_Reduced_This_Week, Pct_Claims_Closed)
+      values ("&cycle_id.", 3, 'Week 3', &sas_d3.,
+              &baseline_claims., &week3_open., &week3_ocr.,
+              &w3_cumul_closed., &w3_closed_this_week., &w3_ocr_reduced., &w3_pct_closed.);
+    quit;
+    %if &sqlrc. ne 0 %then %do;
+      %put ERROR: INSERT of Week 3 row into NM_Weekly_Tracker failed. SQLRC=&sqlrc..;
+      %abort cancel;
+    %end;
+  %end;
+
+  /* Insert Week 4 */
+  %if %length(&week4_open.) > 0 %then %do;
+    proc sql noprint;
+      insert into STI_WER.NM_Weekly_Tracker
+        (CycleID, WeekSequence, WeekLabel, RunDate,
+         Baseline_Claims, Open_Claims, Current_OCR_Amt,
+         Cumul_Closed, Closed_This_Week, OCR_Reduced_This_Week, Pct_Claims_Closed)
+      values ("&cycle_id.", 4, 'Week 4', &sas_d4.,
+              &baseline_claims., &week4_open., &week4_ocr.,
+              &w4_cumul_closed., &w4_closed_this_week., &w4_ocr_reduced., &w4_pct_closed.);
+    quit;
+    %if &sqlrc. ne 0 %then %do;
+      %put ERROR: INSERT of Week 4 row into NM_Weekly_Tracker failed. SQLRC=&sqlrc..;
+      %abort cancel;
+    %end;
+  %end;
+
+  /* Insert Week 5 */
+  %if %length(&week5_open.) > 0 %then %do;
+    proc sql noprint;
+      insert into STI_WER.NM_Weekly_Tracker
+        (CycleID, WeekSequence, WeekLabel, RunDate,
+         Baseline_Claims, Open_Claims, Current_OCR_Amt,
+         Cumul_Closed, Closed_This_Week, OCR_Reduced_This_Week, Pct_Claims_Closed)
+      values ("&cycle_id.", 5, 'Week 5', &sas_d5.,
+              &baseline_claims., &week5_open., &week5_ocr.,
+              &w5_cumul_closed., &w5_closed_this_week., &w5_ocr_reduced., &w5_pct_closed.);
+    quit;
+    %if &sqlrc. ne 0 %then %do;
+      %put ERROR: INSERT of Week 5 row into NM_Weekly_Tracker failed. SQLRC=&sqlrc..;
+      %abort cancel;
+    %end;
+  %end;
+
+  /* Backfill verification */
+  proc sql;
+    title "NM_Weekly_Tracker - CycleID &cycle_id. Backfill Verification";
+    select WeekSequence, WeekLabel, RunDate format=date9., CycleID,
+           Baseline_Claims, Open_Claims, Current_OCR_Amt format=comma18.2,
+           Cumul_Closed, Closed_This_Week,
+           OCR_Reduced_This_Week format=comma18.2,
+           Pct_Claims_Closed format=percent8.2
+    from STI_WER.NM_Weekly_Tracker
+    where CycleID = "&cycle_id."
+    order by WeekSequence;
+    title;
+  quit;
+
+%mend nm_backfill;
+
+/* Cycle 202603 backfill call */
+%nm_backfill(
+  cycle_id         = 202603,
+
+  baseline_date    = 20260316,
+  baseline_claims  = 644,
+  baseline_ocr     = 1587402,
+
+  week1_date       = 20260323,
+  week1_open       = 183,
+  week1_ocr        = 513182,
+
+  week2_date       = 20260330,
+  week2_open       = 110,
+  week2_ocr        = 333272,
+
+  week3_date       = 20260406,
+  week3_open       = 90,
+  week3_ocr        = 247017,
+
+  week4_date       = 20260413,
+  week4_open       = 74,
+  week4_ocr        = 197447
+);
