@@ -254,21 +254,24 @@ proc sql;
 quit;
 
 /*--------------------------------------------------------------
-  HTML Chart — written to disk and attached to email.
-  Fix: ods graphics options are a separate statement;
-       title/footnote are their own statements before proc.
-  Fix: WeekLabel used as-is from the tracker (no PROC TRANSPOSE
-       rename needed for the chart).
+  PNG Charts — written directly to disk as self-contained image
+  files and attached to email. No HTML wrapper means no missing
+  image problem when the recipient downloads the attachment.
+  Two PNGs: OCR trend line + Claims closed bar chart.
   Week 2+ only.
 --------------------------------------------------------------*/
-%let html_outfile =
-  /data/fnbinsurance/Short_Term/Monitoring/MotorOCR_Chart_&rd..html;
+%let png_ocr_outfile =
+  /data/fnbinsurance/Short_Term/Monitoring/MotorOCR_Trend_&rd..png;
+%let png_closed_outfile =
+  /data/fnbinsurance/Short_Term/Monitoring/MotorOCR_Closed_&rd..png;
 
 %if &week_num. >= 2 %then %do;
 
-  ods graphics on / width=800px height=400px outputfmt=png;
-
-  ods html file="&html_outfile." style=HTMLBlue;
+  /* Chart 1 — OCR Amount Trend */
+  ods listing image_dpi=150
+    gpath="/data/fnbinsurance/Short_Term/Monitoring";
+  ods graphics on / reset=all imagename="MotorOCR_Trend_&rd."
+    outputfmt=png width=800px height=400px;
 
   title "OCR Amount Movement -- Motor Retail (CycleID &cycle_id.)";
   footnote j=left
@@ -283,8 +286,17 @@ quit;
     xaxis label="Week" discreteorder=data;
   run;
 
+  title; footnote;
+  ods graphics off;
+  ods listing close;
+
+  /* Chart 2 — Claims Closed Bar */
+  ods listing image_dpi=150
+    gpath="/data/fnbinsurance/Short_Term/Monitoring";
+  ods graphics on / reset=all imagename="MotorOCR_Closed_&rd."
+    outputfmt=png width=800px height=400px;
+
   title "Claims Closed Per Week -- Motor Retail (CycleID &cycle_id.)";
-  footnote;
 
   proc sgplot data=work.tracker_this_cycle;
     vbar WeekLabel / response=Closed_This_Week
@@ -295,11 +307,11 @@ quit;
     xaxis label="Week" discreteorder=data;
   run;
 
-  ods html close;
-  title; footnote;
+  title;
   ods graphics off;
+  ods listing close;
 
-  %ocr_log(CHARTS, SUCCESS, info=Motor HTML chart exported for Week &week_num.);
+  %ocr_log(CHARTS, SUCCESS, info=Motor PNG charts exported for Week &week_num.);
 
 %end;
 %else %do;
@@ -354,7 +366,7 @@ title;
 
 /*--------------------------------------------------------------
   Email — Morris plain-text format.
-  Attach the Excel claims detail + HTML chart (Week 2+).
+  Attach Excel claims detail + two PNG charts (Week 2+).
 --------------------------------------------------------------*/
 filename outbox email;
 
@@ -369,20 +381,35 @@ filename outbox email;
         "&outfile."
           content_type=
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        "&html_outfile."
-          content_type="text/html"
+        "&png_ocr_outfile."
+          content_type="image/png"
+        "&png_closed_outfile."
+          content_type="image/png"
       );
 
     put "I hope you're well.";
     put " ";
-    put "Please find below the Motor claims progress update for Week &week_num.";
+    put "Please find below the Motor claims progress update for Week &week_num..";
     put " ";
-    put "Claims closed this week:       &email_closed_fmt.";
-    put "Cumulative claims closed:      &email_cumul_fmt. of &email_baseline_fmt. (&email_pct_fmt.%)";
-    put "Current OCR:                   R &email_ocr_fmt.";
-    put "OCR Reduced this week:         R &email_reduced_fmt.";
+    put "-------------------------------";
+    put "Motor OCR Summary";
+    put "-------------------------------";
     put " ";
-    put "Please find the outstanding Motor list attached for reference.";
+    put "Claims closed this week:";
+    put "  &email_closed_fmt.";
+    put " ";
+    put "Cumulative claims closed:";
+    put "  &email_cumul_fmt. of &email_baseline_fmt. (&email_pct_fmt.%)";
+    put " ";
+    put "Current OCR amount:";
+    put "  R &email_ocr_fmt.";
+    put " ";
+    put "OCR reduced this week:";
+    put "  R &email_reduced_fmt.";
+    put " ";
+    put "-------------------------------";
+    put " ";
+    put "The outstanding Motor claims list and trend charts are attached.";
     put "I will share another update next week.";
     put " ";
     put "Kind regards";
@@ -392,7 +419,7 @@ filename outbox email;
 %end;
 %else %do;
 
-  /* Week 1 — no chart yet */
+  /* Week 1 — no charts yet */
   data _null_;
     file outbox
       to      = ("morris.nkomo@fnb.co.za")
@@ -409,12 +436,25 @@ filename outbox email;
     put "Please be advised that the monthly Motor OCR tracking process has been restarted.";
     put "The attached workbook reflects the opening position for Cycle &cycle_id..";
     put " ";
-    put "Claims closed this week:       &email_closed_fmt.";
-    put "Cumulative claims closed:      &email_cumul_fmt. of &email_baseline_fmt. (&email_pct_fmt.%)";
-    put "Current OCR:                   R &email_ocr_fmt.";
-    put "OCR Reduced this week:         R &email_reduced_fmt.";
+    put "-------------------------------";
+    put "Motor OCR Summary";
+    put "-------------------------------";
     put " ";
-    put "Trend visuals will be included from Week 2 onwards.";
+    put "Claims closed this week:";
+    put "  &email_closed_fmt.";
+    put " ";
+    put "Cumulative claims closed:";
+    put "  &email_cumul_fmt. of &email_baseline_fmt. (&email_pct_fmt.%)";
+    put " ";
+    put "Current OCR amount:";
+    put "  R &email_ocr_fmt.";
+    put " ";
+    put "OCR reduced this week:";
+    put "  R &email_reduced_fmt.";
+    put " ";
+    put "-------------------------------";
+    put " ";
+    put "Trend charts will be included from Week 2 onwards.";
     put " ";
     put "Kind regards";
     put "Morris";
@@ -648,19 +688,22 @@ proc sql;
 quit;
 
 /*--------------------------------------------------------------
-  HTML Chart — written to disk and attached to email.
-  Fix: ods graphics / title / footnote are separate statements.
-  Fix: WeekLabel used directly — no PROC TRANSPOSE needed here.
+  PNG Charts — self-contained image files attached to email.
+  Two PNGs: OCR trend line + Claims closed bar chart.
   Week 2+ only.
 --------------------------------------------------------------*/
-%let nm_html_outfile =
-  /data/fnbinsurance/Short_Term/Monitoring/NonMotorOCR_Chart_&rd..html;
+%let nm_png_ocr_outfile =
+  /data/fnbinsurance/Short_Term/Monitoring/NonMotorOCR_Trend_&rd..png;
+%let nm_png_closed_outfile =
+  /data/fnbinsurance/Short_Term/Monitoring/NonMotorOCR_Closed_&rd..png;
 
 %if &nm_week_num. >= 2 %then %do;
 
-  ods graphics on / width=800px height=400px outputfmt=png;
-
-  ods html file="&nm_html_outfile." style=HTMLBlue;
+  /* Chart 1 — OCR Amount Trend */
+  ods listing image_dpi=150
+    gpath="/data/fnbinsurance/Short_Term/Monitoring";
+  ods graphics on / reset=all imagename="NonMotorOCR_Trend_&rd."
+    outputfmt=png width=800px height=400px;
 
   title "OCR Amount Movement -- Non-Motor Retail (CycleID &nm_cycle_id.)";
   footnote j=left
@@ -675,8 +718,17 @@ quit;
     xaxis label="Week" discreteorder=data;
   run;
 
+  title; footnote;
+  ods graphics off;
+  ods listing close;
+
+  /* Chart 2 — Claims Closed Bar */
+  ods listing image_dpi=150
+    gpath="/data/fnbinsurance/Short_Term/Monitoring";
+  ods graphics on / reset=all imagename="NonMotorOCR_Closed_&rd."
+    outputfmt=png width=800px height=400px;
+
   title "Claims Closed Per Week -- Non-Motor Retail (CycleID &nm_cycle_id.)";
-  footnote;
 
   proc sgplot data=work.nm_tracker_this_cycle;
     vbar WeekLabel / response=Closed_This_Week
@@ -687,11 +739,11 @@ quit;
     xaxis label="Week" discreteorder=data;
   run;
 
-  ods html close;
-  title; footnote;
+  title;
   ods graphics off;
+  ods listing close;
 
-  %ocr_log(NM_CHARTS, SUCCESS, info=NM HTML chart exported for Week &nm_week_num.);
+  %ocr_log(NM_CHARTS, SUCCESS, info=NM PNG charts exported for Week &nm_week_num.);
 
 %end;
 %else %do;
@@ -736,7 +788,7 @@ title;
 
 /*--------------------------------------------------------------
   Email — Morris plain-text format.
-  Attach the Excel claims detail + HTML chart (Week 2+).
+  Attach Excel claims detail + two PNG charts (Week 2+).
 --------------------------------------------------------------*/
 filename nm_outbx email;
 
@@ -751,20 +803,35 @@ filename nm_outbx email;
         "&nm_outfile."
           content_type=
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        "&nm_html_outfile."
-          content_type="text/html"
+        "&nm_png_ocr_outfile."
+          content_type="image/png"
+        "&nm_png_closed_outfile."
+          content_type="image/png"
       );
 
     put "I hope you're well.";
     put " ";
-    put "Please find below the claims progress update for Week &nm_week_num.";
+    put "Please find below the Non-Motor claims progress update for Week &nm_week_num..";
     put " ";
-    put "Claims closed this week:       &nm_email_closed_fmt.";
-    put "Cumulative claims closed:      &nm_email_cumul_fmt. of &nm_email_baseline_fmt. (&nm_email_pct_fmt.%)";
-    put "Current OCR:                   R &nm_email_ocr_fmt.";
-    put "OCR Reduced this week:         R &nm_email_reduced_fmt.";
+    put "-------------------------------";
+    put "Non-Motor OCR Summary";
+    put "-------------------------------";
     put " ";
-    put "Please find the outstanding Non-Motor list attached for reference.";
+    put "Claims closed this week:";
+    put "  &nm_email_closed_fmt.";
+    put " ";
+    put "Cumulative claims closed:";
+    put "  &nm_email_cumul_fmt. of &nm_email_baseline_fmt. (&nm_email_pct_fmt.%)";
+    put " ";
+    put "Current OCR amount:";
+    put "  R &nm_email_ocr_fmt.";
+    put " ";
+    put "OCR reduced this week:";
+    put "  R &nm_email_reduced_fmt.";
+    put " ";
+    put "-------------------------------";
+    put " ";
+    put "The outstanding Non-Motor claims list and trend charts are attached.";
     put "I will share another update next week.";
     put " ";
     put "Kind regards";
@@ -774,7 +841,7 @@ filename nm_outbx email;
 %end;
 %else %do;
 
-  /* Week 1 — no chart yet */
+  /* Week 1 — no charts yet */
   data _null_;
     file nm_outbx
       to      = ("morris.nkomo@fnb.co.za")
@@ -791,12 +858,25 @@ filename nm_outbx email;
     put "Please be advised that the monthly Non-Motor OCR tracking process has been restarted.";
     put "The attached workbook reflects the opening position for Cycle &nm_cycle_id..";
     put " ";
-    put "Claims closed this week:       &nm_email_closed_fmt.";
-    put "Cumulative claims closed:      &nm_email_cumul_fmt. of &nm_email_baseline_fmt. (&nm_email_pct_fmt.%)";
-    put "Current OCR:                   R &nm_email_ocr_fmt.";
-    put "OCR Reduced this week:         R &nm_email_reduced_fmt.";
+    put "-------------------------------";
+    put "Non-Motor OCR Summary";
+    put "-------------------------------";
     put " ";
-    put "Trend visuals will be included from Week 2 onwards.";
+    put "Claims closed this week:";
+    put "  &nm_email_closed_fmt.";
+    put " ";
+    put "Cumulative claims closed:";
+    put "  &nm_email_cumul_fmt. of &nm_email_baseline_fmt. (&nm_email_pct_fmt.%)";
+    put " ";
+    put "Current OCR amount:";
+    put "  R &nm_email_ocr_fmt.";
+    put " ";
+    put "OCR reduced this week:";
+    put "  R &nm_email_reduced_fmt.";
+    put " ";
+    put "-------------------------------";
+    put " ";
+    put "Trend charts will be included from Week 2 onwards.";
     put " ";
     put "Kind regards";
     put "Morris";
