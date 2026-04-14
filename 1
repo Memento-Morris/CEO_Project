@@ -31,6 +31,7 @@ Schema=&schema;
   cycle_status     = ACTIVE
 );
 
+  /* ── Required parameter validation ── */
   %if %length(&cycle_id.)        = 0 or
       %length(&baseline_date.)   = 0 or
       %length(&baseline_claims.) = 0 or
@@ -39,6 +40,7 @@ Schema=&schema;
     %abort cancel;
   %end;
 
+  /* ── Week parameter pair/triplet validation ── */
   %macro _check_week_params(n);
     %if %length(&&week&n._open.) > 0 and %length(&&week&n._date.) = 0 %then %do;
       %put ERROR: week&n._open supplied but week&n._date is missing.;
@@ -60,6 +62,7 @@ Schema=&schema;
   %_check_week_params(4);
   %_check_week_params(5);
 
+  /* ── Duplicate cycle guard ── */
   proc sql noprint;
     select count(*) into :cycle_exists trimmed
     from STI_WER.NM_Cycle_Control
@@ -71,14 +74,55 @@ Schema=&schema;
     %abort cancel;
   %end;
 
-  %let sas_d0 = %sysfunc(inputn(&baseline_date., yymmddN8.));
+  /* ── Date conversion: YYYYMMDD string → SAS date integer ──
+        FIX: was yymmddN8. (invalid); corrected to yymmdd8.          */
+  %let sas_d0 = %sysfunc(inputn(&baseline_date., yymmdd8.));
+  %if &sas_d0. = . %then %do;
+    %put ERROR: baseline_date (&baseline_date.) could not be parsed. Ensure format is YYYYMMDD.;
+    %abort cancel;
+  %end;
 
-  %if %length(&week1_date.) > 0 %then %let sas_d1 = %sysfunc(inputn(&week1_date., yymmddN8.));
-  %if %length(&week2_date.) > 0 %then %let sas_d2 = %sysfunc(inputn(&week2_date., yymmddN8.));
-  %if %length(&week3_date.) > 0 %then %let sas_d3 = %sysfunc(inputn(&week3_date., yymmddN8.));
-  %if %length(&week4_date.) > 0 %then %let sas_d4 = %sysfunc(inputn(&week4_date., yymmddN8.));
-  %if %length(&week5_date.) > 0 %then %let sas_d5 = %sysfunc(inputn(&week5_date., yymmddN8.));
+  %if %length(&week1_date.) > 0 %then %do;
+    %let sas_d1 = %sysfunc(inputn(&week1_date., yymmdd8.));
+    %if &sas_d1. = . %then %do;
+      %put ERROR: week1_date (&week1_date.) could not be parsed. Ensure format is YYYYMMDD.;
+      %abort cancel;
+    %end;
+  %end;
 
+  %if %length(&week2_date.) > 0 %then %do;
+    %let sas_d2 = %sysfunc(inputn(&week2_date., yymmdd8.));
+    %if &sas_d2. = . %then %do;
+      %put ERROR: week2_date (&week2_date.) could not be parsed. Ensure format is YYYYMMDD.;
+      %abort cancel;
+    %end;
+  %end;
+
+  %if %length(&week3_date.) > 0 %then %do;
+    %let sas_d3 = %sysfunc(inputn(&week3_date., yymmdd8.));
+    %if &sas_d3. = . %then %do;
+      %put ERROR: week3_date (&week3_date.) could not be parsed. Ensure format is YYYYMMDD.;
+      %abort cancel;
+    %end;
+  %end;
+
+  %if %length(&week4_date.) > 0 %then %do;
+    %let sas_d4 = %sysfunc(inputn(&week4_date., yymmdd8.));
+    %if &sas_d4. = . %then %do;
+      %put ERROR: week4_date (&week4_date.) could not be parsed. Ensure format is YYYYMMDD.;
+      %abort cancel;
+    %end;
+  %end;
+
+  %if %length(&week5_date.) > 0 %then %do;
+    %let sas_d5 = %sysfunc(inputn(&week5_date., yymmdd8.));
+    %if &sas_d5. = . %then %do;
+      %put ERROR: week5_date (&week5_date.) could not be parsed. Ensure format is YYYYMMDD.;
+      %abort cancel;
+    %end;
+  %end;
+
+  /* ── Derived weekly metrics ── */
   %if %length(&week1_open.) > 0 %then %do;
     %let w1_cumul_closed     = %sysevalf(&baseline_claims. - &week1_open.);
     %let w1_closed_this_week = %sysevalf(&baseline_claims. - &week1_open.);
@@ -119,6 +163,7 @@ Schema=&schema;
     %else %let w5_pct_closed = 0;
   %end;
 
+  /* ── Insert cycle header ── */
   proc sql noprint;
     insert into STI_WER.NM_Cycle_Control
       (CycleID, BaselineDate, BaselineClaims, BaselineOCR, Status)
@@ -130,6 +175,9 @@ Schema=&schema;
     %abort cancel;
   %end;
 
+  /* ── Insert weekly tracker rows ── */
+
+  /* Baseline row (Week 0) */
   proc sql noprint;
     insert into STI_WER.NM_Weekly_Tracker
       (CycleID, WeekSequence, WeekLabel, RunDate,
@@ -139,6 +187,12 @@ Schema=&schema;
             &baseline_claims., &baseline_claims., &baseline_ocr., 0, 0, 0, 0.0);
   quit;
 
+  %if &sqlrc. ne 0 %then %do;
+    %put ERROR: INSERT of Baseline row into NM_Weekly_Tracker failed. SQLRC=&sqlrc..;
+    %abort cancel;
+  %end;
+
+  /* Week 1 */
   %if %length(&week1_open.) > 0 %then %do;
     proc sql noprint;
       insert into STI_WER.NM_Weekly_Tracker
@@ -149,8 +203,13 @@ Schema=&schema;
               &baseline_claims., &week1_open., &week1_ocr.,
               &w1_cumul_closed., &w1_closed_this_week., &w1_ocr_reduced., &w1_pct_closed.);
     quit;
+    %if &sqlrc. ne 0 %then %do;
+      %put ERROR: INSERT of Week 1 row into NM_Weekly_Tracker failed. SQLRC=&sqlrc..;
+      %abort cancel;
+    %end;
   %end;
 
+  /* Week 2 */
   %if %length(&week2_open.) > 0 %then %do;
     proc sql noprint;
       insert into STI_WER.NM_Weekly_Tracker
@@ -161,8 +220,13 @@ Schema=&schema;
               &baseline_claims., &week2_open., &week2_ocr.,
               &w2_cumul_closed., &w2_closed_this_week., &w2_ocr_reduced., &w2_pct_closed.);
     quit;
+    %if &sqlrc. ne 0 %then %do;
+      %put ERROR: INSERT of Week 2 row into NM_Weekly_Tracker failed. SQLRC=&sqlrc..;
+      %abort cancel;
+    %end;
   %end;
 
+  /* Week 3 */
   %if %length(&week3_open.) > 0 %then %do;
     proc sql noprint;
       insert into STI_WER.NM_Weekly_Tracker
@@ -173,8 +237,13 @@ Schema=&schema;
               &baseline_claims., &week3_open., &week3_ocr.,
               &w3_cumul_closed., &w3_closed_this_week., &w3_ocr_reduced., &w3_pct_closed.);
     quit;
+    %if &sqlrc. ne 0 %then %do;
+      %put ERROR: INSERT of Week 3 row into NM_Weekly_Tracker failed. SQLRC=&sqlrc..;
+      %abort cancel;
+    %end;
   %end;
 
+  /* Week 4 */
   %if %length(&week4_open.) > 0 %then %do;
     proc sql noprint;
       insert into STI_WER.NM_Weekly_Tracker
@@ -185,8 +254,13 @@ Schema=&schema;
               &baseline_claims., &week4_open., &week4_ocr.,
               &w4_cumul_closed., &w4_closed_this_week., &w4_ocr_reduced., &w4_pct_closed.);
     quit;
+    %if &sqlrc. ne 0 %then %do;
+      %put ERROR: INSERT of Week 4 row into NM_Weekly_Tracker failed. SQLRC=&sqlrc..;
+      %abort cancel;
+    %end;
   %end;
 
+  /* Week 5 */
   %if %length(&week5_open.) > 0 %then %do;
     proc sql noprint;
       insert into STI_WER.NM_Weekly_Tracker
@@ -197,8 +271,13 @@ Schema=&schema;
               &baseline_claims., &week5_open., &week5_ocr.,
               &w5_cumul_closed., &w5_closed_this_week., &w5_ocr_reduced., &w5_pct_closed.);
     quit;
+    %if &sqlrc. ne 0 %then %do;
+      %put ERROR: INSERT of Week 5 row into NM_Weekly_Tracker failed. SQLRC=&sqlrc..;
+      %abort cancel;
+    %end;
   %end;
 
+  /* ── Verification select ── */
   proc sql;
     title "NM_Weekly_Tracker - CycleID &cycle_id. Backfill Verification";
     select WeekSequence, WeekLabel, RunDate format=date9., CycleID,
@@ -214,6 +293,7 @@ Schema=&schema;
 
 %mend nm_backfill;
 
+/* ── Cycle 202603 backfill call ── */
 %nm_backfill(
   cycle_id         = 202603,
 
