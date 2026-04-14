@@ -1,13 +1,52 @@
-ERROR: CLI execute error: [SAS][ODBC SQL Server Wire Protocol driver][Microsoft SQL Server]Cannot insert the value NULL into column 
-       'BaselineDate', table 'FNB_STI_Analytics.Claims.NM_Cycle_Control'; column does not allow nulls. INSERT fails. : [SAS][ODBC 
-       SQL Server Wire Protocol driver][Microsoft SQL Server]The statement has been terminated.
-NOTE: This insert failed while attempting to add data from VALUES clause 1 to the data set.
-ERROR: ROLLBACK issued due to errors for data set STI_WER.NM_Cycle_Control.DATA.
-NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
-NOTE: The SAS System stopped processing this step because of errors.
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.23 seconds
-      cpu time            0.17 seconds
-      
-ERROR: INSERT into NM_Cycle_Control failed. SQLRC=24.
-ERROR: Execution canceled by an %ABORT CANCEL statement.
+id prefer if it looked like this, I hope you're well.
+
+Please find below the claims progress update for  Week 4
+
+Claims closed this week:        16
+
+Cumulative claims closed:    570 of 644 (88.5%)
+
+Current OCR:                                  R 197 447
+
+OCR Reduced this week :        R 49 570
+
+Please find the outstanding Non-Motor list attached for reference. I will share another update next week.
+
+Kind regards
+
+Morris for example. remove summary sheet completely . also the graph sheet didnt attach. 1100           ods graphics on / width=800px height=400px imagename="nm_ocr_trend" outputfmt=png
+
+1100     ! imagepath="/data/fnbinsurance/Short_Term/Monitoring/";      title "OCR Amount Movement -- Non-Motor Retail (CycleID
+
+           _________
+
+           22
+
+           76
+
+1100     ! &nm_cycle_id.)";     footnote j=left
+
+ERROR 22-322: Syntax error, expecting one of the following: ;, ANTIALIAS, ANTIALIASMAX, ATTRPRIORITY, BORDER, BYLINE, DATASKINMAX, 
+
+              DISCRETEMAX, DRILLTARGET, GROUPMAX, HEIGHT, IMAGEMAP, IMAGENAME, LABELMAX, LABELPLACEMENT, LEGENDAREAMAX, 
+
+              LINEPATTERNOBSMAX, LOESSMAXOBS, LOESSOBSMAX, MAXLEGENDAREA, MAXOBS, NBINSMAX, NOANTIALIAS, NOBORDER, NOIMAGEMAP, 
+
+              NOSCALE, NOSCALEMARKERS, NOSUBPIXEL, NXYBINSMAX, OBSMAX, OUTPUTFMT, PANELCELLMAX, POP, PUSH, RESET, SCALE, 
+
+              SCALEMARKERS, SHOW, STACKDEPTHMAX, SUBPIXEL, TIPMAX, TOTALCELLMAX, WIDTH.  
+
+ERROR 76-322: Syntax error, statement will be ignored.      
+
+ERROR: Variable Col_Week_1 is not on file WORK.NM_TRACKER_WIDE.
+
+ERROR: Variable Col_Week_2 is not on file WORK.NM_TRACKER_WIDE.
+
+ERROR: Variable Col_Week_3 is not on file WORK.NM_TRACKER_WIDE.
+
+ERROR: Variable Col_Week_4 is not on file WORK.NM_TRACKER_WIDE.
+
+ERROR: Variable Col_Week_5 is not on file WORK.NM_TRACKER_WIDE.
+
+. also attach the html i want to see something per respective filter. 
+
