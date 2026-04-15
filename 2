@@ -1,13 +1,10 @@
 /*==============================================================
   FILE: OCR_03_Weekly.sas
   PURPOSE: Runs every week. Handles Motor AND Non-Motor trackers.
-           1. Reads the ACTIVE cycle from the relevant control table.
-           2. Pulls current claim state.
-           3. Computes weekly movement vs the previous week.
-           4. Appends a new row to the relevant weekly tracker.
-           5. Exports claims detail to Excel (no Summary sheet).
-           6. Exports trend chart to HTML and attaches it to email.
-           7. Sends email in Morris plain-text format.
+  CHANGES (latest):
+    - Added Chart 3: claims count by reported month (PNG, attached).
+    - Added aged-claims section in email body: count + breakdown of
+      claims whose ReportedMonth is older than 3 months from run date.
 ==============================================================*/
 
 /*--------------------------------------------------------------
@@ -54,7 +51,8 @@ Schema=&schema;
         cumul_closed closed_this_week ocr_reduced pct_closed
         cycle_mismatch_flag rd_yyyymm sas_rd outfile html_outfile
         email_open_fmt email_baseline_fmt email_ocr_fmt
-        email_reduced_fmt email_closed_fmt email_cumul_fmt email_pct_fmt;
+        email_reduced_fmt email_closed_fmt email_cumul_fmt email_pct_fmt
+        aged_count aged_count_fmt;
 
 %macro ocr_weekly_main;
 
@@ -206,6 +204,33 @@ quit;
 
 %ocr_log(CALC_METRICS, SUCCESS, records=&open_this_week., metric=&ocr_this_week.);
 
+/*--------------------------------------------------------------
+  Aged-claims summary (> 3 months old as at run date).
+  sas_rd resolves rd (YYYYMMDD string) to a SAS date for intnx.
+--------------------------------------------------------------*/
+%let sas_rd = %sysfunc(inputn(&rd., yymmddn8.));
+
+proc sql;
+  create table work.Motor_Aged as
+  select
+      ClaimCode,
+      ReportedMonth,
+      Current_Estimate_OCR,
+      ClaimHandler
+  from work.MotorClaims_Final
+  where ReportedMonth < %sysfunc(intnx(month, &sas_rd., -3, B))
+  order by ReportedMonth, ClaimCode;
+quit;
+
+proc sql noprint;
+  select count(distinct ClaimCode)
+  into :aged_count trimmed
+  from work.Motor_Aged;
+quit;
+
+%let aged_count_fmt = %sysfunc(putn(&aged_count., comma10.));
+%ocr_log(AGED_CLAIMS, SUCCESS, records=&aged_count., info=Motor claims older than 3 months);
+
 /*--- Insert weekly row ---*/
 proc sql noprint;
   connect to odbc as sqlsvr (
@@ -253,17 +278,31 @@ proc sql;
   order by WeekSequence;
 quit;
 
+/*--- Claims-by-month summary (used for Chart 3) ---*/
+proc sql;
+  create table work.Motor_Monthly_Count as
+  select
+      put(ReportedMonth, yymmn6.) as MonthLabel length=7,
+      count(distinct ClaimCode)   as ClaimCount
+  from work.MotorClaims_Final
+  group by ReportedMonth
+  order by ReportedMonth;
+quit;
+
 /*--------------------------------------------------------------
   PNG Charts — written directly to disk as self-contained image
-  files and attached to email. No HTML wrapper means no missing
-  image problem when the recipient downloads the attachment.
-  Two PNGs: OCR trend line + Claims closed bar chart.
-  Week 2+ only.
+  files and attached to email.
+  Chart 1: OCR trend line.
+  Chart 2: Claims closed bar.
+  Chart 3: Claims count by reported month (NEW).
+  Week 2+ only for Charts 1 & 2; Chart 3 produced every week.
 --------------------------------------------------------------*/
 %let png_ocr_outfile =
   /data/fnbinsurance/Short_Term/Monitoring/MotorOCR_Trend_&rd..png;
 %let png_closed_outfile =
   /data/fnbinsurance/Short_Term/Monitoring/MotorOCR_Closed_&rd..png;
+%let png_monthly_outfile =
+  /data/fnbinsurance/Short_Term/Monitoring/MotorOCR_Monthly_&rd..png;
 
 %if &week_num. >= 2 %then %do;
 
@@ -311,12 +350,36 @@ quit;
   ods graphics off;
   ods listing close;
 
-  %ocr_log(CHARTS, SUCCESS, info=Motor PNG charts exported for Week &week_num.);
+  %ocr_log(CHARTS, SUCCESS, info=Motor PNG charts 1+2 exported for Week &week_num.);
 
 %end;
 %else %do;
-  %ocr_log(CHARTS, SKIPPED, info=Week 1 — charts deferred to Week 2+);
+  %ocr_log(CHARTS, SKIPPED, info=Week 1 — charts 1+2 deferred to Week 2+);
 %end;
+
+/* Chart 3 — Claims Count by Reported Month (every week) */
+ods listing image_dpi=150
+  gpath="/data/fnbinsurance/Short_Term/Monitoring";
+ods graphics on / reset=all imagename="MotorOCR_Monthly_&rd."
+  outputfmt=png width=800px height=400px;
+
+title "Open Claims by Reported Month -- Motor Retail (CycleID &cycle_id.)";
+footnote j=left "Run: &rd.  |  Shaded: claims older than 3 months";
+
+proc sgplot data=work.Motor_Monthly_Count;
+  vbar MonthLabel / response=ClaimCount
+    fillattrs=(color=CX54B9AC)
+    datalabel
+    datalabelattrs=(size=10 weight=bold);
+  yaxis label="Number of Open Claims" grid;
+  xaxis label="Reported Month" discreteorder=data;
+run;
+
+title; footnote;
+ods graphics off;
+ods listing close;
+
+%ocr_log(CHART3, SUCCESS, info=Motor monthly claims chart exported for Week &week_num.);
 
 /*--------------------------------------------------------------
   Export to Excel — Claims Detail sheet ONLY (no Summary sheet).
@@ -365,10 +428,89 @@ title;
 %let email_pct_fmt      = %sysfunc(putn(%sysevalf(&pct_closed.*100), 8.1));
 
 /*--------------------------------------------------------------
+  Build aged-claims breakdown text for the email body.
+  One line per distinct reported month with its claim count.
+--------------------------------------------------------------*/
+proc sql noprint;
+  select   put(ReportedMonth, yymmn6.) || '  (' ||
+           strip(put(count(distinct ClaimCode), comma10.)) || ' claims)'
+  into     :aged_lines separated by '|'
+  from     work.Motor_Aged
+  group by ReportedMonth
+  order by ReportedMonth;
+quit;
+
+/*--------------------------------------------------------------
   Email — Morris plain-text format.
-  Attach Excel claims detail + two PNG charts (Week 2+).
+  Attach Excel claims detail + PNG charts.
+  Chart 3 (monthly) attached every week; Charts 1+2 from Week 2+.
 --------------------------------------------------------------*/
 filename outbox email;
+
+%macro motor_email_body;
+    put "I hope you're well.";
+    put " ";
+    %if &week_num. >= 2 %then %do;
+      put "Please find below the Motor claims progress update for Week &week_num..";
+    %end;
+    %else %do;
+      put "Please be advised that the monthly Motor OCR tracking process has been restarted.";
+      put "The attached workbook reflects the opening position for Cycle &cycle_id..";
+    %end;
+    put " ";
+    put "-------------------------------";
+    put "Motor OCR Summary";
+    put "-------------------------------";
+    put " ";
+    put "Claims closed this week:";
+    put "  &email_closed_fmt.";
+    put " ";
+    put "Cumulative claims closed:";
+    put "  &email_cumul_fmt. of &email_baseline_fmt. (&email_pct_fmt.%)";
+    put " ";
+    put "Current OCR amount:";
+    put "  R &email_ocr_fmt.";
+    put " ";
+    put "OCR reduced this week:";
+    put "  R &email_reduced_fmt.";
+    put " ";
+    put "-------------------------------";
+    put "Claims older than 3 months (Motor)";
+    put "-------------------------------";
+    put " ";
+    %if %sysevalf(&aged_count. > 0, boolean) %then %do;
+      put "** ACTION REQUIRED: &aged_count_fmt. claim(s) have been under investigation";
+      put "   for more than 3 months and require immediate attention. **";
+      put " ";
+      put "Breakdown by reported month:";
+      %let i = 1;
+      %let aged_line = %scan(&aged_lines., &i., |);
+      %do %while (%length(&aged_line.) > 0);
+        put "  &aged_line.";
+        %let i = %eval(&i. + 1);
+        %let aged_line = %scan(&aged_lines., &i., |);
+      %end;
+    %end;
+    %else %do;
+      put "No Motor claims are currently older than 3 months. All in order.";
+    %end;
+    put " ";
+    put "-------------------------------";
+    put " ";
+    %if &week_num. >= 2 %then %do;
+      put "The outstanding Motor claims list and trend charts are attached.";
+    %end;
+    %else %do;
+      put "The outstanding Motor claims list is attached.";
+      put "Trend charts will be included from Week 2 onwards.";
+    %end;
+    put "A breakdown of open claims by reported month (Chart 3) is also attached.";
+    put " ";
+    put "I will share another update next week.";
+    put " ";
+    put "Kind regards";
+    put "Morris";
+%mend motor_email_body;
 
 %if &week_num. >= 2 %then %do;
 
@@ -385,41 +527,15 @@ filename outbox email;
           content_type="image/png"
         "&png_closed_outfile."
           content_type="image/png"
+        "&png_monthly_outfile."
+          content_type="image/png"
       );
-
-    put "I hope you're well.";
-    put " ";
-    put "Please find below the Motor claims progress update for Week &week_num..";
-    put " ";
-    put "-------------------------------";
-    put "Motor OCR Summary";
-    put "-------------------------------";
-    put " ";
-    put "Claims closed this week:";
-    put "  &email_closed_fmt.";
-    put " ";
-    put "Cumulative claims closed:";
-    put "  &email_cumul_fmt. of &email_baseline_fmt. (&email_pct_fmt.%)";
-    put " ";
-    put "Current OCR amount:";
-    put "  R &email_ocr_fmt.";
-    put " ";
-    put "OCR reduced this week:";
-    put "  R &email_reduced_fmt.";
-    put " ";
-    put "-------------------------------";
-    put " ";
-    put "The outstanding Motor claims list and trend charts are attached.";
-    put "I will share another update next week.";
-    put " ";
-    put "Kind regards";
-    put "Morris";
+    %motor_email_body;
   run;
 
 %end;
 %else %do;
 
-  /* Week 1 — no charts yet */
   data _null_;
     file outbox
       to      = ("morris.nkomo@fnb.co.za")
@@ -429,35 +545,10 @@ filename outbox email;
         "&outfile."
           content_type=
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "&png_monthly_outfile."
+          content_type="image/png"
       );
-
-    put "I hope you're well.";
-    put " ";
-    put "Please be advised that the monthly Motor OCR tracking process has been restarted.";
-    put "The attached workbook reflects the opening position for Cycle &cycle_id..";
-    put " ";
-    put "-------------------------------";
-    put "Motor OCR Summary";
-    put "-------------------------------";
-    put " ";
-    put "Claims closed this week:";
-    put "  &email_closed_fmt.";
-    put " ";
-    put "Cumulative claims closed:";
-    put "  &email_cumul_fmt. of &email_baseline_fmt. (&email_pct_fmt.%)";
-    put " ";
-    put "Current OCR amount:";
-    put "  R &email_ocr_fmt.";
-    put " ";
-    put "OCR reduced this week:";
-    put "  R &email_reduced_fmt.";
-    put " ";
-    put "-------------------------------";
-    put " ";
-    put "Trend charts will be included from Week 2 onwards.";
-    put " ";
-    put "Kind regards";
-    put "Morris";
+    %motor_email_body;
   run;
 
 %end;
@@ -488,7 +579,8 @@ filename outbox email;
         nm_cumul_closed nm_closed_this_week nm_ocr_reduced nm_pct_closed
         nm_cycle_mismatch_flag nm_outfile nm_html_outfile
         nm_email_open_fmt nm_email_baseline_fmt nm_email_ocr_fmt
-        nm_email_reduced_fmt nm_email_closed_fmt nm_email_cumul_fmt nm_email_pct_fmt;
+        nm_email_reduced_fmt nm_email_closed_fmt nm_email_cumul_fmt nm_email_pct_fmt
+        nm_aged_count nm_aged_count_fmt;
 
 %macro nm_weekly_main;
 
@@ -640,6 +732,30 @@ quit;
 
 %ocr_log(NM_CALC_METRICS, SUCCESS, records=&nm_open_this_week., metric=&nm_ocr_this_week.);
 
+/*--------------------------------------------------------------
+  Aged-claims summary (> 3 months old as at run date).
+--------------------------------------------------------------*/
+proc sql;
+  create table work.NM_Aged as
+  select
+      ClaimCode,
+      ReportedMonth,
+      Current_Estimate_OCR,
+      ClaimHandler
+  from work.NMClaims_Final
+  where ReportedMonth < %sysfunc(intnx(month, &sas_rd., -3, B))
+  order by ReportedMonth, ClaimCode;
+quit;
+
+proc sql noprint;
+  select count(distinct ClaimCode)
+  into :nm_aged_count trimmed
+  from work.NM_Aged;
+quit;
+
+%let nm_aged_count_fmt = %sysfunc(putn(&nm_aged_count., comma10.));
+%ocr_log(NM_AGED_CLAIMS, SUCCESS, records=&nm_aged_count., info=NM claims older than 3 months);
+
 /*--- Insert weekly row ---*/
 proc sql noprint;
   connect to odbc as sqlsvr (
@@ -687,15 +803,29 @@ proc sql;
   order by WeekSequence;
 quit;
 
+/*--- Claims-by-month summary (used for Chart 3) ---*/
+proc sql;
+  create table work.NM_Monthly_Count as
+  select
+      put(ReportedMonth, yymmn6.) as MonthLabel length=7,
+      count(distinct ClaimCode)   as ClaimCount
+  from work.NMClaims_Final
+  group by ReportedMonth
+  order by ReportedMonth;
+quit;
+
 /*--------------------------------------------------------------
   PNG Charts — self-contained image files attached to email.
-  Two PNGs: OCR trend line + Claims closed bar chart.
-  Week 2+ only.
+  Chart 1: OCR trend line.
+  Chart 2: Claims closed bar.
+  Chart 3: Claims count by reported month (NEW — every week).
 --------------------------------------------------------------*/
 %let nm_png_ocr_outfile =
   /data/fnbinsurance/Short_Term/Monitoring/NonMotorOCR_Trend_&rd..png;
 %let nm_png_closed_outfile =
   /data/fnbinsurance/Short_Term/Monitoring/NonMotorOCR_Closed_&rd..png;
+%let nm_png_monthly_outfile =
+  /data/fnbinsurance/Short_Term/Monitoring/NonMotorOCR_Monthly_&rd..png;
 
 %if &nm_week_num. >= 2 %then %do;
 
@@ -743,15 +873,39 @@ quit;
   ods graphics off;
   ods listing close;
 
-  %ocr_log(NM_CHARTS, SUCCESS, info=NM PNG charts exported for Week &nm_week_num.);
+  %ocr_log(NM_CHARTS, SUCCESS, info=NM PNG charts 1+2 exported for Week &nm_week_num.);
 
 %end;
 %else %do;
-  %ocr_log(NM_CHARTS, SKIPPED, info=Week 1 — NM charts deferred to Week 2+);
+  %ocr_log(NM_CHARTS, SKIPPED, info=Week 1 — NM charts 1+2 deferred to Week 2+);
 %end;
 
+/* Chart 3 — Claims Count by Reported Month (every week) */
+ods listing image_dpi=150
+  gpath="/data/fnbinsurance/Short_Term/Monitoring";
+ods graphics on / reset=all imagename="NonMotorOCR_Monthly_&rd."
+  outputfmt=png width=800px height=400px;
+
+title "Open Claims by Reported Month -- Non-Motor Retail (CycleID &nm_cycle_id.)";
+footnote j=left "Run: &rd.  |  Shaded: claims older than 3 months";
+
+proc sgplot data=work.NM_Monthly_Count;
+  vbar MonthLabel / response=ClaimCount
+    fillattrs=(color=CX54B9AC)
+    datalabel
+    datalabelattrs=(size=10 weight=bold);
+  yaxis label="Number of Open Claims" grid;
+  xaxis label="Reported Month" discreteorder=data;
+run;
+
+title; footnote;
+ods graphics off;
+ods listing close;
+
+%ocr_log(NM_CHART3, SUCCESS, info=NM monthly claims chart exported for Week &nm_week_num.);
+
 /*--------------------------------------------------------------
-  Export to Excel — Claims Detail sheet ONLY (no Summary sheet).
+  Export to Excel — Claims Detail sheet ONLY.
   Reuses OCR_Style template defined in the Motor job above.
 --------------------------------------------------------------*/
 %let nm_outfile =
@@ -787,10 +941,87 @@ title;
 %let nm_email_pct_fmt      = %sysfunc(putn(%sysevalf(&nm_pct_closed.*100), 8.1));
 
 /*--------------------------------------------------------------
+  Build aged-claims breakdown text for the NM email body.
+--------------------------------------------------------------*/
+proc sql noprint;
+  select   put(ReportedMonth, yymmn6.) || '  (' ||
+           strip(put(count(distinct ClaimCode), comma10.)) || ' claims)'
+  into     :nm_aged_lines separated by '|'
+  from     work.NM_Aged
+  group by ReportedMonth
+  order by ReportedMonth;
+quit;
+
+/*--------------------------------------------------------------
   Email — Morris plain-text format.
-  Attach Excel claims detail + two PNG charts (Week 2+).
+  Attach Excel claims detail + PNG charts.
 --------------------------------------------------------------*/
 filename nm_outbx email;
+
+%macro nm_email_body;
+    put "I hope you're well.";
+    put " ";
+    %if &nm_week_num. >= 2 %then %do;
+      put "Please find below the Non-Motor claims progress update for Week &nm_week_num..";
+    %end;
+    %else %do;
+      put "Please be advised that the monthly Non-Motor OCR tracking process has been restarted.";
+      put "The attached workbook reflects the opening position for Cycle &nm_cycle_id..";
+    %end;
+    put " ";
+    put "-------------------------------";
+    put "Non-Motor OCR Summary";
+    put "-------------------------------";
+    put " ";
+    put "Claims closed this week:";
+    put "  &nm_email_closed_fmt.";
+    put " ";
+    put "Cumulative claims closed:";
+    put "  &nm_email_cumul_fmt. of &nm_email_baseline_fmt. (&nm_email_pct_fmt.%)";
+    put " ";
+    put "Current OCR amount:";
+    put "  R &nm_email_ocr_fmt.";
+    put " ";
+    put "OCR reduced this week:";
+    put "  R &nm_email_reduced_fmt.";
+    put " ";
+    put "-------------------------------";
+    put "Claims older than 3 months (Non-Motor)";
+    put "-------------------------------";
+    put " ";
+    %if %sysevalf(&nm_aged_count. > 0, boolean) %then %do;
+      put "** ACTION REQUIRED: &nm_aged_count_fmt. claim(s) have been under investigation";
+      put "   for more than 3 months and require immediate attention. **";
+      put " ";
+      put "Breakdown by reported month:";
+      %let nm_i = 1;
+      %let nm_aged_line = %scan(&nm_aged_lines., &nm_i., |);
+      %do %while (%length(&nm_aged_line.) > 0);
+        put "  &nm_aged_line.";
+        %let nm_i = %eval(&nm_i. + 1);
+        %let nm_aged_line = %scan(&nm_aged_lines., &nm_i., |);
+      %end;
+    %end;
+    %else %do;
+      put "No Non-Motor claims are currently older than 3 months. All in order.";
+    %end;
+    put " ";
+    put "-------------------------------";
+    put " ";
+    %if &nm_week_num. >= 2 %then %do;
+      put "The outstanding Non-Motor claims list and trend charts are attached.";
+    %end;
+    %else %do;
+      put "The outstanding Non-Motor claims list is attached.";
+      put "Trend charts will be included from Week 2 onwards.";
+    %end;
+    put "A breakdown of open claims by reported month (Chart 3) is also attached.";
+    put " ";
+    put "I will share another update next week.";
+    put " ";
+    put "Kind regards";
+    put "Morris";
+%mend nm_email_body;
 
 %if &nm_week_num. >= 2 %then %do;
 
@@ -807,41 +1038,15 @@ filename nm_outbx email;
           content_type="image/png"
         "&nm_png_closed_outfile."
           content_type="image/png"
+        "&nm_png_monthly_outfile."
+          content_type="image/png"
       );
-
-    put "I hope you're well.";
-    put " ";
-    put "Please find below the Non-Motor claims progress update for Week &nm_week_num..";
-    put " ";
-    put "-------------------------------";
-    put "Non-Motor OCR Summary";
-    put "-------------------------------";
-    put " ";
-    put "Claims closed this week:";
-    put "  &nm_email_closed_fmt.";
-    put " ";
-    put "Cumulative claims closed:";
-    put "  &nm_email_cumul_fmt. of &nm_email_baseline_fmt. (&nm_email_pct_fmt.%)";
-    put " ";
-    put "Current OCR amount:";
-    put "  R &nm_email_ocr_fmt.";
-    put " ";
-    put "OCR reduced this week:";
-    put "  R &nm_email_reduced_fmt.";
-    put " ";
-    put "-------------------------------";
-    put " ";
-    put "The outstanding Non-Motor claims list and trend charts are attached.";
-    put "I will share another update next week.";
-    put " ";
-    put "Kind regards";
-    put "Morris";
+    %nm_email_body;
   run;
 
 %end;
 %else %do;
 
-  /* Week 1 — no charts yet */
   data _null_;
     file nm_outbx
       to      = ("morris.nkomo@fnb.co.za")
@@ -851,35 +1056,10 @@ filename nm_outbx email;
         "&nm_outfile."
           content_type=
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "&nm_png_monthly_outfile."
+          content_type="image/png"
       );
-
-    put "I hope you're well.";
-    put " ";
-    put "Please be advised that the monthly Non-Motor OCR tracking process has been restarted.";
-    put "The attached workbook reflects the opening position for Cycle &nm_cycle_id..";
-    put " ";
-    put "-------------------------------";
-    put "Non-Motor OCR Summary";
-    put "-------------------------------";
-    put " ";
-    put "Claims closed this week:";
-    put "  &nm_email_closed_fmt.";
-    put " ";
-    put "Cumulative claims closed:";
-    put "  &nm_email_cumul_fmt. of &nm_email_baseline_fmt. (&nm_email_pct_fmt.%)";
-    put " ";
-    put "Current OCR amount:";
-    put "  R &nm_email_ocr_fmt.";
-    put " ";
-    put "OCR reduced this week:";
-    put "  R &nm_email_reduced_fmt.";
-    put " ";
-    put "-------------------------------";
-    put " ";
-    put "Trend charts will be included from Week 2 onwards.";
-    put " ";
-    put "Kind regards";
-    put "Morris";
+    %nm_email_body;
   run;
 
 %end;
