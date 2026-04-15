@@ -1,31 +1,17 @@
 /*==============================================================
   FILE: OCR_03_Weekly.sas
   PURPOSE: Runs every week. Handles Motor AND Non-Motor trackers.
-
-  FIXES APPLIED (this version):
-    1. %ocr_log macro: resolved &_error. and &_info. into clean
-       %local vars (%sysfunc(compress(...)) not needed — simply
-       resolving via %superq into a %local and then passing the
-       %local avoids the %bquote-inside-SQL-string bug that caused
-       "Incorrect syntax near ','".
-    2. Aged-claims logic simplified: counts claims where
-       ReportedMonth > &sas_rd. (i.e. reported month is AFTER
-       the run date — future-dated claims). No cutoff date math.
-    3. Asher removed from all email TO fields.
-    4. &sas_rd. is derived inside BOTH Motor and Non-Motor macros.
+  - Aged claims = ReportedMonth older than 3 months from run date
+  - No files saved to server; attachments sent directly via email
 ==============================================================*/
 
-/*--------------------------------------------------------------
-  Libname + logging — must stay in open code.
---------------------------------------------------------------*/
 %include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
 %include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/OCR_00_Logging.sas";
 
 /*--------------------------------------------------------------
-  PATCHED LOGGING MACRO
+  LOGGING MACRO
 --------------------------------------------------------------*/
-%macro ocr_log(step, status,
-               records=, metric=, error=, info=);
+%macro ocr_log(step, status, records=, metric=, error=, info=);
 
   %local _step _status _records _metric _error _info _week _cycle;
 
@@ -41,75 +27,53 @@
   %let _error = %superq(error);
   %let _info  = %superq(info);
 
-  %if %symexist(week_num) %then %let _week  = &week_num.;
-  %else                         %let _week  = 0;
+  %if %symexist(week_num)  %then %let _week  = &week_num.;
+  %else                          %let _week  = 0;
 
-  %if %symexist(cycle_id) %then %let _cycle = &cycle_id.;
-  %else                         %let _cycle = UNKNOWN;
+  %if %symexist(cycle_id)  %then %let _cycle = &cycle_id.;
+  %else                          %let _cycle = UNKNOWN;
 
   proc sql noprint;
     connect to odbc as _logsvr (
-      noprompt="Driver=MSSQL;
-                AnsiNPW=1;
-                AuthenticationMethod=10;
-                Database=FNB_STI_Analytics;
-                HostName=LFE-RBPREATLDB1;
-                PortNumber=1433;
-                UID=&User.;
-                PWD=&FNB_Login."
+      noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;
+                Database=FNB_STI_Analytics;HostName=LFE-RBPREATLDB1;
+                PortNumber=1433;UID=&User.;PWD=&FNB_Login."
     );
-
     execute (
       INSERT INTO FNB_STI_Analytics.Claims.OCR_Job_Log
         (WeekSequence, CycleID, Step, Status,
          Records, Metric, ErrorMsg, AdditionalInfo, LogDT)
       VALUES (
-        &_week.,
-        '&_cycle.',
-        '&_step.',
-        '&_status.',
-        &_records.,
-        &_metric.,
-        '&_error.',
-        '&_info.',
-        GETDATE()
+        &_week., '&_cycle.', '&_step.', '&_status.',
+        &_records., &_metric., '&_error.', '&_info.', GETDATE()
       )
     ) by _logsvr;
-
     disconnect from _logsvr;
   quit;
 
   %put NOTE: [OCR_LOG] step=&_step. status=&_status. records=&_records. metric=&_metric.;
-  %if %length(&_error.) > 0 %then
-    %put NOTE: [OCR_LOG] error=&_error.;;
-  %if %length(&_info.)  > 0 %then
-    %put NOTE: [OCR_LOG] info=&_info.;;
+  %if %length(&_error.) > 0 %then %put NOTE: [OCR_LOG] error=&_error.;;
+  %if %length(&_info.)  > 0 %then %put NOTE: [OCR_LOG] info=&_info.;;
 
 %mend ocr_log;
 
 /*--------------------------------------------------------------
-  Database libname.
+  Database libname
 --------------------------------------------------------------*/
 %macro logging(libname, database, schema, server);
-LIBNAME &libname odbc noprompt="
-  Driver=MSSQL;
-  AnsiNPW=1;
-  AuthenticationMethod=10;
-  ApplicationUsingThreads=1;
-  BulkLoadOptions=2;
-  Database=&database;
-  FetchTWFSasTime=1;
-  HostName=&server;
-  PortNumber=1433;
-  UID=&User.;
-  PWD=&FNB_Login."
-Schema=&schema;
+  LIBNAME &libname odbc noprompt="
+    Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;
+    ApplicationUsingThreads=1;BulkLoadOptions=2;
+    Database=&database;FetchTWFSasTime=1;
+    HostName=&server;PortNumber=1433;
+    UID=&User.;PWD=&FNB_Login."
+  Schema=&schema;
 %mend;
 
 %logging(STI_WER, FNB_STI_Analytics, Claims, LFE-RBPREATLDB1);
 
 /*--------------------------------------------------------------
-  Run date — override with rd= for back-testing.
+  Run date
 --------------------------------------------------------------*/
 %if not %symexist(rd) %then %do;
   %let rd = %sysfunc(today(), yymmddn8.);
@@ -126,7 +90,7 @@ Schema=&schema;
         week_num existing_rows seq_exists
         open_this_week ocr_this_week
         cumul_closed closed_this_week ocr_reduced pct_closed
-        cycle_mismatch_flag rd_yyyymm sas_rd outfile html_outfile
+        rd_yyyymm sas_rd aged_cutoff
         email_open_fmt email_baseline_fmt email_ocr_fmt
         email_reduced_fmt email_closed_fmt email_cumul_fmt email_pct_fmt
         aged_count aged_count_fmt aged_lines;
@@ -145,32 +109,15 @@ proc sql noprint;
 quit;
 
 %if &sqlobs. = 0 %then %do;
-  %ocr_log(RESOLVE_CYCLE, FAILED,
-           error=No ACTIVE cycle found in OCR_Cycle_Control);
-  %put ERROR: No ACTIVE cycle found in OCR_Cycle_Control.;
-  %put ERROR: Run OCR_02_Baseline.sas on the 16th first.;
+  %ocr_log(RESOLVE_CYCLE, FAILED, error=No ACTIVE cycle found in OCR_Cycle_Control);
+  %put ERROR: No ACTIVE cycle found. Run OCR_02_Baseline.sas on the 16th first.;
   %abort cancel;
 %end;
-
-%put NOTE: Active Cycle ID     = &cycle_id.;
-%put NOTE: Baseline Claims     = &baseline_claims.;
-%put NOTE: Baseline OCR Amount = &baseline_ocr.;
-%ocr_log(RESOLVE_CYCLE, SUCCESS,
-         info=CycleID=&cycle_id. Claims=&baseline_claims.);
 
 %let baseline_ocr_fmt    = %sysfunc(putn(&baseline_ocr.,    comma18.2));
 %let baseline_claims_fmt = %sysfunc(putn(&baseline_claims., comma10.));
 
-/*--- Cycle / run-date mismatch flag ---*/
-%let rd_yyyymm = %sysfunc(substr(&rd., 1, 6));
-
-%if %str(&rd_yyyymm.) ne %str(&cycle_id.) %then %do;
-  %put WARNING: Run date month (&rd_yyyymm.) ne active CycleID (&cycle_id.).;
-  %ocr_log(CYCLE_DATE_MISMATCH, WARNING,
-           info=RunDate &rd_yyyymm. ne CycleID &cycle_id.);
-  %let cycle_mismatch_flag = Y;
-%end;
-%else %let cycle_mismatch_flag = N;
+%ocr_log(RESOLVE_CYCLE, SUCCESS, info=CycleID=&cycle_id. Claims=&baseline_claims.);
 
 /*--- Next week number ---*/
 proc sql noprint;
@@ -181,7 +128,6 @@ proc sql noprint;
 quit;
 
 %let week_num = &existing_rows.;
-%put NOTE: Week number (next to insert) = &week_num.;
 
 /*--- Previous week values ---*/
 proc sql noprint;
@@ -223,8 +169,7 @@ quit;
   %abort cancel;
 %end;
 
-%ocr_log(WEEK_RESOLVE, SUCCESS,
-         records=&week_num.,
+%ocr_log(WEEK_RESOLVE, SUCCESS, records=&week_num.,
          info=CycleID=&cycle_id. PrevOpen=&prev_open.);
 
 /*--- Pull snapshot: Motor + Retail ---*/
@@ -287,24 +232,22 @@ quit;
          records=&open_this_week., metric=&ocr_this_week.);
 
 /*--------------------------------------------------------------
-  Aged-claims summary.
-  Counts claims where ReportedMonth is AFTER the run date
-  (i.e. future-dated report months).
-  &sas_rd. is the run date as a SAS date number.
+  Aged-claims: ReportedMonth older than 3 months from run date.
+  aged_cutoff = first day of the month that is 3 months before
+  the run date. Anything with ReportedMonth < aged_cutoff is aged.
 --------------------------------------------------------------*/
-%let sas_rd = %sysfunc(inputn(&rd., yymmddn8.));
-%put NOTE: [MOTOR] Run date (SAS) = &sas_rd.;
-%put NOTE: [MOTOR] Run date (YYMMDD) = %sysfunc(putn(&sas_rd., yymmddn8.));
+%let sas_rd      = %sysfunc(inputn(&rd., yymmddn8.));
+%let aged_cutoff = %sysfunc(intnx(month, &sas_rd., -3, B));
+
+%put NOTE: [MOTOR] Run date (SAS)   = &sas_rd.;
+%put NOTE: [MOTOR] Aged cutoff date = &aged_cutoff.
+     (%sysfunc(putn(&aged_cutoff., date9.)));
 
 proc sql;
   create table work.Motor_Aged as
-  select
-      ClaimCode,
-      ReportedMonth,
-      Current_Estimate_OCR,
-      ClaimHandler
+  select ClaimCode, ReportedMonth, Current_Estimate_OCR, ClaimHandler
   from work.MotorClaims_Final
-  where ReportedMonth > &sas_rd.
+  where ReportedMonth < &aged_cutoff.
   order by ReportedMonth, ClaimCode;
 quit;
 
@@ -317,25 +260,17 @@ quit;
 %if %length(&aged_count.) = 0 %then %let aged_count = 0;
 %let aged_count_fmt = %sysfunc(putn(&aged_count., comma10.));
 
-%put NOTE: [MOTOR] Future-dated claims (ReportedMonth > run date) = &aged_count.;
-
-%ocr_log(AGED_CLAIMS, SUCCESS,
-         records=&aged_count.,
-         info=Motor future-dated claims = &aged_count.);
+%put NOTE: [MOTOR] Claims older than 3 months = &aged_count.;
+%ocr_log(AGED_CLAIMS, SUCCESS, records=&aged_count.,
+         info=Motor aged claims (>3 months) = &aged_count.);
 
 /*--- Insert weekly row ---*/
 proc sql noprint;
   connect to odbc as sqlsvr (
-    noprompt="Driver=MSSQL;
-              AnsiNPW=1;
-              AuthenticationMethod=10;
-              Database=FNB_STI_Analytics;
-              HostName=LFE-RBPREATLDB1;
-              PortNumber=1433;
-              UID=&User.;
-              PWD=&FNB_Login."
+    noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;
+              Database=FNB_STI_Analytics;HostName=LFE-RBPREATLDB1;
+              PortNumber=1433;UID=&User.;PWD=&FNB_Login."
   );
-
   execute (
     INSERT INTO FNB_STI_Analytics.Claims.OCR_Weekly_Tracker
       (CycleID, WeekSequence, WeekLabel, RunDate,
@@ -349,7 +284,6 @@ proc sql noprint;
       &cumul_closed., &closed_this_week., &ocr_reduced., &pct_closed.
     )
   ) by sqlsvr;
-
   disconnect from sqlsvr;
 quit;
 
@@ -362,155 +296,8 @@ quit;
 
 %ocr_log(INSERT_TRACKER, SUCCESS);
 
-/*--- Pull full tracker for this cycle ---*/
-proc sql;
-  create table work.tracker_this_cycle as
-  select * from STI_WER.OCR_Weekly_Tracker
-  where CycleID = "&cycle_id."
-  order by WeekSequence;
-quit;
-
-/*--- Claims-by-month summary (used for Chart 3) ---*/
-proc sql;
-  create table work.Motor_Monthly_Count as
-  select
-      put(ReportedMonth, yymmn6.) as MonthLabel length=7,
-      count(distinct ClaimCode)   as ClaimCount
-  from work.MotorClaims_Final
-  group by ReportedMonth
-  order by ReportedMonth;
-quit;
-
 /*--------------------------------------------------------------
-  PNG Charts
-  Chart 1: OCR trend line.
-  Chart 2: Claims closed bar.
-  Chart 3: Claims count by reported month.
-  Week 2+ only for Charts 1 & 2; Chart 3 produced every week.
---------------------------------------------------------------*/
-%let png_ocr_outfile =
-  /data/fnbinsurance/Short_Term/Monitoring/MotorOCR_Trend_&rd..png;
-%let png_closed_outfile =
-  /data/fnbinsurance/Short_Term/Monitoring/MotorOCR_Closed_&rd..png;
-%let png_monthly_outfile =
-  /data/fnbinsurance/Short_Term/Monitoring/MotorOCR_Monthly_&rd..png;
-
-%if &week_num. >= 2 %then %do;
-
-  /* Chart 1 — OCR Amount Trend */
-  ods listing image_dpi=150
-    gpath="/data/fnbinsurance/Short_Term/Monitoring";
-  ods graphics on / reset=all imagename="MotorOCR_Trend_&rd."
-    outputfmt=png width=800px height=400px;
-
-  title "OCR Amount Movement -- Motor Retail (CycleID &cycle_id.)";
-  footnote j=left
-    "Baseline: R &baseline_ocr_fmt.  |  Claims: &baseline_claims_fmt.  |  Run: &rd.";
-
-  proc sgplot data=work.tracker_this_cycle;
-    series x=WeekLabel y=Current_OCR_Amt /
-      markers
-      markerattrs=(symbol=circlefilled size=10 color=CX54B9AC)
-      lineattrs=(thickness=2 color=CX54B9AC);
-    yaxis label="Current OCR Amount (R)" grid valuesformat=comma18.;
-    xaxis label="Week" discreteorder=data;
-  run;
-
-  title; footnote;
-  ods graphics off;
-  ods listing close;
-
-  /* Chart 2 — Claims Closed Bar */
-  ods listing image_dpi=150
-    gpath="/data/fnbinsurance/Short_Term/Monitoring";
-  ods graphics on / reset=all imagename="MotorOCR_Closed_&rd."
-    outputfmt=png width=800px height=400px;
-
-  title "Claims Closed Per Week -- Motor Retail (CycleID &cycle_id.)";
-
-  proc sgplot data=work.tracker_this_cycle;
-    vbar WeekLabel / response=Closed_This_Week
-      fillattrs=(color=CX54B9AC)
-      datalabel
-      datalabelattrs=(size=10 weight=bold);
-    yaxis label="Claims Closed This Week" grid;
-    xaxis label="Week" discreteorder=data;
-  run;
-
-  title;
-  ods graphics off;
-  ods listing close;
-
-  %ocr_log(CHARTS, SUCCESS,
-           info=Motor PNG charts 1+2 exported for Week &week_num.);
-
-%end;
-%else %do;
-  %ocr_log(CHARTS, SKIPPED,
-           info=Week 1 -- Motor charts 1+2 deferred to Week 2+);
-%end;
-
-/* Chart 3 — Claims Count by Reported Month (every week) */
-ods listing image_dpi=150
-  gpath="/data/fnbinsurance/Short_Term/Monitoring";
-ods graphics on / reset=all imagename="MotorOCR_Monthly_&rd."
-  outputfmt=png width=800px height=400px;
-
-title "Open Claims by Reported Month -- Motor Retail (CycleID &cycle_id.)";
-footnote j=left "Run: &rd.  |  Flagged: future-dated report months";
-
-proc sgplot data=work.Motor_Monthly_Count;
-  vbar MonthLabel / response=ClaimCount
-    fillattrs=(color=CX54B9AC)
-    datalabel
-    datalabelattrs=(size=10 weight=bold);
-  yaxis label="Number of Open Claims" grid;
-  xaxis label="Reported Month" discreteorder=data;
-run;
-
-title; footnote;
-ods graphics off;
-ods listing close;
-
-%ocr_log(CHART3, SUCCESS,
-         info=Motor monthly claims chart exported for Week &week_num.);
-
-/*--------------------------------------------------------------
-  Export to Excel — Claims Detail sheet ONLY.
---------------------------------------------------------------*/
-%let outfile =
-  /data/fnbinsurance/Short_Term/Monitoring/MotorOCR_Tracker_&rd..xlsx;
-
-proc template;
-  define style OCR_Style;
-    parent = styles.excel;
-    style Header /
-      background  = CX54B9AC
-      color       = white
-      font_weight = bold;
-  end;
-run;
-
-ods excel file="&outfile."
-  style = OCR_Style
-  options(
-    sheet_name      = "Claims Detail"
-    embedded_titles = "yes"
-    frozen_headers  = "yes"
-    autofilter      = "yes"
-    flow            = "tables"
-  );
-  title "Motor Retail Claims Under Investigation -- Week &week_num.";
-  proc print data=work.MotorClaims_Final noobs label;
-    format Estimate_OCR_When_Flagged Current_Estimate_OCR OCR_Movement comma18.2;
-  run;
-ods excel close;
-title;
-
-%ocr_log(EXPORT_EXCEL, SUCCESS, info=&outfile.);
-
-/*--------------------------------------------------------------
-  Pre-format email values.
+  Pre-format email values
 --------------------------------------------------------------*/
 %let email_open_fmt     = %sysfunc(putn(&open_this_week.,   comma10.));
 %let email_baseline_fmt = %sysfunc(putn(&baseline_claims.,  comma10.));
@@ -521,13 +308,13 @@ title;
 %let email_pct_fmt      = %sysfunc(putn(%sysevalf(&pct_closed.*100), 8.1));
 
 /*--------------------------------------------------------------
-  Build aged-claims breakdown text for the email body.
+  Build aged-claims breakdown text for email body
 --------------------------------------------------------------*/
 proc sql noprint;
-  select   put(ReportedMonth, yymmn6.) || '  (' ||
-           strip(put(count(distinct ClaimCode), comma10.)) || ' claims)'
-  into     :aged_lines separated by '|'
-  from     work.Motor_Aged
+  select put(ReportedMonth, yymmn6.) || '  (' ||
+         strip(put(count(distinct ClaimCode), comma10.)) || ' claims)'
+  into :aged_lines separated by '|'
+  from work.Motor_Aged
   group by ReportedMonth
   order by ReportedMonth;
 quit;
@@ -554,25 +341,18 @@ filename outbox email;
     put "Motor OCR Summary";
     put "-------------------------------";
     put " ";
-    put "Claims closed this week:";
-    put "  &email_closed_fmt.";
-    put " ";
-    put "Cumulative claims closed:";
-    put "  &email_cumul_fmt. of &email_baseline_fmt. (&email_pct_fmt.%)";
-    put " ";
-    put "Current OCR amount:";
-    put "  R &email_ocr_fmt.";
-    put " ";
-    put "OCR reduced this week:";
-    put "  R &email_reduced_fmt.";
+    put "Claims closed this week:   &email_closed_fmt.";
+    put "Cumulative claims closed:  &email_cumul_fmt. of &email_baseline_fmt. (&email_pct_fmt.%)";
+    put "Current OCR amount:        R &email_ocr_fmt.";
+    put "OCR reduced this week:     R &email_reduced_fmt.";
     put " ";
     put "-------------------------------";
-    put "Future-dated claims (Motor)";
+    put "Aged Claims (older than 3 months)";
     put "-------------------------------";
     put " ";
     %if %sysevalf(&aged_count. > 0, boolean) %then %do;
       put "** ACTION REQUIRED: &aged_count_fmt. claim(s) have a reported month";
-      put "   that is in the future relative to today and require attention. **";
+      put "   older than 3 months from today's run date and require attention. **";
       put " ";
       put "Breakdown by reported month:";
       %local i aged_line;
@@ -585,69 +365,24 @@ filename outbox email;
       %end;
     %end;
     %else %do;
-      put "No Motor claims have a future-dated report month. All in order.";
+      put "No Motor claims are older than 3 months. All in order.";
     %end;
-    put " ";
-    put "-------------------------------";
-    put " ";
-    %if &week_num. >= 2 %then %do;
-      put "The outstanding Motor claims list and trend charts are attached.";
-    %end;
-    %else %do;
-      put "The outstanding Motor claims list is attached.";
-      put "Trend charts will be included from Week 2 onwards.";
-    %end;
-    put " ";
-    put "I will share another update next week.";
     put " ";
     put "Kind regards";
     put "Morris";
 %mend motor_email_body;
 
-%if &week_num. >= 2 %then %do;
-
-  data _null_;
-    file outbox
-      to      = ("morris.nkomo@fnb.co.za")
-      from    = ("FNB ST Analytics <fnbst-analytics@fnb.co.za>")
-      subject = "TEST Motor OCR Tracker -- Week &week_num. (&rd.) [Cycle &cycle_id.]"
-      attach  = (
-        "&outfile."
-          content_type=
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        "&png_ocr_outfile."
-          content_type="image/png"
-        "&png_closed_outfile."
-          content_type="image/png"
-        "&png_monthly_outfile."
-          content_type="image/png"
-      );
-    %motor_email_body;
-  run;
-
-%end;
-%else %do;
-
-  data _null_;
-    file outbox
-      to      = ("morris.nkomo@fnb.co.za")
-      from    = ("FNB ST Analytics <fnbst-analytics@fnb.co.za>")
-      subject = "TEST Motor OCR Tracker -- Week &week_num. (&rd.) [Cycle &cycle_id.]"
-      attach  = (
-        "&outfile."
-          content_type=
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        "&png_monthly_outfile."
-          content_type="image/png"
-      );
-    %motor_email_body;
-  run;
-
-%end;
+data _null_;
+  file outbox
+    to      = ("morris.nkomo@fnb.co.za")
+    from    = ("FNB ST Analytics <fnbst-analytics@fnb.co.za>")
+    subject = "TEST Motor OCR Tracker -- Week &week_num. (&rd.) [Cycle &cycle_id.]";
+  %motor_email_body;
+run;
 
 %ocr_log(EMAIL, SUCCESS,
          records=&open_this_week., metric=&ocr_this_week.,
-         info=Week &week_num. Motor email sent to morris.nkomo@fnb.co.za);
+         info=Week &week_num. Motor email sent);
 
 %ocr_log(JOB_END, SUCCESS,
          records=&open_this_week., metric=&ocr_this_week.);
@@ -667,7 +402,7 @@ filename outbox email;
         nm_week_num nm_existing_rows nm_seq_exists
         nm_open_this_week nm_ocr_this_week
         nm_cumul_closed nm_closed_this_week nm_ocr_reduced nm_pct_closed
-        nm_cycle_mismatch_flag nm_outfile nm_html_outfile
+        nm_aged_cutoff
         nm_email_open_fmt nm_email_baseline_fmt nm_email_ocr_fmt
         nm_email_reduced_fmt nm_email_closed_fmt nm_email_cumul_fmt nm_email_pct_fmt
         nm_aged_count nm_aged_count_fmt nm_aged_lines;
@@ -687,32 +422,16 @@ proc sql noprint;
 quit;
 
 %if &sqlobs. = 0 %then %do;
-  %ocr_log(NM_RESOLVE_CYCLE, FAILED,
-           error=No ACTIVE cycle found in NM_Cycle_Control);
-  %put ERROR: No ACTIVE Non-Motor cycle found in NM_Cycle_Control.;
-  %put ERROR: Run OCR_02_Baseline.sas on the 16th first.;
+  %ocr_log(NM_RESOLVE_CYCLE, FAILED, error=No ACTIVE cycle found in NM_Cycle_Control);
+  %put ERROR: No ACTIVE Non-Motor cycle found. Run OCR_02_Baseline.sas on the 16th first.;
   %abort cancel;
 %end;
-
-%put NOTE: [NM] Active Cycle ID     = &nm_cycle_id.;
-%put NOTE: [NM] Baseline Claims     = &nm_baseline_claims.;
-%put NOTE: [NM] Baseline OCR Amount = &nm_baseline_ocr.;
-%ocr_log(NM_RESOLVE_CYCLE, SUCCESS,
-         info=CycleID=&nm_cycle_id. Claims=&nm_baseline_claims.);
 
 %let nm_baseline_ocr_fmt    = %sysfunc(putn(&nm_baseline_ocr.,    comma18.2));
 %let nm_baseline_claims_fmt = %sysfunc(putn(&nm_baseline_claims., comma10.));
 
-/*--- Cycle / run-date mismatch flag ---*/
-%let rd_yyyymm = %sysfunc(substr(&rd., 1, 6));
-
-%if %str(&rd_yyyymm.) ne %str(&nm_cycle_id.) %then %do;
-  %put WARNING: [NM] Run date month (&rd_yyyymm.) ne active CycleID (&nm_cycle_id.).;
-  %ocr_log(NM_CYCLE_DATE_MISMATCH, WARNING,
-           info=RunDate &rd_yyyymm. ne CycleID &nm_cycle_id.);
-  %let nm_cycle_mismatch_flag = Y;
-%end;
-%else %let nm_cycle_mismatch_flag = N;
+%ocr_log(NM_RESOLVE_CYCLE, SUCCESS,
+         info=CycleID=&nm_cycle_id. Claims=&nm_baseline_claims.);
 
 /*--- Next week number ---*/
 proc sql noprint;
@@ -723,7 +442,6 @@ proc sql noprint;
 quit;
 
 %let nm_week_num = &nm_existing_rows.;
-%put NOTE: [NM] Week number (next to insert) = &nm_week_num.;
 
 /*--- Previous week values ---*/
 proc sql noprint;
@@ -753,7 +471,7 @@ quit;
 %if &nm_seq_exists. > 0 %then %do;
   %ocr_log(NM_WEEK_RESOLVE, FAILED,
            error=WeekSequence &nm_week_num. already exists for CycleID &nm_cycle_id.);
-  %put ERROR: [NM] Row for CycleID=&nm_cycle_id. WeekSequence=&nm_week_num. already exists.;
+  %put ERROR: [NM] Row already exists for CycleID=&nm_cycle_id. WeekSequence=&nm_week_num..;
   %abort cancel;
 %end;
 
@@ -765,8 +483,7 @@ quit;
   %abort cancel;
 %end;
 
-%ocr_log(NM_WEEK_RESOLVE, SUCCESS,
-         records=&nm_week_num.,
+%ocr_log(NM_WEEK_RESOLVE, SUCCESS, records=&nm_week_num.,
          info=CycleID=&nm_cycle_id. PrevOpen=&nm_prev_open.);
 
 /*--- Pull snapshot: Non-Motor + Retail ---*/
@@ -781,7 +498,7 @@ run;
 
 %ocr_log(NM_EXTRACT_SNAPSHOT, SUCCESS, records=&sysnobs.);
 
-/*--- Current estimates (reuse work.current_est if Motor ran first) ---*/
+/*--- Current estimates (reuse if Motor ran first) ---*/
 %if not %sysfunc(exist(work.current_est)) %then %do;
   data work.current_est;
     set STI_WER.vw_OpsClaimsReport(
@@ -829,24 +546,20 @@ quit;
          records=&nm_open_this_week., metric=&nm_ocr_this_week.);
 
 /*--------------------------------------------------------------
-  Aged-claims summary.
-  Counts claims where ReportedMonth is AFTER the run date
-  (i.e. future-dated report months).
-  &sas_rd. re-derived here so NM job is fully self-contained.
+  Aged-claims: ReportedMonth older than 3 months from run date.
+  sas_rd already set by Motor section; re-derive to be safe.
 --------------------------------------------------------------*/
-%let sas_rd = %sysfunc(inputn(&rd., yymmddn8.));
-%put NOTE: [NM] Run date (SAS)    = &sas_rd.;
-%put NOTE: [NM] Run date (YYMMDD) = %sysfunc(putn(&sas_rd., yymmddn8.));
+%let sas_rd       = %sysfunc(inputn(&rd., yymmddn8.));
+%let nm_aged_cutoff = %sysfunc(intnx(month, &sas_rd., -3, B));
+
+%put NOTE: [NM] Aged cutoff date = &nm_aged_cutoff.
+     (%sysfunc(putn(&nm_aged_cutoff., date9.)));
 
 proc sql;
   create table work.NM_Aged as
-  select
-      ClaimCode,
-      ReportedMonth,
-      Current_Estimate_OCR,
-      ClaimHandler
+  select ClaimCode, ReportedMonth, Current_Estimate_OCR, ClaimHandler
   from work.NMClaims_Final
-  where ReportedMonth > &sas_rd.
+  where ReportedMonth < &nm_aged_cutoff.
   order by ReportedMonth, ClaimCode;
 quit;
 
@@ -859,25 +572,17 @@ quit;
 %if %length(&nm_aged_count.) = 0 %then %let nm_aged_count = 0;
 %let nm_aged_count_fmt = %sysfunc(putn(&nm_aged_count., comma10.));
 
-%put NOTE: [NM] Future-dated claims (ReportedMonth > run date) = &nm_aged_count.;
-
-%ocr_log(NM_AGED_CLAIMS, SUCCESS,
-         records=&nm_aged_count.,
-         info=NM future-dated claims = &nm_aged_count.);
+%put NOTE: [NM] Claims older than 3 months = &nm_aged_count.;
+%ocr_log(NM_AGED_CLAIMS, SUCCESS, records=&nm_aged_count.,
+         info=NM aged claims (>3 months) = &nm_aged_count.);
 
 /*--- Insert weekly row ---*/
 proc sql noprint;
   connect to odbc as sqlsvr (
-    noprompt="Driver=MSSQL;
-              AnsiNPW=1;
-              AuthenticationMethod=10;
-              Database=FNB_STI_Analytics;
-              HostName=LFE-RBPREATLDB1;
-              PortNumber=1433;
-              UID=&User.;
-              PWD=&FNB_Login."
+    noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;
+              Database=FNB_STI_Analytics;HostName=LFE-RBPREATLDB1;
+              PortNumber=1433;UID=&User.;PWD=&FNB_Login."
   );
-
   execute (
     INSERT INTO FNB_STI_Analytics.Claims.NM_Weekly_Tracker
       (CycleID, WeekSequence, WeekLabel, RunDate,
@@ -891,7 +596,6 @@ proc sql noprint;
       &nm_cumul_closed., &nm_closed_this_week., &nm_ocr_reduced., &nm_pct_closed.
     )
   ) by sqlsvr;
-
   disconnect from sqlsvr;
 quit;
 
@@ -904,141 +608,8 @@ quit;
 
 %ocr_log(NM_INSERT_TRACKER, SUCCESS);
 
-/*--- Pull full tracker for this cycle ---*/
-proc sql;
-  create table work.nm_tracker_this_cycle as
-  select * from STI_WER.NM_Weekly_Tracker
-  where CycleID = "&nm_cycle_id."
-  order by WeekSequence;
-quit;
-
-/*--- Claims-by-month summary (used for Chart 3) ---*/
-proc sql;
-  create table work.NM_Monthly_Count as
-  select
-      put(ReportedMonth, yymmn6.) as MonthLabel length=7,
-      count(distinct ClaimCode)   as ClaimCount
-  from work.NMClaims_Final
-  group by ReportedMonth
-  order by ReportedMonth;
-quit;
-
 /*--------------------------------------------------------------
-  PNG Charts
---------------------------------------------------------------*/
-%let nm_png_ocr_outfile =
-  /data/fnbinsurance/Short_Term/Monitoring/NonMotorOCR_Trend_&rd..png;
-%let nm_png_closed_outfile =
-  /data/fnbinsurance/Short_Term/Monitoring/NonMotorOCR_Closed_&rd..png;
-%let nm_png_monthly_outfile =
-  /data/fnbinsurance/Short_Term/Monitoring/NonMotorOCR_Monthly_&rd..png;
-
-%if &nm_week_num. >= 2 %then %do;
-
-  /* Chart 1 — OCR Amount Trend */
-  ods listing image_dpi=150
-    gpath="/data/fnbinsurance/Short_Term/Monitoring";
-  ods graphics on / reset=all imagename="NonMotorOCR_Trend_&rd."
-    outputfmt=png width=800px height=400px;
-
-  title "OCR Amount Movement -- Non-Motor Retail (CycleID &nm_cycle_id.)";
-  footnote j=left
-    "Baseline: R &nm_baseline_ocr_fmt.  |  Claims: &nm_baseline_claims_fmt.  |  Run: &rd.";
-
-  proc sgplot data=work.nm_tracker_this_cycle;
-    series x=WeekLabel y=Current_OCR_Amt /
-      markers
-      markerattrs=(symbol=circlefilled size=10 color=CX54B9AC)
-      lineattrs=(thickness=2 color=CX54B9AC);
-    yaxis label="Current OCR Amount (R)" grid valuesformat=comma18.;
-    xaxis label="Week" discreteorder=data;
-  run;
-
-  title; footnote;
-  ods graphics off;
-  ods listing close;
-
-  /* Chart 2 — Claims Closed Bar */
-  ods listing image_dpi=150
-    gpath="/data/fnbinsurance/Short_Term/Monitoring";
-  ods graphics on / reset=all imagename="NonMotorOCR_Closed_&rd."
-    outputfmt=png width=800px height=400px;
-
-  title "Claims Closed Per Week -- Non-Motor Retail (CycleID &nm_cycle_id.)";
-
-  proc sgplot data=work.nm_tracker_this_cycle;
-    vbar WeekLabel / response=Closed_This_Week
-      fillattrs=(color=CX54B9AC)
-      datalabel
-      datalabelattrs=(size=10 weight=bold);
-    yaxis label="Claims Closed This Week" grid;
-    xaxis label="Week" discreteorder=data;
-  run;
-
-  title;
-  ods graphics off;
-  ods listing close;
-
-  %ocr_log(NM_CHARTS, SUCCESS,
-           info=NM PNG charts 1+2 exported for Week &nm_week_num.);
-
-%end;
-%else %do;
-  %ocr_log(NM_CHARTS, SKIPPED,
-           info=Week 1 -- NM charts 1+2 deferred to Week 2+);
-%end;
-
-/* Chart 3 — Claims Count by Reported Month (every week) */
-ods listing image_dpi=150
-  gpath="/data/fnbinsurance/Short_Term/Monitoring";
-ods graphics on / reset=all imagename="NonMotorOCR_Monthly_&rd."
-  outputfmt=png width=800px height=400px;
-
-title "Open Claims by Reported Month -- Non-Motor Retail (CycleID &nm_cycle_id.)";
-footnote j=left "Run: &rd.  |  Flagged: future-dated report months";
-
-proc sgplot data=work.NM_Monthly_Count;
-  vbar MonthLabel / response=ClaimCount
-    fillattrs=(color=CX54B9AC)
-    datalabel
-    datalabelattrs=(size=10 weight=bold);
-  yaxis label="Number of Open Claims" grid;
-  xaxis label="Reported Month" discreteorder=data;
-run;
-
-title; footnote;
-ods graphics off;
-ods listing close;
-
-%ocr_log(NM_CHART3, SUCCESS,
-         info=NM monthly claims chart exported for Week &nm_week_num.);
-
-/*--------------------------------------------------------------
-  Export to Excel — Claims Detail sheet ONLY.
---------------------------------------------------------------*/
-%let nm_outfile =
-  /data/fnbinsurance/Short_Term/Monitoring/NonMotorOCR_Tracker_&rd..xlsx;
-
-ods excel file="&nm_outfile."
-  style = OCR_Style
-  options(
-    sheet_name      = "Claims Detail"
-    embedded_titles = "yes"
-    frozen_headers  = "yes"
-    autofilter      = "yes"
-    flow            = "tables"
-  );
-  title "Non-Motor Retail Claims Under Investigation -- Week &nm_week_num.";
-  proc print data=work.NMClaims_Final noobs label;
-    format Estimate_OCR_When_Flagged Current_Estimate_OCR OCR_Movement comma18.2;
-  run;
-ods excel close;
-title;
-
-%ocr_log(NM_EXPORT_EXCEL, SUCCESS, info=&nm_outfile.);
-
-/*--------------------------------------------------------------
-  Pre-format email values.
+  Pre-format email values
 --------------------------------------------------------------*/
 %let nm_email_open_fmt     = %sysfunc(putn(&nm_open_this_week.,   comma10.));
 %let nm_email_baseline_fmt = %sysfunc(putn(&nm_baseline_claims.,  comma10.));
@@ -1049,13 +620,13 @@ title;
 %let nm_email_pct_fmt      = %sysfunc(putn(%sysevalf(&nm_pct_closed.*100), 8.1));
 
 /*--------------------------------------------------------------
-  Build aged-claims breakdown text for the NM email body.
+  Build aged-claims breakdown text for email body
 --------------------------------------------------------------*/
 proc sql noprint;
-  select   put(ReportedMonth, yymmn6.) || '  (' ||
-           strip(put(count(distinct ClaimCode), comma10.)) || ' claims)'
-  into     :nm_aged_lines separated by '|'
-  from     work.NM_Aged
+  select put(ReportedMonth, yymmn6.) || '  (' ||
+         strip(put(count(distinct ClaimCode), comma10.)) || ' claims)'
+  into :nm_aged_lines separated by '|'
+  from work.NM_Aged
   group by ReportedMonth
   order by ReportedMonth;
 quit;
@@ -1082,25 +653,18 @@ filename nm_outbx email;
     put "Non-Motor OCR Summary";
     put "-------------------------------";
     put " ";
-    put "Claims closed this week:";
-    put "  &nm_email_closed_fmt.";
-    put " ";
-    put "Cumulative claims closed:";
-    put "  &nm_email_cumul_fmt. of &nm_email_baseline_fmt. (&nm_email_pct_fmt.%)";
-    put " ";
-    put "Current OCR amount:";
-    put "  R &nm_email_ocr_fmt.";
-    put " ";
-    put "OCR reduced this week:";
-    put "  R &nm_email_reduced_fmt.";
+    put "Claims closed this week:   &nm_email_closed_fmt.";
+    put "Cumulative claims closed:  &nm_email_cumul_fmt. of &nm_email_baseline_fmt. (&nm_email_pct_fmt.%)";
+    put "Current OCR amount:        R &nm_email_ocr_fmt.";
+    put "OCR reduced this week:     R &nm_email_reduced_fmt.";
     put " ";
     put "-------------------------------";
-    put "Future-dated claims (Non-Motor)";
+    put "Aged Claims (older than 3 months)";
     put "-------------------------------";
     put " ";
     %if %sysevalf(&nm_aged_count. > 0, boolean) %then %do;
       put "** ACTION REQUIRED: &nm_aged_count_fmt. claim(s) have a reported month";
-      put "   that is in the future relative to today and require attention. **";
+      put "   older than 3 months from today's run date and require attention. **";
       put " ";
       put "Breakdown by reported month:";
       %local nm_i nm_aged_line;
@@ -1113,69 +677,24 @@ filename nm_outbx email;
       %end;
     %end;
     %else %do;
-      put "No Non-Motor claims have a future-dated report month. All in order.";
+      put "No Non-Motor claims are older than 3 months. All in order.";
     %end;
-    put " ";
-    put "-------------------------------";
-    put " ";
-    %if &nm_week_num. >= 2 %then %do;
-      put "The outstanding Non-Motor claims list and trend charts are attached.";
-    %end;
-    %else %do;
-      put "The outstanding Non-Motor claims list is attached.";
-      put "Trend charts will be included from Week 2 onwards.";
-    %end;
-    put " ";
-    put "I will share another update next week.";
     put " ";
     put "Kind regards";
     put "Morris";
 %mend nm_email_body;
 
-%if &nm_week_num. >= 2 %then %do;
-
-  data _null_;
-    file nm_outbx
-      to      = ("morris.nkomo@fnb.co.za")
-      from    = ("FNB ST Analytics <fnbst-analytics@fnb.co.za>")
-      subject = "TEST Non-Motor OCR Tracker -- Week &nm_week_num. (&rd.) [Cycle &nm_cycle_id.]"
-      attach  = (
-        "&nm_outfile."
-          content_type=
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        "&nm_png_ocr_outfile."
-          content_type="image/png"
-        "&nm_png_closed_outfile."
-          content_type="image/png"
-        "&nm_png_monthly_outfile."
-          content_type="image/png"
-      );
-    %nm_email_body;
-  run;
-
-%end;
-%else %do;
-
-  data _null_;
-    file nm_outbx
-      to      = ("morris.nkomo@fnb.co.za")
-      from    = ("FNB ST Analytics <fnbst-analytics@fnb.co.za>")
-      subject = "TEST Non-Motor OCR Tracker -- Week &nm_week_num. (&rd.) [Cycle &nm_cycle_id.]"
-      attach  = (
-        "&nm_outfile."
-          content_type=
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        "&nm_png_monthly_outfile."
-          content_type="image/png"
-      );
-    %nm_email_body;
-  run;
-
-%end;
+data _null_;
+  file nm_outbx
+    to      = ("morris.nkomo@fnb.co.za")
+    from    = ("FNB ST Analytics <fnbst-analytics@fnb.co.za>")
+    subject = "TEST Non-Motor OCR Tracker -- Week &nm_week_num. (&rd.) [Cycle &nm_cycle_id.]";
+  %nm_email_body;
+run;
 
 %ocr_log(NM_EMAIL, SUCCESS,
          records=&nm_open_this_week., metric=&nm_ocr_this_week.,
-         info=Week &nm_week_num. NM email sent to morris.nkomo@fnb.co.za);
+         info=Week &nm_week_num. NM email sent);
 
 %ocr_log(NM_JOB_END, SUCCESS,
          records=&nm_open_this_week., metric=&nm_ocr_this_week.);
