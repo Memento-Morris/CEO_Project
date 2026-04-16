@@ -1,135 +1,282 @@
-/* ============================================================
-   CAMPAIGN STATUS LOOKUP
-   Instructions: Change the campaign code below and run.
-   ============================================================ */
+1                                                          The SAS System                             16:33 Thursday, April 16, 2026
 
-%let campaign_code = CMA02369;   /* <-- CHANGE THIS */
+MLOGIC(HTML5ACCESSIBLEGRAPHSUPPORTED):  Beginning execution.
+MLOGIC(_SAS_VERCOMP_FV):  Beginning execution.
+MLOGIC(_SAS_VERCOMP_FV):  Parameter FMAJOR has value 9
+MLOGIC(_SAS_VERCOMP_FV):  Parameter FMINOR has value 4
+MLOGIC(_SAS_VERCOMP_FV):  Parameter FMAINT has value 4
+MLOGIC(_SAS_VERCOMP_FV):  Parameter VMAJOR has value 0
+MLOGIC(_SAS_VERCOMP_FV):  Parameter VMINOR has value 0
+MLOGIC(_SAS_VERCOMP_FV):  Parameter VMAINT has value 0
+MLOGIC(_SAS_VERCOMP_FV):  %LOCAL  MAJOR
+MLOGIC(_SAS_VERCOMP_FV):  %LOCAL  MINOR
+MLOGIC(_SAS_VERCOMP_FV):  %LOCAL  MAINT
+MLOGIC(_SAS_VERCOMP_FV):  %LOCAL  CURMAJ
+MLOGIC(_SAS_VERCOMP_FV):  %LOCAL  CURMIN
+MLOGIC(_SAS_VERCOMP_FV):  %LOCAL  CURMNT
+MLOGIC(_SAS_VERCOMP_FV):  %LET (variable name is CURMAJ)
+SYMBOLGEN:  Macro variable SYSVLONG resolves to 9.04.01M8P022223
+SYMBOLGEN:  Macro variable CURMAJ resolves to 9
+MLOGIC(_SAS_VERCOMP_FV):  %IF condition %eval(&CurMaj EQ V) is FALSE
+MLOGIC(_SAS_VERCOMP_FV):  %LET (variable name is MAJOR)
+SYMBOLGEN:  Macro variable FMAJOR resolves to 9
+MLOGIC(_SAS_VERCOMP_FV):  %LET (variable name is MINOR)
+SYMBOLGEN:  Macro variable FMINOR resolves to 4
+MLOGIC(_SAS_VERCOMP_FV):  %LET (variable name is MAINT)
+SYMBOLGEN:  Macro variable FMAINT resolves to 4
+MLOGIC(_SAS_VERCOMP_FV):  %LET (variable name is CURMIN)
+SYMBOLGEN:  Macro variable SYSVLONG resolves to 9.04.01M8P022223
+MLOGIC(_SAS_VERCOMP_FV):  %LET (variable name is CURMNT)
+SYMBOLGEN:  Macro variable SYSVLONG resolves to 9.04.01M8P022223
+SYMBOLGEN:  Macro variable MAJOR resolves to 9
+SYMBOLGEN:  Macro variable CURMAJ resolves to 9
+MLOGIC(_SAS_VERCOMP_FV):  %IF condition %eval(&major NE &CurMaj) is FALSE
+SYMBOLGEN:  Macro variable MINOR resolves to 4
+SYMBOLGEN:  Macro variable CURMIN resolves to 04
+MLOGIC(_SAS_VERCOMP_FV):  %IF condition %eval(&minor NE &CurMin) is FALSE
+SYMBOLGEN:  Macro variable MAINT resolves to 4
+MLOGIC(_SAS_VERCOMP_FV):  %IF condition "&maint" = "" is FALSE
+SYMBOLGEN:  Macro variable CURMNT resolves to 8
+SYMBOLGEN:  Macro variable MAINT resolves to 4
+MLOGIC(_SAS_VERCOMP_FV):  Ending execution.
+MLOGIC(HTML5ACCESSIBLEGRAPHSUPPORTED):  %IF condition %_SAS_VERCOMP_FV(9,4,4, 0,0,0) >= 0 is TRUE
+MPRINT(HTML5ACCESSIBLEGRAPHSUPPORTED):   ACCESSIBLE_GRAPH
+MLOGIC(HTML5ACCESSIBLEGRAPHSUPPORTED):  Ending execution.
+SYMBOLGEN:  Macro variable SASWORKLOCATION resolves to 
+            "/work4/SAS_work1AF30035DDA9_dna-r1saspwrk04/SAS_work3D0C0035DDA9_dna-r1saspwrk04/"
+NOTE: Writing HTML5(EGHTML) Body file: EGHTML
+NOTE: Libref PASS6 was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnb/clb/archive/5_optimise/passed_phase1
+NOTE: Libref APN_PASS was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnb/clb/prod_data/5_optimise/passed_phase1
+NOTE: Libref DROP6 was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnb/clb/archive/5_optimise/dropped_phase1
+NOTE: Libref APN_DROP was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnb/clb/prod_data/5_optimise/dropped_phase1
+NOTE: Libref APNS was successfully assigned as follows: 
+2                                                          The SAS System                             16:33 Thursday, April 16, 2026
 
-/* ============================================================
-   STEP 1: Pull passed leads (6 months archive + last 7 days)
-   ============================================================ */
+      Engine:        V9 
+      Physical Name: /data/fnb/clb/prod_data/7_tracking_views/Reporting_views
 
-libname Pass6   "/data/fnb/clb/archive/5_optimise/passed_phase1";
-libname APN_Pass "/data/fnb/clb/prod_data/5_optimise/passed_phase1";
-libname Drop6   "/data/fnb/clb/archive/5_optimise/dropped_phase1";
-libname APN_Drop "/data/fnb/clb/prod_data/5_optimise/dropped_phase1";
-libname APNS    "/data/fnb/clb/prod_data/7_tracking_views/Reporting_views";
 
-/* Get all matching table names from each library */
-proc sql noprint;
-  select memname into :pass6_tables separated by ' '
-  from dictionary.tables
-  where libname = "PASS6" and memname like "%&campaign_code.%";
+SYMBOLGEN:  Macro variable CAMPAIGN_CODE resolves to CMA08896V01M02
+WARNING: Apparent invocation of macro CMA08896V01M02 not resolved.
+NOTE: No rows were selected.
+SYMBOLGEN:  Macro variable CAMPAIGN_CODE resolves to CMA08896V01M02
+WARNING: Apparent invocation of macro CMA08896V01M02 not resolved.
+NOTE: No rows were selected.
+SYMBOLGEN:  Macro variable CAMPAIGN_CODE resolves to CMA08896V01M02
+WARNING: Apparent invocation of macro CMA08896V01M02 not resolved.
+NOTE: No rows were selected.
+SYMBOLGEN:  Macro variable CAMPAIGN_CODE resolves to CMA08896V01M02
+WARNING: Apparent invocation of macro CMA08896V01M02 not resolved.
+NOTE: No rows were selected.
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           6.69 seconds
+      cpu time            6.61 seconds
+      
 
-  select memname into :passweek_tables separated by ' '
-  from dictionary.tables
-  where libname = "APN_PASS" and memname like "%&campaign_code.%";
+WARNING: Apparent symbolic reference PASS6_TABLES not resolved.
+Pass 6mo tables  : &pass6_tables
+WARNING: Apparent symbolic reference PASSWEEK_TABLES not resolved.
+Pass 7day tables : &passweek_tables
+WARNING: Apparent symbolic reference DROP6_TABLES not resolved.
+Drop 6mo tables  : &drop6_tables
+WARNING: Apparent symbolic reference DROPWEEK_TABLES not resolved.
+Drop 7day tables : &dropweek_tables
+MLOGIC(STACK_TABLES):  Beginning execution.
+WARNING: Apparent symbolic reference PASS6_TABLES not resolved.
+MLOGIC(STACK_TABLES):  Parameter LIBREF has value PASS6
+MLOGIC(STACK_TABLES):  Parameter TABLELIST has value &pass6_tables
+MLOGIC(STACK_TABLES):  Parameter OUTDS has value passed_6mo
+MLOGIC(STACK_TABLES):  %LET (variable name is N)
+SYMBOLGEN:  Macro variable TABLELIST resolves to &pass6_tables
+WARNING: Apparent symbolic reference PASS6_TABLES not resolved.
+SYMBOLGEN:  Macro variable N resolves to 1
+MLOGIC(STACK_TABLES):  %IF condition &n = 0 is FALSE
+SYMBOLGEN:  Macro variable OUTDS resolves to passed_6mo
+MPRINT(STACK_TABLES):   data passed_6mo;
+SYMBOLGEN:  Macro variable N resolves to 1
+MLOGIC(STACK_TABLES):  %DO loop beginning; index variable I; start value is 1; stop value is 1; by value is 1.  
+SYMBOLGEN:  Macro variable LIBREF resolves to PASS6
+SYMBOLGEN:  Macro variable TABLELIST resolves to &pass6_tables
+WARNING: Apparent symbolic reference PASS6_TABLES not resolved.
+SYMBOLGEN:  Macro variable I resolves to 1
+MLOGIC(STACK_TABLES):  %DO loop index variable I is now 2; loop will not iterate again.
+MPRINT(STACK_TABLES):   set PASS6.pass6_tables (keep= cust_no product_code drop_reason sub_segment campaign_name brand mucn);
+ERROR: File PASS6.PASS6_TABLES.DATA does not exist.
+MPRINT(STACK_TABLES):   run;
 
-  select memname into :drop6_tables separated by ' '
-  from dictionary.tables
-  where libname = "DROP6" and memname like "%&campaign_code.%";
+NOTE: Compression was disabled for data set WORK.PASSED_6MO because compression overhead would increase the size of the data set.
+NOTE: The SAS System stopped processing this step because of errors.
+WARNING: The data set WORK.PASSED_6MO may be incomplete.  When this step was stopped there were 0 observations and 0 variables.
+WARNING: Data set WORK.PASSED_6MO was not replaced because this step was stopped.
+NOTE: DATA statement used (Total process time):
+      real time           0.00 seconds
+3                                                          The SAS System                             16:33 Thursday, April 16, 2026
 
-  select memname into :dropweek_tables separated by ' '
-  from dictionary.tables
-  where libname = "APN_DROP" and memname like "%&campaign_code.%";
-quit;
+      cpu time            0.00 seconds
+      
 
-%put Pass 6mo tables  : &pass6_tables;
-%put Pass 7day tables : &passweek_tables;
-%put Drop 6mo tables  : &drop6_tables;
-%put Drop 7day tables : &dropweek_tables;
+MLOGIC(STACK_TABLES):  Ending execution.
+MLOGIC(STACK_TABLES):  Beginning execution.
+WARNING: Apparent symbolic reference PASSWEEK_TABLES not resolved.
+MLOGIC(STACK_TABLES):  Parameter LIBREF has value APN_PASS
+MLOGIC(STACK_TABLES):  Parameter TABLELIST has value &passweek_tables
+MLOGIC(STACK_TABLES):  Parameter OUTDS has value passed_week
+MLOGIC(STACK_TABLES):  %LET (variable name is N)
+SYMBOLGEN:  Macro variable TABLELIST resolves to &passweek_tables
+WARNING: Apparent symbolic reference PASSWEEK_TABLES not resolved.
+SYMBOLGEN:  Macro variable N resolves to 1
+MLOGIC(STACK_TABLES):  %IF condition &n = 0 is FALSE
+SYMBOLGEN:  Macro variable OUTDS resolves to passed_week
+MPRINT(STACK_TABLES):   data passed_week;
+SYMBOLGEN:  Macro variable N resolves to 1
+MLOGIC(STACK_TABLES):  %DO loop beginning; index variable I; start value is 1; stop value is 1; by value is 1.  
+SYMBOLGEN:  Macro variable LIBREF resolves to APN_PASS
+SYMBOLGEN:  Macro variable TABLELIST resolves to &passweek_tables
+WARNING: Apparent symbolic reference PASSWEEK_TABLES not resolved.
+SYMBOLGEN:  Macro variable I resolves to 1
+MLOGIC(STACK_TABLES):  %DO loop index variable I is now 2; loop will not iterate again.
+MPRINT(STACK_TABLES):   set APN_PASS.passweek_tables (keep= cust_no product_code drop_reason sub_segment campaign_name brand mucn);
+ERROR: File APN_PASS.PASSWEEK_TABLES.DATA does not exist.
+MPRINT(STACK_TABLES):   run;
 
-/* ============================================================
-   STEP 2: Stack all matching tables into one dataset
-   ============================================================ */
+NOTE: Compression was disabled for data set WORK.PASSED_WEEK because compression overhead would increase the size of the data set.
+NOTE: The SAS System stopped processing this step because of errors.
+WARNING: The data set WORK.PASSED_WEEK may be incomplete.  When this step was stopped there were 0 observations and 0 variables.
+WARNING: Data set WORK.PASSED_WEEK was not replaced because this step was stopped.
+NOTE: DATA statement used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
 
-%macro stack_tables(libref, tablelist, outds);
-  %let n = %sysfunc(countw(&tablelist));
-  %if &n = 0 %then %do;
-    %put WARNING: No tables found in &libref for &campaign_code;
-  %end;
-  %else %do;
-    data &outds;
-      set
-      %do i = 1 %to &n;
-        &libref..%scan(&tablelist, &i)
-      %end;
-      (keep= cust_no product_code drop_reason sub_segment campaign_name brand mucn);
-    run;
-  %end;
-%mend;
+MLOGIC(STACK_TABLES):  Ending execution.
+MLOGIC(STACK_TABLES):  Beginning execution.
+WARNING: Apparent symbolic reference DROP6_TABLES not resolved.
+MLOGIC(STACK_TABLES):  Parameter LIBREF has value DROP6
+MLOGIC(STACK_TABLES):  Parameter TABLELIST has value &drop6_tables
+MLOGIC(STACK_TABLES):  Parameter OUTDS has value dropped_6mo
+MLOGIC(STACK_TABLES):  %LET (variable name is N)
+SYMBOLGEN:  Macro variable TABLELIST resolves to &drop6_tables
+WARNING: Apparent symbolic reference DROP6_TABLES not resolved.
+SYMBOLGEN:  Macro variable N resolves to 1
+MLOGIC(STACK_TABLES):  %IF condition &n = 0 is FALSE
+SYMBOLGEN:  Macro variable OUTDS resolves to dropped_6mo
+MPRINT(STACK_TABLES):   data dropped_6mo;
+SYMBOLGEN:  Macro variable N resolves to 1
+MLOGIC(STACK_TABLES):  %DO loop beginning; index variable I; start value is 1; stop value is 1; by value is 1.  
+SYMBOLGEN:  Macro variable LIBREF resolves to DROP6
+SYMBOLGEN:  Macro variable TABLELIST resolves to &drop6_tables
+WARNING: Apparent symbolic reference DROP6_TABLES not resolved.
+SYMBOLGEN:  Macro variable I resolves to 1
+MLOGIC(STACK_TABLES):  %DO loop index variable I is now 2; loop will not iterate again.
+MPRINT(STACK_TABLES):   set DROP6.drop6_tables (keep= cust_no product_code drop_reason sub_segment campaign_name brand mucn);
+ERROR: File DROP6.DROP6_TABLES.DATA does not exist.
+4                                                          The SAS System                             16:33 Thursday, April 16, 2026
 
-%stack_tables(PASS6,   &pass6_tables,   passed_6mo)
-%stack_tables(APN_PASS,&passweek_tables, passed_week)
-%stack_tables(DROP6,   &drop6_tables,   dropped_6mo)
-%stack_tables(APN_DROP,&dropweek_tables, dropped_week)
+MPRINT(STACK_TABLES):   run;
 
-/* Combine all into one */
-data all_leads;
-  set
-  %if %sysfunc(exist(passed_6mo))   %then passed_6mo;
-  %if %sysfunc(exist(passed_week))  %then passed_week;
-  %if %sysfunc(exist(dropped_6mo))  %then dropped_6mo;
-  %if %sysfunc(exist(dropped_week)) %then dropped_week;
-  ;
-  if drop_reason = "" then status = "Passed";
-                      else status = "Dropped";
-run;
+NOTE: Compression was disabled for data set WORK.DROPPED_6MO because compression overhead would increase the size of the data set.
+NOTE: The SAS System stopped processing this step because of errors.
+WARNING: The data set WORK.DROPPED_6MO may be incomplete.  When this step was stopped there were 0 observations and 0 variables.
+WARNING: Data set WORK.DROPPED_6MO was not replaced because this step was stopped.
+NOTE: DATA statement used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
 
-/* ============================================================
-   STEP 3: Summary report
-   ============================================================ */
+MLOGIC(STACK_TABLES):  Ending execution.
+MLOGIC(STACK_TABLES):  Beginning execution.
+WARNING: Apparent symbolic reference DROPWEEK_TABLES not resolved.
+MLOGIC(STACK_TABLES):  Parameter LIBREF has value APN_DROP
+MLOGIC(STACK_TABLES):  Parameter TABLELIST has value &dropweek_tables
+MLOGIC(STACK_TABLES):  Parameter OUTDS has value dropped_week
+MLOGIC(STACK_TABLES):  %LET (variable name is N)
+SYMBOLGEN:  Macro variable TABLELIST resolves to &dropweek_tables
+WARNING: Apparent symbolic reference DROPWEEK_TABLES not resolved.
+SYMBOLGEN:  Macro variable N resolves to 1
+MLOGIC(STACK_TABLES):  %IF condition &n = 0 is FALSE
+SYMBOLGEN:  Macro variable OUTDS resolves to dropped_week
+MPRINT(STACK_TABLES):   data dropped_week;
+SYMBOLGEN:  Macro variable N resolves to 1
+MLOGIC(STACK_TABLES):  %DO loop beginning; index variable I; start value is 1; stop value is 1; by value is 1.  
+SYMBOLGEN:  Macro variable LIBREF resolves to APN_DROP
+SYMBOLGEN:  Macro variable TABLELIST resolves to &dropweek_tables
+WARNING: Apparent symbolic reference DROPWEEK_TABLES not resolved.
+SYMBOLGEN:  Macro variable I resolves to 1
+MLOGIC(STACK_TABLES):  %DO loop index variable I is now 2; loop will not iterate again.
+MPRINT(STACK_TABLES):   set APN_DROP.dropweek_tables (keep= cust_no product_code drop_reason sub_segment campaign_name brand mucn);
+ERROR: File APN_DROP.DROPWEEK_TABLES.DATA does not exist.
+MPRINT(STACK_TABLES):   run;
 
-title "Campaign Status Report: &campaign_code";
+NOTE: Compression was disabled for data set WORK.DROPPED_WEEK because compression overhead would increase the size of the data set.
+NOTE: The SAS System stopped processing this step because of errors.
+WARNING: The data set WORK.DROPPED_WEEK may be incomplete.  When this step was stopped there were 0 observations and 0 variables.
+WARNING: Data set WORK.DROPPED_WEEK was not replaced because this step was stopped.
+NOTE: DATA statement used (Total process time):
+      real time           0.01 seconds
+      cpu time            0.00 seconds
+      
 
-/* Total leads */
-proc sql;
-  select
-    count(*)                              as Total_Leads     format comma10.,
-    sum(status = "Passed")                as Total_Passed    format comma10.,
-    sum(status = "Dropped")               as Total_Dropped   format comma10.,
-    round(sum(status="Passed")/count(*)*100, 0.1) as Pass_Rate_Pct  format 8.1
-  from all_leads;
-quit;
+MLOGIC(STACK_TABLES):  Ending execution.
+ERROR: Nesting of %IF statements in open code is not supported. %IF ignored.
+ERROR: Skipping to next %END statement.
+ERROR: Nesting of %IF statements in open code is not supported. %IF ignored.
+ERROR: Skipping to next %END statement.
+ERROR: Nesting of %IF statements in open code is not supported. %IF ignored.
+ERROR: Skipping to next %END statement.
+ERROR: Nesting of %IF statements in open code is not supported. %IF ignored.
+ERROR: Skipping to next %END statement.
 
-/* Breakdown by drop reason */
-title2 "Drop reason breakdown";
-proc sql;
-  select
-    drop_reason                           as Drop_Reason,
-    count(*)                              as Count           format comma10.,
-    round(count(*)/
-      (select count(*) from all_leads where status="Dropped")*100, 0.1) as Pct_of_Drops format 8.1
-  from all_leads
-  where status = "Dropped"
-  group by drop_reason
-  order by count(*) desc;
-quit;
+NOTE: Compression was disabled for data set WORK.ALL_LEADS because compression overhead would increase the size of the data set.
+NOTE: The SAS System stopped processing this step because of errors.
+NOTE: There were 0 observations read from the data set WORK.ALL_LEADS.
+WARNING: The data set WORK.ALL_LEADS may be incomplete.  When this step was stopped there were 0 observations and 2 variables.
+5                                                          The SAS System                             16:33 Thursday, April 16, 2026
 
-/* Breakdown by sub-segment */
-title2 "Sub-segment breakdown";
-proc sql;
-  select
-    sub_segment,
-    count(*)                              as Total           format comma10.,
-    sum(status = "Passed")                as Passed          format comma10.,
-    sum(status = "Dropped")               as Dropped         format comma10.,
-    round(sum(status="Passed")/count(*)*100, 0.1) as Pass_Rate     format 8.1
-  from all_leads
-  group by sub_segment
-  order by total desc;
-quit;
+WARNING: Data set WORK.ALL_LEADS was not replaced because this step was stopped.
+NOTE: DATA statement used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
 
-/* Adobe send status */
-title2 "Adobe delivery status";
-proc sql;
-  select
-    upcase(delivery_code)                 as Delivery_Code,
-    count(*)                              as Count           format comma10.
-  from APNS.apn_sends_and_feedback
-  where product_code like "%&campaign_code.%"
-  group by upcase(delivery_code)
-  order by count(*) desc;
-quit;
+SYMBOLGEN:  Macro variable CAMPAIGN_CODE resolves to CMA08896V01M02
+NOTE: Invalid (or missing) arguments to the ROUND function have caused the function to return a missing value.
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.01 seconds
+      cpu time            0.02 seconds
+      
 
-title;
+ERROR: Summary functions are restricted to the SELECT and HAVING clauses only.
+NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
+NOTE: The SAS System stopped processing this step because of errors.
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+
+
+ERROR: The following columns were not found in the contributing tables: sub_segment.
+NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
+NOTE: The SAS System stopped processing this step because of errors.
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+
+
+SYMBOLGEN:  Macro variable CAMPAIGN_CODE resolves to CMA08896V01M02
+WARNING: Apparent invocation of macro CMA08896V01M02 not resolved.
+ERROR: Summary functions are restricted to the SELECT and HAVING clauses only.
+NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
+NOTE: The SAS System stopped processing this step because of errors.
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.04 seconds
+      cpu time            0.00 seconds
+      
