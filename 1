@@ -371,9 +371,9 @@ quit;
     );
   quit;
 
-  %if &sqlrc. ne 0 %then %do;
+  %if &syserr. ne 0 or &sqlxrc. ne 0 %then %do;
     %ocr_log(OPEN_CYCLE, FAILED,
-             error=INSERT into OCR_Cycle_Control failed SQLRC=&sqlrc.);
+             error=INSERT into OCR_Cycle_Control failed syserr=&syserr. sqlxrc=&sqlxrc.);
     %put ERROR: Motor INSERT into OCR_Cycle_Control failed.;
     %abort cancel;
   %end;
@@ -399,9 +399,9 @@ quit;
     );
   quit;
 
-  %if &sqlrc. ne 0 %then %do;
+  %if &syserr. ne 0 or &sqlxrc. ne 0 %then %do;
     %ocr_log(INSERT_BASELINE, FAILED,
-             error=INSERT into OCR_Weekly_Tracker failed SQLRC=&sqlrc.);
+             error=INSERT into OCR_Weekly_Tracker failed syserr=&syserr. sqlxrc=&sqlxrc.);
     %put ERROR: Motor INSERT into OCR_Weekly_Tracker failed.;
     %abort cancel;
   %end;
@@ -494,9 +494,9 @@ quit;
     );
   quit;
 
-  %if &sqlrc. ne 0 %then %do;
+  %if &syserr. ne 0 or &sqlxrc. ne 0 %then %do;
     %ocr_log(NM_OPEN_CYCLE, FAILED,
-             error=INSERT into NM_Cycle_Control failed SQLRC=&sqlrc.);
+             error=INSERT into NM_Cycle_Control failed syserr=&syserr. sqlxrc=&sqlxrc.);
     %put ERROR: Non-Motor INSERT into NM_Cycle_Control failed.;
     %abort cancel;
   %end;
@@ -522,9 +522,9 @@ quit;
     );
   quit;
 
-  %if &sqlrc. ne 0 %then %do;
+  %if &syserr. ne 0 or &sqlxrc. ne 0 %then %do;
     %ocr_log(NM_INSERT_BASELINE, FAILED,
-             error=INSERT into NM_Weekly_Tracker failed SQLRC=&sqlrc.);
+             error=INSERT into NM_Weekly_Tracker failed syserr=&syserr. sqlxrc=&sqlxrc.);
     %put ERROR: Non-Motor INSERT into NM_Weekly_Tracker failed.;
     %abort cancel;
   %end;
