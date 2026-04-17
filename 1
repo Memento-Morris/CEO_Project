@@ -1,153 +1,164 @@
-/* ============================================================
-   CAMPAIGN STATUS LOOKUP — Fixed
-   Change the value below and run the whole program
-   ============================================================ */
+Here is the clear, plain‑English explanation of what went wrong, tied directly to your job and your data, without jargon.
 
-%let campaign_code = CMA08896;   /* <-- CHANGE THIS (prefix only, no version suffix) */
+What the issue is (short answer)
+Nothing is wrong with the data or the libraries.
+The problem is that your SAS job assumes an old campaign table naming format, but the actual Optimize tables were renamed, so your code can no longer:
 
-/* ============================================================
-   Libnames
-   ============================================================ */
+find the right campaign tables, or
+correctly extract the date and time from the table names.
 
-libname Pass6    "/data/fnb/clb/archive/5_optimise/passed_phase1";
-libname APN_Pass "/data/fnb/clb/prod_data/5_optimise/passed_phase1";
-libname Drop6    "/data/fnb/clb/archive/5_optimise/dropped_phase1";
-libname APN_Drop "/data/fnb/clb/prod_data/5_optimise/dropped_phase1";
-libname APNS     "/data/fnb/clb/prod_data/7_tracking_views/Reporting_views";
+As a result, no campaign data is ever appended, and everything downstream ends up empty.
 
-/* ============================================================
-   STEP 1: Get matching table names from each library
-   Use %str() to prevent campaign code being read as a macro
-   ============================================================ */
+What your job was written to expect
+Your code was built around these assumptions:
 
-%let srch = %upcase(%str(&campaign_code));
+Campaign tables look like this:
+CMA02369YYYYMMDD
 
-proc sql noprint;
-  select memname into :pass6_tables     separated by '|'
-  from dictionary.tables
-  where libname = "PASS6"    and index(memname, "&srch") > 0;
 
-  select memname into :passweek_tables  separated by '|'
-  from dictionary.tables
-  where libname = "APN_PASS" and index(memname, "&srch") > 0;
+The date always starts at character position 16:
+SASsubstr(memname,16,8)Show more lines
 
-  select memname into :drop6_tables     separated by '|'
-  from dictionary.tables
-  where libname = "DROP6"    and index(memname, "&srch") > 0;
+Time comes from the SAS metadata (crdate)
+Only a hard‑coded list of CMA campaign codes exists (CMA02369, CMA01988, etc.)
 
-  select memname into :dropweek_tables  separated by '|'
-  from dictionary.tables
-  where libname = "APN_DROP" and index(memname, "&srch") > 0;
-quit;
+👉 When those assumptions were true, the job worked.
 
-%put Pass 6mo tables  : &pass6_tables;
-%put Pass 7day tables : &passweek_tables;
-%put Drop 6mo tables  : &drop6_tables;
-%put Drop 7day tables : &dropweek_tables;
+What the tables actually look like now
+From your diagnostic output, real table names today look like this:
+CMA09654V02M03_20260417_1238
+CMA05955V01M01_20260417_1223
+CMA07890V01M01_20260417_1242
 
-/* ============================================================
-   STEP 2: Stack tables — macro handles each library separately
-   Uses pipe | as separator to avoid issues with spaces in names
-   ============================================================ */
+This means:
 
-%macro stack_lib(libref=, tablelist=, outds=, status=);
 
-  %let tablelist = %sysfunc(strip(&tablelist));
-  %let n = %sysfunc(countw(&tablelist, |));
 
-  %if &n = 0 or &tablelist =  %then %do;
-    %put NOTE: No &status tables found in &libref for &campaign_code — skipping.;
-  %end;
-  %else %do;
-    data &outds;
-      set
-      %do i = 1 %to &n;
-        &libref..%scan(&tablelist, &i, |)
-      %end;
-      (keep= cust_no product_code drop_reason sub_segment campaign_name brand mucn);
-      length status $10;
-      status = "&status";
-    run;
-  %end;
 
-%mend;
 
-%stack_lib(libref=PASS6,    tablelist=&pass6_tables,    outds=passed_6mo,   status=Passed)
-%stack_lib(libref=APN_PASS, tablelist=&passweek_tables, outds=passed_week,  status=Passed)
-%stack_lib(libref=DROP6,    tablelist=&drop6_tables,    outds=dropped_6mo,  status=Dropped)
-%stack_lib(libref=APN_DROP, tablelist=&dropweek_tables, outds=dropped_week, status=Dropped)
 
-/* ============================================================
-   STEP 3: Combine into one dataset (only include what exists)
-   ============================================================ */
 
-%macro combine;
-  data all_leads;
-    set
-    %if %sysfunc(exist(passed_6mo))   %then passed_6mo;
-    %if %sysfunc(exist(passed_week))  %then passed_week;
-    %if %sysfunc(exist(dropped_6mo))  %then dropped_6mo;
-    %if %sysfunc(exist(dropped_week)) %then dropped_week;
-    ;
-  run;
-%mend;
-%combine;
 
-/* ============================================================
-   STEP 4: Reports
-   ============================================================ */
 
-title "Campaign Lookup: &campaign_code";
 
-/* Overall summary */
-title2 "Overall summary";
-proc sql;
-  select
-    count(*)                                          as Total_Leads  format comma12.,
-    sum(status = "Passed")                            as Passed       format comma12.,
-    sum(status = "Dropped")                           as Dropped      format comma12.,
-    put(round(sum(status="Passed")/count(*)*100,0.1), 8.1) as Pass_Rate_Pct
-  from all_leads;
-quit;
 
-/* Drop reason breakdown */
-title2 "Drop reason breakdown (dropped records only)";
-proc sql;
-  select
-    coalescec(drop_reason, "(blank)")   as Drop_Reason,
-    count(*)                            as Count        format comma12.,
-    put(round(count(*) /
-        (select count(*) from all_leads where status="Dropped") * 100, 0.1), 8.1) as Pct_of_Drops
-  from all_leads
-  where status = "Dropped"
-  group by calculated Drop_Reason
-  order by Count desc;
-quit;
 
-/* Sub-segment breakdown */
-title2 "Sub-segment breakdown";
-proc sql;
-  select
-    coalescec(sub_segment,"(unknown)")  as Sub_Segment,
-    count(*)                            as Total        format comma12.,
-    sum(status="Passed")                as Passed       format comma12.,
-    sum(status="Dropped")               as Dropped      format comma12.,
-    put(round(sum(status="Passed")/count(*)*100,0.1), 8.1) as Pass_Rate_Pct
-  from all_leads
-  group by calculated Sub_Segment
-  order by Total desc;
-quit;
 
-/* Adobe delivery status */
-title2 "Adobe delivery status";
-proc sql;
-  select
-    coalescec(upcase(delivery_code),"(no code)")  as Delivery_Code,
-    count(*)                                       as Count  format comma12.
-  from APNS.apn_sends_and_feedback
-  where index(upcase(product_code), upcase("&srch")) > 0
-  group by calculated Delivery_Code
-  order by Count desc;
-quit;
 
-title;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+PartMeaningCMA09654CampaignV02VersionM03Message20260417Date1238Time
+✅ The date and time are no longer at fixed positions
+✅ They are separated by underscores
+✅ Versions and message numbers change the string length
+
+Why that breaks your job
+1. Your date extraction is wrong
+You do:
+SASDATE = substr(memname,16,8);``Show more lines
+On this table:
+CMA09654V02M03_20260417_1238
+
+Character 16 is not the start of the date, so SAS extracts garbage or blanks.
+➡️ Result:
+
+Date_to_adobe = missing
+Records fail later joins
+Rows silently disappear
+
+
+2. Your campaign discovery still works — but parsing doesn’t
+This part does work:
+SASdictionary.tables``Show more lines
+That’s why you saw:
+
+8,000+ APN_PASS tables
+95,000+ PASS6 tables
+
+✅ Tables are found
+❌ But once the date is parsed incorrectly, everything downstream fails
+
+3. Hard‑coded campaign lists make it worse
+Your job explicitly looks for campaigns like:
+SASCMA02369%CMA01988%CMA03742%Show more lines
+But your real data now includes:
+CMA09654
+CMA07890
+CMA07115
+CMA05955
+
+✅ Those tables exist
+❌ Your job ignores them completely
+
+4. The failure is silent
+There are no errors because:
+
+SAS happily runs substr()
+Macro loops just don’t iterate
+No checkpoints validate row counts
+
+So the job:
+
+runs successfully
+produces zero rows
+overwrites STI_PBI.APNS_DATA with nothing
+
+
+Why CAMPAIGNS_TO_ADOBE is empty
+Putting it all together:
+
+Tables exist ✅
+Libraries are mounted ✅
+Data is inside tables ✅
+Job cannot correctly identify the date/time ❌
+Records are discarded or never created ❌
+CAMPAIGNS_TO_ADOBE ends up empty ❌
+
+That is exactly what you are seeing.
+
+One‑sentence root cause
+
+The Optimize APN table naming convention changed, but the job still uses fixed‑position string parsing and hard‑coded campaign lists, causing all passed‑lead data to be silently excluded.
+
+
+Why this happened now
+This is a classic operational failure mode:
+
+Campaign volume grew
+Versioning (Vxx, Mxx) was added
+Time was embedded in table names
+The job was never updated to be resilient
+
+No one broke the data — the code aged out.
+
+What this is not
+To be very clear, this issue is NOT caused by:
+
+Missing data
+Bad Optimize runs
+Adobe joins
+Permissions
+SAS failures
+
+All diagnostics confirmed those are fine.
+
+Business impact (important)
+Because of this:
+
+Dashboards show no APN activity
+Passed leads look like zero
+Operational reporting becomes misleading
+Production data is being overwritten with empty results
