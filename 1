@@ -1,828 +1,280 @@
-/* ============================================================
-   JOB:      STI_CA_D_APNS_DATA
-   STATUS:   PROD
-   PURPOSE:  Operational - APN Campaign Data to Adobe
-   ============================================================ */
-
-%put TAG:JobName1=STI_CA_D_APNS_DATA;
-%put TAG:JobName2=Daily;
-%put TAG:JobCategory=Campaigns;
-%put TAG:JobPurpose=Operational;
-%put TAG:JobPriority=Medium;
-%put TAG:JobStatus=Prod;
-
-proc printto log="/data/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Logs/BGA/APN_DATA/STI_CA_D_APNS_DATA.log" new;
-run;
-
-%include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
-
-
-/* ============================================================
-   *** CAMPAIGN CONFIGURATION - ONLY SECTION YOU NEED TO EDIT ***
-   To add a new campaign:
-     1. Add prefix:   %let camp_19 = CMAxxxxx;
-     2. Increment camp_count by 1
-     3. Add product code(s) to product_codes list
-   ============================================================ */
-
-%let camp_01  = CMA02369;
-%let camp_02  = CMA01988;
-%let camp_03  = CMA01986;
-%let camp_04  = CMA04324;
-%let camp_05  = CMA02775;
-%let camp_06  = CMA06753;
-%let camp_07  = CMA02460;
-%let camp_08  = CMA04589;
-%let camp_09  = CMA03791;
-%let camp_10  = CMA04004;
-%let camp_11  = CMA08261;
-%let camp_12  = CMA08252;
-%let camp_13  = CMA08473;
-%let camp_14  = CMA09320;
-%let camp_15  = CMA09319;
-%let camp_16  = CMA09878;
-%let camp_17  = CMA10184;
-%let camp_18  = CMA03742;
-%let camp_19  = CMA10251;
-%let camp_20  = CMA10252;
-%let camp_21  = CMA02460;
-/* ADD NEW CAMPAIGNS BELOW THIS LINE          */
-/* %let camp_19 = CMAxxxxx;                   */
-
-%let camp_count = 21; /* <- increment when adding a campaign */
-
-%let product_codes =
-  "CMA01986V01M01","CMA01988V01M01","CMA02369V01M01","CMA03742V01M01",
-  "CMA04324V01M01","CMA02775V01M01","CMA02775V02M02","CMA06753V01M01",
-  "CMA02460V01M02","CMA02460V01M03","CMA04589V01M02","CMA03791V01M01",
-  "CMA04004V01M01","CMA08473V02M02","CMA09319V01M01","CMA09320V01M01",
-  "CMA09878V01M02","CMA08261V01M01","CMA08252V01M01","CMA10251V01M01",
-  "CMA10184V01M01","CMA10184V02M09","CMA10184V03M17","CMA10252V01M01", 
-  "CMA10184V01M02","CMA10184V02M10","CMA10184V03M18","CMA02460V01M03",
-  "CMA10184V01M03","CMA10184V02M11","CMA10184V03M19","CMA02460V01M02",
-  "CMA10184V01M04","CMA10184V02M12","CMA10184V03M20",
-  "CMA10184V01M05","CMA10184V02M13","CMA10184V03M21",
-  "CMA10184V01M06","CMA10184V02M14","CMA10184V03M22",
-  "CMA10184V01M07","CMA10184V02M15","CMA10184V03M23",
-  "CMA10184V01M08","CMA10184V02M16","CMA10184V03M24"
-;
-
-/* ============================================================
-   END OF CAMPAIGN CONFIGURATION
-   ============================================================ */
-
-
-/* ============================================================
-   SECTION 1: CAPTURE PRE-RUN STATE
-   ============================================================ */
-
-proc sql outobs=1;
-create table datetime_old as
-select  date_to_adobe as Date format date9.,
-        time_created_to_adobe as time format time9.
-from    STI_PBI.APNS_DATA
-where   time_created_to_adobe
-            in (select max(time_created_to_adobe)
-                from STI_PBI.APNS_DATA
-                where date_to_adobe in
-                    (select max(date_to_adobe)
-                     from STI_PBI.APNS_DATA));
-run;
-
-proc sql;
-select count(CUST_NO) as Number_of_old_records
-into   :Old_records
-from   STI_PBI.APNS_DATA;
-quit;
-
-%put &Old_records;
-
-proc sql;
-select  date as max_old_records_date format date9.,
-        time as old_olds_records_time format time9.
-into    :Old_date, :Old_time
-from    datetime_old;
-quit;
-
-%put &Old_date &Old_time;
-
-
-/* ============================================================
-   SECTION 2: ASSIGN LIBNAMES
-   ============================================================ */
-
-libname Pass6    "/data/fnb/clb/archive/5_optimise/passed_phase1";
-libname APN_Pass "/data/fnb/clb/prod_data/5_optimise/passed_phase1";
-libname Drop6    "/data/fnb/clb/archive/5_optimise/dropped_phase1";
-libname APN_Drop "/data/fnb/clb/prod_data/5_optimise/dropped_phase1";
-
-
-/* ============================================================
-   SECTION 3: CAMPAIGN TABLE DISCOVERY
-   ============================================================ */
-
-%macro build_campaign_filter(libref, outds);
-  proc sql;
-    create table &outds as
-    select *
-    from dictionary.tables
-    where libname = "&libref"
-      and (
-        %do i = 1 %to &camp_count.;
-          %if &i > 1 %then or;
-          memname like "&&camp_&i..%"
-        %end;
-      );
-  quit;
-%mend;
-
-%build_campaign_filter(PASS6,    uppend_months_campaigns)
-%build_campaign_filter(APN_PASS, uppend_weeek_campaigns)
-
-proc sql;
-select distinct memname
-into   :table1 -
-from   uppend_months_campaigns
-order by memname;
-quit;
-
-proc sql;
-select distinct memname
-into   :tableweek1 -
-from   uppend_weeek_campaigns
-order by memname;
-quit;
-
-proc sql;
-select crdate
-into   :timetable1 -
-from   uppend_months_campaigns
-order by memname;
-quit;
-
-proc sql;
-select crdate
-into   :timetablewk1 -
-from   uppend_weeek_campaigns
-order by memname;
-quit;
-
-
-/* ============================================================
-   SECTION 4: ITERATION MACROS
-   
-   KEY FIXES vs original:
-   - keep= only lists columns that exist in the SOURCE table.
-     date_to_adobe and time_created_to_adobe are created inside
-     the data step so they cannot be in the source keep= list.
-   - CUST_NO is numeric in the source - kept as-is, renamed to
-     cust_no for consistency downstream.
-   - date/time columns do not exist in source - removed from keep.
-   - Underscore detection done at data step runtime (not macro
-     compile time) to correctly parse new table naming format.
-   ============================================================ */
-
-%macro iterate_week_drop(count);
-  proc sql;
-    select count(distinct memname) into :count
-    from uppend_weeek_campaigns;
-  quit;
-
-  proc datasets library=work nolist;
-    delete TABLESdropweek_:;
-  quit;
-
-  %do i = 1 %to &count.;
-    data TABLESdropweek_&i;
-      set APN_DROP.&&tableweek&i.
-          (keep=CUST_NO Product_Code Drop_Reason sub_segment
-                Campaign_Name Brand MUCN);
-      /* Runtime date/time extraction from table name */
-      length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
-      _memname_ = "&&tableweek&i..";
-      if index(_memname_,'_') > 0 then do;
-        _date_raw_ = scan(_memname_, -2, '_');
-        _time_raw_ = scan(_memname_, -1, '_');
-        Date_to_adobe = input(_date_raw_, YYMMDD8.);
-        Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
-                                           substr(_time_raw_,3,2),':00'),
-                                      HHMMSS8.);
-      end;
-      else do;
-        _date_raw_ = substr(_memname_, 16, 8);
-        Date_to_adobe = input(_date_raw_, YYMMDD10.);
-        Time_created_to_adobe = input(substr("&&timetablewk&i..",9,8), HHMMSS.);
-      end;
-      format Date_to_adobe date9.;
-      format Time_created_to_adobe time9.;
-      rename CUST_NO = cust_no
-             MUCN    = mucn
-             Brand   = brand;
-      drop _memname_ _date_raw_ _time_raw_;
-    run;
-  %end;
-%mend;
-%iterate_week_drop(count)
-
-
-%macro iterate_week_pass(count);
-  proc sql;
-    select count(distinct memname) into :count
-    from uppend_weeek_campaigns;
-  quit;
-
-  proc datasets library=work nolist;
-    delete TABLESpassweek_:;
-  quit;
-
-  %do i = 1 %to &count.;
-    data TABLESpassweek_&i;
-      set APN_PASS.&&tableweek&i.
-          (keep=CUST_NO Product_Code Drop_Reason sub_segment
-                Campaign_Name Brand MUCN);
-      length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
-      _memname_ = "&&tableweek&i..";
-      if index(_memname_,'_') > 0 then do;
-        _date_raw_ = scan(_memname_, -2, '_');
-        _time_raw_ = scan(_memname_, -1, '_');
-        Date_to_adobe = input(_date_raw_, YYMMDD8.);
-        Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
-                                           substr(_time_raw_,3,2),':00'),
-                                      HHMMSS8.);
-      end;
-      else do;
-        _date_raw_ = substr(_memname_, 16, 8);
-        Date_to_adobe = input(_date_raw_, YYMMDD10.);
-        Time_created_to_adobe = input(substr("&&timetablewk&i..",9,8), HHMMSS.);
-      end;
-      format Date_to_adobe date9.;
-      format Time_created_to_adobe time9.;
-      rename CUST_NO = cust_no
-             MUCN    = mucn
-             Brand   = brand;
-      drop _memname_ _date_raw_ _time_raw_;
-    run;
-  %end;
-%mend;
-%iterate_week_pass(count)
-
-data Weekly;
-  set TABLESpassweek_:;
-run;
-
-
-%macro iterate_monthly_pass(count);
-  proc sql;
-    select count(distinct memname) into :count
-    from uppend_months_campaigns;
-  quit;
-
-  proc datasets library=work nolist;
-    delete TABLESpass6_:;
-  quit;
-
-  %do i = 1 %to &count.;
-    data TABLESpass6_&i;
-      set PASS6.&&table&i.
-          (keep=CUST_NO Product_Code Drop_Reason sub_segment
-                Campaign_Name Brand MUCN);
-      length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
-      _memname_ = "&&table&i..";
-      if index(_memname_,'_') > 0 then do;
-        _date_raw_ = scan(_memname_, -2, '_');
-        _time_raw_ = scan(_memname_, -1, '_');
-        Date_to_adobe = input(_date_raw_, YYMMDD8.);
-        Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
-                                           substr(_time_raw_,3,2),':00'),
-                                      HHMMSS8.);
-      end;
-      else do;
-        _date_raw_ = substr(_memname_, 16, 8);
-        Date_to_adobe = input(_date_raw_, YYMMDD10.);
-        Time_created_to_adobe = input(substr("&&timetable&i..",9,8), HHMMSS.);
-      end;
-      format Date_to_adobe date9.;
-      format Time_created_to_adobe time9.;
-      rename CUST_NO = cust_no
-             MUCN    = mucn
-             Brand   = brand;
-      drop _memname_ _date_raw_ _time_raw_;
-    run;
-  %end;
-%mend;
-%iterate_monthly_pass(count)
-
-
-%macro iterate_monthly_drop(count);
-  proc sql;
-    select count(distinct memname) into :count
-    from uppend_months_campaigns;
-  quit;
-
-  proc datasets library=work nolist;
-    delete TABLESdrop6_:;
-  quit;
-
-  %do i = 1 %to &count.;
-    data TABLESdrop6_&i;
-      set DROP6.&&table&i.
-          (keep=CUST_NO Product_Code Drop_Reason sub_segment
-                Campaign_Name Brand MUCN);
-      length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
-      _memname_ = "&&table&i..";
-      if index(_memname_,'_') > 0 then do;
-        _date_raw_ = scan(_memname_, -2, '_');
-        _time_raw_ = scan(_memname_, -1, '_');
-        Date_to_adobe = input(_date_raw_, YYMMDD8.);
-        Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
-                                           substr(_time_raw_,3,2),':00'),
-                                      HHMMSS8.);
-      end;
-      else do;
-        _date_raw_ = substr(_memname_, 16, 8);
-        Date_to_adobe = input(_date_raw_, YYMMDD10.);
-        Time_created_to_adobe = input(substr("&&timetable&i..",9,8), HHMMSS.);
-      end;
-      format Date_to_adobe date9.;
-      format Time_created_to_adobe time9.;
-      rename CUST_NO = cust_no
-             MUCN    = mucn
-             Brand   = brand;
-      drop _memname_ _date_raw_ _time_raw_;
-    run;
-  %end;
-%mend;
-%iterate_monthly_drop(count)
-
-
-/* ============================================================
-   SECTION 5: COMBINE ALL CAMPAIGN DATA
-   All tables now have consistent column names after rename,
-   and date_to_adobe/time_created_to_adobe exist in each.
-   ============================================================ */
-
-data CAMPAIGNS_TO_ADOBE;
-  set TABLESpass6_:
-      TABLESdrop6_:
-      TABLESdropweek_:
-      Weekly;
-run;
-
-/* Row count checkpoint - visible in log */
-proc sql;
-  select count(*) as CAMPAIGNS_TO_ADOBE_rows
-  from CAMPAIGNS_TO_ADOBE;
-quit;
-
-
-/* ============================================================
-   SECTION 6: OPTIMISE AGGREGATION
-   ============================================================ */
-
-proc sql;
-create table Optimize_Aggregiated as
-select count(*) as Optimize_Leads,
-       drop_reason, product_code, sub_segment, campaign_name, date_to_adobe
-from CAMPAIGNS_TO_ADOBE
-group by drop_reason, product_code, sub_segment, campaign_name, date_to_adobe;
-quit;
-
-
-/* ============================================================
-   SECTION 7: ADOBE SENDS
-   ============================================================ */
-
-libname REP  "/data/fnb/clb/prod_data/7_tracking/Reporting";
-libname abcd "/data/fnb/d2_deepdata/reporting_data";
-libname APNS "/data/fnb/clb/prod_data/7_tracking_views/Reporting_views";
-
-proc sql;
-select min(Date_to_adobe) as Date_to_adobe_min format date9.
-into   :min_date
-from CAMPAIGNS_TO_ADOBE;
-quit;
-
-%put &min_date.;
-
-data APNS_sends_campaigns (keep=cust_no ucn mucn product_code Date_loaded
-                                Time Drop_reason brand Delivery_code);
-  set APNS.apn_sends_and_feedback;
-  where product_code in (&product_codes.)
-    and datepart(Distribution_date) >= "&min_date."d;
-  Brand         = substr(mucn, 1, 3);
-  Drop_reason   = "";
-  Date_loaded   = datepart(Distribution_date);
-  format Date_loaded date9.;
-  Time          = timepart(Distribution_date);
-  format Time time9.;
-  Delivery_code = UPCASE(Delivery_code);
-run;
-
-
-/* ============================================================
-   SECTION 8: ADOBE DROP-OFFS
-   ============================================================ */
-
-data Adobe_recent_drops;
-  set APNS.adobe_drop_offs_data;
-  where product_code in (&product_codes.)
-    and datepart(Date_loaded) >= "&min_date."d;
-  Date_loaded   = datepart(Date_loaded);
-  format Date_loaded date9.;
-  Time          = timepart(Date_loaded);
-  format Time time9.;
-  Brand         = substr(mucn, 1, 3);
-  Delivery_code = "                    ";
-run;
-
-
-/* ============================================================
-   SECTION 9: COMBINE ADOBE DATA
-   ============================================================ */
-
-data adobe_to_clients_step;
-  set Adobe_recent_drops
-      APNS_sends_campaigns;
-run;
-
-data adobe_to_clients_final (drop=etl_source_data etl_date daymonth);
-  set adobe_to_clients_step;
-  if drop_reason  = "" then success = 1; else success = 0;
-  if drop_reason ne "" then drop    = 1; else drop    = 0;
-run;
-
-
-/* ============================================================
-   SECTION 10: OPTIMISE TABLE PREP FOR JOIN
-   ============================================================ */
-
-data campaigns_to_adobe_step (keep=Optimize sub_segment Drop_reason product_code
-                                   cust_no Date_to_adobe Time_created_to_adobe
-                                   Campaign_name mucn success_to_adobe drop_to_adobe);
-  set campaigns_to_adobe;
-  if drop_reason ne "" then optimize = drop_reason; else optimize = "Sent";
-  if drop_reason  = "" then success_to_adobe = 1;   else success_to_adobe = 0;
-  if drop_reason ne "" then drop_to_adobe = 1;      else drop_to_adobe = 0;
-run;
-
-proc sql;
-create table adobe_leads as
-select count(*) as adobe_leads,
-       product_code, sub_segment, campaign_name, date_to_adobe, optimize
-from campaigns_to_adobe_step
-group by product_code, sub_segment, campaign_name, date_to_adobe, optimize
-order by date_to_adobe;
-quit;
-
-proc sql;
-create table leads_summary as
-select sum(adobe_leads) as Leads_Total,
-       product_code, campaign_name, date_to_adobe, optimize
-from adobe_leads
-group by product_code, campaign_name, date_to_adobe, optimize;
-quit;
-
-proc sql;
-create table adobe_summary_client as
-select count(product_code) as Client_Sent,
-       product_code, date_loaded, drop_reason
-from adobe_to_clients_final
-group by product_code, date_loaded, drop_reason;
-quit;
-
-proc sql;
-create table optimize_adobe_sum as
-select *
-from leads_summary a
-left join adobe_summary_client b
-  on a.product_code = b.product_code
-where a.date_to_adobe <= b.date_loaded
-order by date_to_adobe, date_loaded desc;
-quit;
-
-data optimize_adobe_sum_2;
-  set optimize_adobe_sum;
-  day_diff = intck('day', date_to_adobe, date_loaded);
-run;
-
-proc sql;
-create table optimize_adobe_sum_3 as
-select *
-from optimize_adobe_sum_2
-group by product_code, date_to_adobe
-having min(intck('day', date_to_adobe, date_loaded));
-quit;
-
-
-/* ============================================================
-   SECTION 11: RENAME COLUMNS FOR FINAL JOIN
-   ============================================================ */
-
-data campaigns_to_adobe_renamed;
-  set campaigns_to_adobe_step;
-  rename Drop_Reason  = Drop_reason_to_adobe;
-  rename mucn         = mucn_to_adobe;
-  rename product_code = product_code_to_adobe;
-run;
-
-data adobe_to_clients_step (drop=success drop);
-  set adobe_to_clients_final;
-  if upcase(delivery_code) ne ""         then Adobe  = "      Loaded                                    ";
-  else if upcase(delivery_code) = "TEST" then Adobe  = "TEST";
-  else Adobe = drop_reason;
-
-  if upcase(delivery_code) ne ""         then Client = "      Sent                                              ";
-  else if upcase(delivery_code) = "TEST" then Client = "TEST";
-  else Client = drop_reason;
-
-  if cust_no = "" then cust_no = UCN;
-  else cust_no = cust_no;
-run;
-
-proc sql;
-create table adobe_delivery_tes as
-select distinct Cust_no, date_loaded, product_code, "TEST" as testindicator
-from adobe_to_clients_step
-where delivery_code = "TEST";
-quit;
-
-proc sql;
-create table adobe_final as
-select a.*, b.testindicator
-from adobe_to_clients_step a
-left join adobe_delivery_tes b
-  on  a.cust_no      = b.Cust_no
-  and a.date_loaded  = b.date_loaded
-  and a.product_code = b.product_code;
-quit;
-
-data adobe_final_table_clients;
-  set adobe_final;
-  if testindicator ne "     TEST     " or testindicator = "             "
-    then testindicator = "Actual";
-  else testindicator = testindicator;
-  if testindicator = "TEST" then Adobe  = testindicator; else adobe  = adobe;
-  if testindicator = "TEST" then Client = testindicator; else client = client;
-  rename cust_no = cust_no2;
-run;
-
-
-/* ============================================================
-   SECTION 12: FINAL JOIN - OPTIMISE + ADOBE
-   ============================================================ */
-
-proc sql;
-create table joining as
-select *
-from campaigns_to_adobe_renamed a
-left join adobe_final_table_clients b
-  on  a.cust_no               = b.cust_no2
-  and a.product_code_to_adobe  = b.product_code
-  and (a.date_to_adobe between b.date_loaded and b.date_loaded - 5);
-quit;
-
-data APNS_DATA (drop=Time product_code mucn ucn mucn_to_adobe
-                     success_to_adobe drop_to_adobe);
-  set joining;
-  if Cust_no2 = "" and Optimize = "Sent"
-    then Adobe = "Not loaded into Adobe within 5 days";
-  if cust_no2 = "" and Optimize = "Sent"
-    and intck('day', date_to_adobe, today()) <= 5
-    and Date_loaded = ""d
-    then Adobe = "Sending to Adobe";
-  date_Diff = intck('day', date_to_adobe, date_loaded);
-run;
-
-proc sort data=APNS_DATA;
-  by descending date_loaded Date_to_adobe;
-run;
-
-proc sql;
-create table APNS_Data_Final as
-select *
-from APNS_DATA a
-inner join (
-  select cust_no, product_code_to_adobe, date_to_adobe,
-         min(date_loaded) as min_date_loaded format date9.
-  from APNS_DATA
-  where date_to_adobe ne date_loaded
-  group by cust_no, product_code_to_adobe, date_to_adobe) as b
-  on  a.date_to_adobe          = b.date_to_adobe
-  and a.date_loaded             = b.min_date_loaded
-  and a.cust_no                 = b.cust_no
-  and a.product_code_to_adobe   = b.product_code_to_adobe;
-quit;
-
-data APNS_DATA;
-  set APNS_Data_Final;
-  drop min_date_loaded;
-run;
-
-
-/* ============================================================
-   SECTION 13: LOAD TO PRODUCTION - WITH ZERO-ROW SAFETY GATE
-   ============================================================ */
-
-%macro Loadtable(Table);
-  %if %sysfunc(exist(&table.)) %then %do;
-
-    proc sql noprint;
-      select count(*) into :new_row_count trimmed
-      from &Table.;
-    quit;
-
-    %if &new_row_count = 0 %then %do;
-      %put ERROR: =====================================================;
-      %put ERROR: &Table. has ZERO rows - aborting production load.;
-      %put ERROR: STI_PBI.&Table. has NOT been updated.;
-      %put ERROR: Check campaign config, date extraction and joins.;
-      %put ERROR: =====================================================;
-      data _null_;
-        abort return 1;
-      run;
-    %end;
-    %else %do;
-      %put NOTE: &Table. has &new_row_count rows - loading to production.;
-      proc sql;
-        drop table STI_PBI.&Table.;
-        create table STI_PBI.&Table. as
-        select * from &Table.;
-      quit;
-    %end;
-
-  %end;
-  %else %do;
-    %put ERROR: Work table &Table. does not exist - cannot load to production.;
-  %end;
-%mend;
-
-%Loadtable(APNS_DATA);
-
-
-/* ============================================================
-   SECTION 14: CAPTURE POST-RUN STATE
-   ============================================================ */
-
-proc sql outobs=1;
-create table datetime_new as
-select  date_to_adobe as Date format date9.,
-        time_created_to_adobe as time format time9.
-from    APNS_DATA
-where   time_created_to_adobe
-            in (select max(time_created_to_adobe)
-                from APNS_DATA
-                where date_to_adobe in
-                    (select max(date_to_adobe)
-                     from APNS_DATA));
-run;
-
-proc sql;
-select count(cust_no) as Number_of_new_records
-into   :New_records
-from   APNS_DATA;
-quit;
-
-proc sql;
-select  date as max_new_records_date format date9.,
-        time as max_new_records_time format time9.
-into    :New_date, :New_time
-from    datetime_new;
-quit;
-
-%put &New_date &New_time;
-
-%let Diff_Records = %sysevalf(&New_records - &Old_records);
-%put &Diff_Records;
-
-
-/* ============================================================
-   SECTION 15: EMAIL NOTIFICATION
-   ============================================================ */
-
-%MACRO EMAIL;
-
-  %if &Old_date = &New_date and &Old_time = &New_time %then %do;
-
-    FILENAME EML EMAIL
-      to   = "Morris.Nkomo@fnb.co.za"
-      cc   = "dlfnbstioperationalanalytics@fnb.co.za"
-      from = 'dlfnbstioperationalanalytics@fnb.co.za';
-    DATA _NULL_;
-      FILE EML;
-      PUT "Hi,";
-      PUT "                                          ";
-      PUT "The APNS script ran with no table update,";
-      PUT "please check log for any possible failure(s)";
-      PUT "                                          ";
-      PUT "Max Date in table before run: &Old_date";
-      PUT "Max Time in table before run: &Old_time";
-      PUT "Max Date in table after run:  &New_date";
-      PUT "Max Time in table after run:  &New_time";
-      PUT "                                                                                   ";
-      PUT "The APN Dashboard does not require refreshing";
-      PUT "                                                                                   ";
-      PUT "Kind Regards";
-      PUT "Morris";
-    RUN;
-
-    FILENAME EML EMAIL
-      from = 'Morris.Nkomo@fnb.co.za';
-    DATA _NULL_;
-      FILE EML;
-      PUT "Hi,";
-      PUT "                                          ";
-      PUT "The APNS script ran with no table update,";
-      PUT "please check log for any possible failure(s)";
-      PUT "                                          ";
-      PUT "Max Date in table before run: &Old_date";
-      PUT "Max Time in table before run: &Old_time";
-      PUT "Max Date in table after run:  &New_date";
-      PUT "Max Time in table after run:  &New_time";
-      PUT "                                                                                   ";
-      PUT "The APN Dashboard does not require refreshing";
-      PUT "                                                                                   ";
-      PUT "Kind Regards";
-      PUT "Morris";
-    RUN;
-
-  %end;
-
-  %else %if &Old_date ne &New_date and &Old_time ne &New_time %then %do;
-
-    FILENAME EML EMAIL
-      to   = "Morris.Nkomo@fnb.co.za"
-      cc   = "dlfnbstioperationalanalytics@fnb.co.za"
-      from = 'dlfnbstioperationalanalytics@fnb.co.za';
-    DATA _NULL_;
-      FILE EML;
-      PUT "Hi,";
-      PUT "APNS script ran with a table update.";
-      PUT "Max Date in table before run: &Old_date";
-      PUT "Max Time in table before run: &Old_time";
-      PUT "Max Date in table after run:  &New_date";
-      PUT "Max Time in table after run:  &New_time";
-      PUT "                                                                                                 ";
-      PUT "The APN Dashboard can be refreshed";
-      PUT "                                                                                                 ";
-      PUT "Kind Regards";
-      PUT "Morris";
-    RUN;
-
-    FILENAME EML EMAIL
-      from = "Morris.Nkomo@fnb.co.za";
-    DATA _NULL_;
-      FILE EML;
-      PUT "Hi,";
-      PUT "APNS script ran with a table update.";
-      PUT "Max Date in table before run: &Old_date";
-      PUT "Max Time in table before run: &Old_time";
-      PUT "Max Date in table after run:  &New_date";
-      PUT "Max Time in table after run:  &New_time";
-      PUT "                                                                                                 ";
-      PUT "The APN Dashboard can be refreshed";
-      PUT "                                                                                                 ";
-      PUT "Kind Regards";
-      PUT "Morris";
-    RUN;
-
-  %end;
-
-  %else %if %sysfunc(exist(STI_PBI.APNS_DATA)) = 0 %then %do;
-
-    FILENAME EML EMAIL
-      to      = "Morris.Nkomo@fnb.co.za"
-      cc      = "dlfnbstioperationalanalytics@fnb.co.za"
-      from    = 'dlfnbstioperationalanalytics@fnb.co.za'
-      subject = "Table Missing";
-    DATA _NULL_;
-      FILE EML;
-      PUT "Good Day,";
-      PUT ;
-      PUT "Kindly note that the APN_DATA table is missing, currently investigating the problem.";
-      PUT ;
-      PUT "Kind Regards,";
-      PUT "Morris";
-    RUN;
-
-    FILENAME EML EMAIL
-      from    = "Morris.Nkomo@fnb.co.za"
-      subject = "Table Missing";
-    DATA _NULL_;
-      FILE EML;
-      PUT "Good Day,";
-      PUT ;
-      PUT "Kindly note that the APN_DATA table is missing, currently investigating the problem.";
-      PUT ;
-      PUT "Kind Regards,";
-      PUT "Morris";
-    RUN;
-
-  %end;
-
-%mend email;
-
-options mprint mlogic symbolgen;
-%email;
-
-proc printto;
-run;
+USE [PharosDataWarehouse]
+GO
+/****** Object:  StoredProcedure [dbo].[spdwhAssetsUnderAdvice_Fund_LevelWithFPMM_Fix]    Script Date: 2026/04/21 01:58:40 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+  
+ALTER PROCEDURE [dbo].[spdwhAssetsUnderAdvice_Fund_LevelWithFPMM_Fix]  
+AS  
+BEGIN 
+
+TRUNCATE TABLE [PharosDataWarehouse].[dbo].[vAssetsUnderAdvice_Fund_LevelWithFPMM_Fix]
+
+INSERT INTO [PharosDataWarehouse].[dbo].[vAssetsUnderAdvice_Fund_LevelWithFPMM_Fix]
+SELECT DISTINCT
+	[Period] = MarketValue.YearMonth
+	, [Brand] = COALESCE(StaffDetails.Company, ClientDetails.Company)
+	, [Region] = COALESCE(sp.ReportRegion, 'x-unallocated')
+	--COALESCE(Region.Region, 'Unknown')
+	,[Channel] = ''
+	--, [Channel] = COALESCE(Umbr.Channel collate SQL_Latin1_General_CP1_CI_AS,StaffDetails.Office, ClientDetails.Office)
+	, BrokerEntityID = PortfolioAssetSplit.BrokerEntityID
+	, [Manager] = StaffDetails.FirstNames + ' ' + StaffDetails.Surname
+	, FNumber = UPPER(REPLACE(StaffDetails.WindowsLogin,'FNBJNB01\',''))
+	, StaffRole = CASE WHEN StaffDetails.FirstNames + ' ' + StaffDetails.Surname = 'Fpas Fpas Conservation' THEN 'Financial Adviser' ELSE sr.StaffRole END 
+	, [ClientStartDate] = ClientDetails.CreatedDate
+	, [ClientBrand] = ClientDetails.Company
+	, [ClientChannel] = ClientDetails.Office
+	, [Split] = PortfolioAssetSplit.SplitPercentage
+	, [CoManager1] = CoManager.CoManager1
+	, [CoManager2] = CoManager.CoManager2
+	, [CountryOfRegistration] = ClientDetails.CountryOfRegistration
+	, [ClientNumber] = ClientDetails.UserFriendlyCode
+	, UCN = ClientDetails.UCN
+	, [Client] = ClientDetails.EntityName
+	, [FirstNames] = ClientDetails.FirstNames
+	, [Surname] = ClientDetails.Surname
+	, [EntityType] = ClientDetails.EntityType
+	, [IDOrRegNumber] = CASE WHEN ClientDetails.EntityTypeL = 6 AND LEN(ClientDetails.SouthAfricanIDNumber) > 0 THEN ClientDetails.SouthAfricanIDNumber  
+							 WHEN ClientDetails.EntityTypeL <> 6 THEN ClientDetails.RegistrationNumber 
+						ELSE ClientDetails.PassportNumber END
+	, [FeeMandateGroup] = CASE WHEN PortfolioDetails.[FeeMandate] IN ('Cash', 'Cash Mandate - SA IB Money Market(0.15%)', 'Cash Mandate - SA IB Short term(0.25%)', 'Cash Mandate - SA MA Income(0.45%)') THEN 'Cash'
+							   WHEN PortfolioDetails.[FeeMandate] IN ('Discretionary Mandate', 'Discretionary Mandate (New)', 'Negotiated Fees 0.4%', 'Negotiated Fees 0.4%', 'Negotiated Fees 0.5%', 'Negotiated Fees 0.6%') THEN 'Discretionary'
+							   WHEN PortfolioDetails.[FeeMandate] IS NULL THEN 'Broker Appointment'	ELSE 'x - unallocated' END
+	, [FeeMandate] = PortfolioDetails.[FeeMandate]
+	, ProductType = Product.InstrumentType
+	, [ProductSupplier] = Product.InstrumentSupplier
+	, [ProductSupplierCountry] = ProductSupplier.InstrumentSupplierCountry
+	, [ContractNumber] = PortfolioDetails.ReferenceNumber
+	, [InitialContributionAmount] = PortfolioDetails.InitialContributionAmount
+	, [ProductName] = Product.InstrumentName
+	, [FundSupplier] = Fund.InstrumentSupplier
+	, [FundSupplierCountry] = FundSupplier.InstrumentSupplierCountry
+	, [FundFamily] = COALESCE(Fund.InstrumentFamily, Fund.InstrumentName)
+	, [ISIN] = Fund.ISINCode
+	, [FundRegion] = CASE WHEN Fund.BaseCurrency = 'ZAR' THEN 'Domestic' ELSE 'Non Domestic' END
+	, [FundCurrency] = Fund.BaseCurrency
+	, [FundName] = Fund.InstrumentName
+	, [FundBaseCurrency] = Fund.BaseCurrency
+	, [ValueDate] = MarketValue.DateApplicable
+	, [MarketValue] =  CASE WHEN Product.InstrumentType='Investment' THEN ( MarketValue.AmountConverted * COALESCE(PortfolioAssetSplit.SplitPercentage, 100) / 100 ) ELSE 0 END  
+	, [MarketValueOriginalCurrency] = CASE WHEN Product.InstrumentType='Investment' THEN  ( (MarketValue.AmountConverted*MarketValue.ExchangeRate) * COALESCE(PortfolioAssetSplit.SplitPercentage, 100) / 100) ELSE 0 END  
+	, [ExchangeRate] = CASE WHEN Product.InstrumentType='Investment' THEN MarketValue.ExchangeRate ELSE 0 END  
+	, [Pricing] = FundPrice.FundCommissionPercentage
+	, [PortfolioEntryID] = PortfolioDetails.PortfolioEntryID
+	, [RootPortfolioEntryID] = PortfolioDetails.RootPortfolioEntryID
+	, [EntityID] = PortfolioDetails.EntityID
+	, [ManagerID] = StaffDetails.EntityID
+	, [ProductSupplierID] = Product.InstrumentSupplierL
+	, [ProductIntrumentCategory] = Product.InstrumentCategory
+	, [FundInstrumentCategory] = Fund.InstrumentCategory
+	, [Mandate] = PortfolioDetails.InvestmentMandate
+	, [InceptionDate] = PortfolioDetails.DateBegin
+	, [MaturityDate] = PortfolioDetails.DateEnd
+	, [ProductID] = Product.InstrumentID
+	, [FundID] = Fund.InstrumentID
+	, [FundSupplierID] = Fund.InstrumentSupplierL
+	, [JSECode] = Fund.JSECode
+	, [HouseView] = CASE WHEN s.IsHouseview = 1 THEN 'HV'
+						 WHEN s.IsHouseView = 0 THEN 'Non HV'
+						 ELSE 'x-unallocated' END
+	, [GroupOrThirdParty] = COALESCE(s.GroupOr3rdParty, 'x-unallocated')
+	, [CashOrSolution] = COALESCE(s.CashOrSolution, 'x-unallocated')
+	, [MasterFundName] = COALESCE(s.SecurityGroupName, 'x-unallocated')
+	, [HouseViewGroup] = COALESCE(s.[HVvsNonHVvsTerminalvsLegacy], 'x-unallocated')
+	, [LocalvsOffshore] = COALESCE(s.[LocalvsOffshore], 'x-unallocated')
+	, [DateApplicable] = MarketValue.DateApplicable
+	, [FeeGroupID] = fg.FeeGroupID
+	, [FeeGroupMemberStartDate] = fg.CreatedDate
+	, [PortfolioCreatedDate] = PortfolioDetails.CreatedDate
+	, Int_Retail_Model_Desc= segs.Int_retail_model_Desc
+	, Main_Banked = segs.Main_Banked
+	, Household_Key = segs.Household_Key
+	, Rundate  = getdate()
+	----INTO dbo.AssetsUnderAdvice_Fund_LevelWithFPMMTemp 
+FROM
+	dbo.tempPortfolioDetails AS PortfolioDetails
+	-- Product Details:
+	----------------------------------------------------------------------------------------------------------------------------------
+	LEFT JOIN
+		dbo.tempInstrumentDetails AS Product WITH (NOLOCK)
+	ON
+		PortfolioDetails.RootInstrumentID = Product.InstrumentID
+
+	 LEFT JOIN [dbo].[InstrumentSupplier] AS ProductSupplier WITH (NOLOCK)
+			ON Product.InstrumentSupplierL = ProductSupplier.InstrumentSupplierL
+	--------------------------------------------------------------------------------------------------------------------------------
+	-- Market Value:
+	--------------------------------------------------------------------------------------------------------------------------------
+	INNER JOIN
+		PharosDataWarehouse.dbo.tempPortfolioValues AS MarketValue WITH (NOLOCK)
+	ON
+		PortfolioDetails.PortfolioEntryID = MarketValue.PortfolioEntryID
+	AND
+		MarketValue.InforceStatusL = 5 	--InForce Only:
+	AND
+		MarketValue.ManagedStatusL = 5 --Managed Only:
+	AND
+		MarketValue.InstrumentValueTypeL = 5 --MarketValue Only:
+--	AND
+--		MarketValue.YearMonth BETWEEN @rptDateBegin AND @rptDateEnd
+	AND
+		((MarketValue.AmountConverted <> 0 AND Product.InstrumentType='Investment') OR Product.InstrumentType IN ('Risk','Other products','Medical aid','Short term insurance'))
+	AND
+		((MarketValue.AmountConverted IS NOT NULL AND Product.InstrumentType='Investment') OR Product.InstrumentType IN ('Risk','Other products','Medical aid','Short term insurance'))
+	---------------------------------------------------------------------------------------------------------------------------------
+	-- Pricing:
+	---------------------------------------------------------------------------------------------------------------------------------
+	LEFT JOIN
+		PharosDataWarehouse.dbo.tempCommissionPerMonth AS FundPrice WITH (NOLOCK)
+	ON
+		MarketValue.PortfolioEntryID = FundPrice.PortfolioEntryID
+	AND
+		MarketValue.YearMonth = FundPrice.YearMonth
+	--------------------------------------------------------------------------------------------------------------------------------
+	-- Portfolio Split:
+	--------------------------------------------------------------------------------------------------------------------------------
+	LEFT JOIN
+		[PharosDataWarehouse].[dbo].[tempPortfolioAssetSplit_Test] AS PortfolioAssetSplit WITH (NOLOCK)
+	ON
+		MarketValue.RootPortfolioEntryID = PortfolioAssetSplit.RootPortfolioEntryID
+	AND
+		MarketValue.YearMonth = PortfolioAssetSplit.YearMonth
+	AND
+		PortfolioAssetSplit.SplitPercentage IS NOT NULL
+	--------------------------------------------------------------------------------------------------------------------------------
+	--Staff Details:
+	--------------------------------------------------------------------------------------------------------------------------------
+	LEFT JOIN
+		PharosDataWarehouse.dbo.[tempStaffDetails] AS StaffDetails WITH (NOLOCK)
+	ON
+		PortfolioAssetSplit.BrokerEntityID = StaffDetails.EntityID
+
+	LEFT JOIN ( SELECT RelatedStaffEntityID,MAX(StaffRole) AS StaffRole
+				FROM [dbo].[tempClientStaffRelationNew]
+				WHERE IsBrokerRole = 1
+				GROUP BY RelatedStaffEntityID ) sr
+	ON 	PortfolioAssetSplit.BrokerEntityID = sr.RelatedStaffEntityID
+
+	--------------------------------------------------------------------------------------------------------------------------------
+	--Client Details:
+	--------------------------------------------------------------------------------------------------------------------------------
+	INNER JOIN ( SELECT
+					ClientDetails.EntityID
+					, ClientDetails.Class
+					, ClientDetails.UserFriendlyCode
+					, ClientDetails.CompanyL
+					, ClientDetails.Company
+					, ClientDetails.OfficeL
+					, ClientDetails.Office
+					, ClientDetails.EntityName
+					, ClientDetails.FirstNames
+					, ClientDetails.Surname
+					, ClientDetails.RegistrationNumber
+					, ClientDetails.PassportNumber
+					, ClientDetails.SouthAfricanIDNumber
+					, ClientDetails.CountryOfRegistration
+					, ClientDetails.EntityTypeL
+					, ClientDetails.EntityType
+					, ClientDetails.CreatedDate
+					, YEAR(ClientDetails.CreatedDate)*100 + MONTH(ClientDetails.CreatedDate) AS [CreatedYearMonth]
+					, UCN
+				 FROM dbo.tempEntityDetails AS ClientDetails 
+				 WHERE
+					 --Exclude FNB Trust Services:
+					 ClientDetails.CompanyL <> 7) AS ClientDetails
+		ON
+				PortfolioDetails.EntityID = ClientDetails.EntityID
+
+				--Segments
+	LEFT JOIN [WIM_FA_Staging].[StagingIS].[Customer_Monthly_Segmentation] as segs
+	ON
+			ClientDetails.UCN collate SQL_Latin1_General_CP1_CI_AS=segs.CUST_NO collate SQL_Latin1_General_CP1_CI_AS
+			--and MarketValue.YearMonth=segs.Year_Month
+	----------------------------------------------------------------------------------------------------------------------------------
+
+	----------------------------------------------------------------------------------------------------------------------------------
+	-- Fund Details:
+	----------------------------------------------------------------------------------------------------------------------------------
+	LEFT JOIN
+		dbo.tempInstrumentDetails AS Fund WITH (NOLOCK)
+	ON
+		PortfolioDetails.InstrumentID = Fund.InstrumentID
+
+	 LEFT JOIN [dbo].[InstrumentSupplier] AS FundSupplier WITH (NOLOCK)
+			ON Fund.InstrumentSupplierL = FundSupplier.InstrumentSupplierL
+	----------------------------------------------------------------------------------------------------------------------------------
+	--Region:
+	----------------------------------------------------------------------------------------------------------------------------------
+	--LEFT JOIN
+	--	PharosDatawarehouse.dbo.fnChannelToRegion() AS Region
+	--ON
+	--	StaffDetails.OfficeL = Region.ChannelL
+	 LEFT JOIN Investment_Analytics.dbo.SalesPerson sp ON CONVERT(varchar(36), PortfolioAssetSplit.BrokerEntityID) = sp.SalesPersonID
+	----------------------------------------------------------------------------------------------------------------------------------
+	--CoManager:
+	----------------------------------------------------------------------------------------------------------------------------------
+	 LEFT JOIN PharosDataWarehouse.dbo.vCoManager  AS CoManager WITH (NOLOCK)
+			ON ClientDetails.EntityID = CoManager.EntityID
+
+	-----------------------------------------------------------------------------------------------------------------------------------
+	-- Mapping
+	----------------------------------------------------------------------------------------------------------------------------------
+	LEFT JOIN [Investment_Analytics].[Mapping].[Security] s ON Fund.InstrumentID = s.SecurityID
+
+		-------------
+	--- 2025-02-18 Umbrella is decomissioned, removing the Channel updates for now until needed
+	-------- 
+		
+	--LEFT JOIN (select PEriod, fnumber, Channel from PID_Umbrella.dbo.vw_Employee) as Umbr
+	--on UPPER(REPLACE(StaffDetails.WindowsLogin,'FNBJNB01\','')) collate SQL_Latin1_General_CP1_CI_AS =upper(Umbr.fnumber) collate SQL_Latin1_General_CP1_CI_AS
+	--and Umbr.Period =MarketValue.YearMonth 
+
+	--------------------------------------------------------------------------------------------------------------------------------
+	--- Fee Group
+	--------------------------------------------------------------------------------------------------------------------------------
+	OUTER APPLY ( SELECT TOP 1 * FROM [PharosDataWarehouse].[dbo].[FeeGroupMember] ff WHERE PortfolioDetails.EntityID = ff.EntityID AND ff.DateDeleted IS NULL) fg
+
+	WHERE MarketValue.YearMonth >= CAST(LEFT(CONVERT(VARCHAR, DATEADD(YY,-5,GETDATE()),112),6) AS INT)
+	
+
+	---'23AAC8E1-CD85-435B-A3C9-036768F796A6',
+
+
+/*
+
+I am worried that my legacy will be non-existent, so please remember me if you ever see this.
+If you do not know me, it will be tough to remember me, but know that I once existed.
+
+Cameron Clarence, 2022-10-07
+
+*/
+
+
+
+--IF (SELECT COUNT(1) FROM dbo.AssetsUnderAdvice_Fund_LevelWithFPMMTemp )>1
+--BEGIN
+
+--	TRUNCATE TABLE dbo.AssetsUnderAdvice_Fund_LevelWithFPMM 
+--	INSERT INTO dbo.AssetsUnderAdvice_Fund_LevelWithFPMM
+--	SELECT *
+--	FROM dbo.AssetsUnderAdvice_Fund_LevelWithFPMMTemp 
+
+--END
+
+--ELSE 
+
+--BEGIN
+--	SELECT 1
+--END
+
+
+
+END  
+  
+
