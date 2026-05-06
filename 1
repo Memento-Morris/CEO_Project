@@ -1,459 +1,827 @@
-1                                                          The SAS System                                00:11 Thursday, May 7, 2026
+/* ============================================================
+   JOB:      STI_CA_D_APNS_DATA
+   STATUS:   PROD
+   PURPOSE:  Operational - APN Campaign Data to Adobe
+   ============================================================ */
 
-1          ;*';*";*/;quit;run;
-2          OPTIONS PAGENO=MIN;
-3          %LET _CLIENTTASKLABEL='INSU_STI_W_OCR_03_Weekly.sas';
-4          %LET _CLIENTPROCESSFLOWNAME='Standalone Not In Project';
-5          %LET _CLIENTPROJECTPATH='';
-6          %LET _CLIENTPROJECTPATHHOST='';
-7          %LET _CLIENTPROJECTNAME='';
-8          %LET _SASPROGRAMFILE='\\fnb.co.za\idna\IDNADATA\F8884560.FNBJNB01\Downloads\INSU_STI_W_OCR_03_Weekly.sas';
-9          %LET _SASPROGRAMFILEHOST='FV11IDNAPVS0963';
-10         
-11         ODS _ALL_ CLOSE;
-12         OPTIONS DEV=SVG;
-13         GOPTIONS XPIXELS=0 YPIXELS=0;
-14         %macro HTML5AccessibleGraphSupported;
-15             %if %_SAS_VERCOMP_FV(9,4,4, 0,0,0) >= 0 %then ACCESSIBLE_GRAPH;
-16         %mend;
-17         FILENAME EGHTML TEMP;
-18         ODS HTML5(ID=EGHTML) FILE=EGHTML
-19             OPTIONS(BITMAP_MODE='INLINE')
-20             %HTML5AccessibleGraphSupported
-21             ENCODING='utf-8'
-22             STYLE=HtmlBlue
-23             NOGTITLE
-24             NOGFOOTNOTE
-25             GPATH=&sasworklocation
-26         ;
-NOTE: Writing HTML5(EGHTML) Body file: EGHTML
-27         
-28         /*==============================================================
-29           FILE: OCR_03_Weekly.sas
-30           PURPOSE: Runs every week. Handles Motor AND Non-Motor trackers.
-31         
-32           FIXES APPLIED:
-33           1. Replaced max(RunDate) subquery for resolving previous-week
-34              Open_Claims / Current_OCR_Amt with WeekSequence = week_num-1.
-35              Reason: RunDate has no time component so same-day runs
-36              caused closed_this_week = 0 or -1.
-37         
-38           2. Option A OCR tracking: Current_Estimate_OCR = original
-39              flagged Estimate_OCR if claim still has a live estimate,
-40              zero if settled. OCR reduction comes from claims closing
-41              only, not from reserve movements. Ensures weekly job and
-42              baseline script use the same field, preventing negative
-43              ocr_reduced values.
-44         
-45           3. cumul_closed and ocr_this_week derived from live snapshot
-46              directly (claims with Current_Estimate_OCR > 0) rather
-47              than baseline_claims - open_this_week, which could go
-48              negative if new claims were added post-baseline.
-49         
-50           4. OCR_Job_Log removed entirely. Audit trail not required --
-51              OCR_Weekly_Tracker / NM_Weekly_Tracker plus timestamped
-52              emails and Excel files serve as the record of each run.
-53         
-54           5. %bquote() applied only to inline proc sql connect blocks
-55              (not LIBNAME -- LIBNAME has its own quoting and does not
-56              need it). Prevents special characters in credentials
-57              breaking the macro parser during passthrough connections.
-2                                                          The SAS System                                00:11 Thursday, May 7, 2026
+%put TAG:JobName1=STI_CA_D_APNS_DATA;
+%put TAG:JobName2=Daily;
+%put TAG:JobCategory=Campaigns;
+%put TAG:JobPurpose=Operational;
+%put TAG:JobPriority=Medium;
+%put TAG:JobStatus=Prod;
 
-58         
-59           6. CC recipients commented out for testing. Uncomment when
-60              ready to go live.
-61         ==============================================================*/
-62         
-63         /*--------------------------------------------------------------
-64           Libname -- must stay in open code.
-65         --------------------------------------------------------------*/
-66         %include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
-f8884560
-dna-r1saspwrk07
-NOTE: Libref WH_MINT was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw MINT
-NOTE: Libref WH_CRL was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/CL/InForce_Stacks/Daily/Product
-NOTE: Libref WH_COM was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/02 Common
-NOTE: Libref WH_ENH was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/03 Enhanced
-NOTE: Libref WH_REP was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/04 Reporting Summaries
-NOTE: Libref WH_SS was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/IDIT
-NOTE: Libref WH_FLOW was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/03 Enhanced/MINT/FLOW
-NOTE: Libref WH_PRFT was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance/Profitability/Saved Results/Overall
-NOTE: Libref WH_DO was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance/Debit Order & Customer Analysis/Saved Extracts
-NOTE: Libref WH_TEST was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/05 Testing
-NOTE: Libref WH_IIPRD was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/06 Production Datasets
-NOTE: Libref WH_COVID was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/07 Covid Data
-NOTE: Libref WH_KPI was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/03 Enhanced/KPIs
-NOTE: Libref WH_F_ADV was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/02 Advisory
-NOTE: Libref WH_ADHOC was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/08 Adhoc
-NOTE: Libref WH_IFRS was successfully assigned as follows: 
-      Engine:        V9 
-3                                                          The SAS System                                00:11 Thursday, May 7, 2026
+proc printto log="/data/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Logs/BGA/APN_DATA/STI_CA_D_APNS_DATA.log" new;
+run;
 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/10 IFRS17
-NOTE: Libref W_POL was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/01 Policy
-NOTE: Libref W_ROLE was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/02 Role
-NOTE: Libref W_COVER was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/03 Cover
-NOTE: Libref W_PERS was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/04 Personal
-NOTE: Libref W_CONT was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/05 Contact
-NOTE: Libref W_COL was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/06 Collections
-NOTE: Libref W_CLM was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/07 Claims
-NOTE: Libref W_PRD was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/08 Product
-NOTE: Libref W_LOOKUP was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/09 Lookups
-NOTE: Libref W_TRANS was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/02 Common/99 Transactional
-NOTE: Libref W_RAWUVW was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw UserVW
-NOTE: Libref W_RAWUVL was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw UserVW/LOGS
-NOTE: Libref W_RUNMET was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/00 Metadata
-NOTE: Libref W_R_METD was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/Run Meta/Daily Logs
-NOTE: Libref W_REP_L was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/04 Reporting Summaries/Lookups
-NOTE: Libref W_REP_R was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/04 Reporting Summaries/Raw
-NOTE: Libref W_REP_M was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/04 Reporting Summaries/Logs
-NOTE: Libref W_ENHRAW was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/03 Enhanced/Underlying Data
-NOTE: Libref W_WORKF was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Workflow
-4                                                          The SAS System                                00:11 Thursday, May 7, 2026
+%include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
 
-NOTE: Libref W_WF_CLM was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Workflow/Claims
-NOTE: Libref W_REPORT refers to the same physical library as WH_REP.
-NOTE: Libref W_REPORT was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/04 Reporting Summaries
-NOTE: Libref W_RUNMD1 refers to the same physical library as W_R_METD.
-NOTE: Libref W_RUNMD1 was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/Run Meta/Daily Logs
-NOTE: Libref W_RUNMD2 was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw ALIS/Run Meta/Daily Logs
-NOTE: Libref W_RUNMD3 was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw MINT/Daily Logs
-NOTE: Libref W_RUNMD4 was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw DWS-Sybase/Daily Logs
-NOTE: Libref W_RUNMD4 was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw DWS-Sybase/Daily Logs
-NOTE: Libref W_RAW_CL was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Credit Life Product table
-NOTE: Libref W_RAW_CL was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Credit Life Product table
-NOTE: Libref W_RAW_ST was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Short Term Product table
-NOTE: Libref W_ALIS was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/CL/InForce_Stacks/Daily/Common Tables
-NOTE: Libref W_IDIT refers to the same physical library as WH_SS.
-NOTE: Libref W_IDIT was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/IDIT
-NOTE: Libref W_MTV was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/MTV
-NOTE: Libref W_IDIT_T was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/IDIT_TEST
-NOTE: Libref W_FICA was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance/Business Intelligence/AD_HOC/New folder
-NOTE: Libref W_NAM was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/IDIT_NAMIBIA
-NOTE: Libref WH_SS_NM refers to the same physical library as W_NAM.
-NOTE: Libref WH_SS_NM was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /data/fnbinsurance_warehouse/data/life/IDIT_NAMIBIA
-NOTE: Libref STI_PBI was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-5                                                          The SAS System                                00:11 Thursday, May 7, 2026
 
-NOTE: Libref STI_LOC was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref STI_OPS was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref STI_META was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref STI_SC was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref AN_OPS was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref STI_STAG was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref STI_DBO was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref STI_AN was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref CA was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref STI_SL was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref STI_COM was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref STI_CA was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref STI_FLOW was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref LIFE_OPS was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref STI_BGA was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref STI_LC was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref STI_BEV was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref STI_CAR was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref MVCLAIM was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref HSL_AIP was successfully assigned as follows: 
-6                                                          The SAS System                                00:11 Thursday, May 7, 2026
+/* ============================================================
+   *** CAMPAIGN CONFIGURATION - ONLY SECTION YOU NEED TO EDIT ***
+   To add a new campaign:
+     1. Add prefix:   %let camp_19 = CMAxxxxx;
+     2. Increment camp_count by 1
+     3. Add product code(s) to product_codes list
+   ============================================================ */
 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref CON was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref STI_RES was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: Libref STI_WER was successfully assigned as follows: 
-      Engine:        ODBC 
-      Physical Name: 
-NOTE: ============================================================
-NOTE: MOTOR WEEKLY JOB STARTED -- rd=20260507
-NOTE: ============================================================
-NOTE: The query as specified involves ordering by an item that doesn't appear in its SELECT clause.
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.14 seconds
-      cpu time            0.09 seconds
-      
+%let camp_01  = CMA02369;
+%let camp_02  = CMA01988;
+%let camp_03  = CMA01986;
+%let camp_04  = CMA04324;
+%let camp_05  = CMA02775;
+%let camp_06  = CMA06753;
+%let camp_07  = CMA02460;
+%let camp_08  = CMA04589;
+%let camp_09  = CMA03791;
+%let camp_10  = CMA04004;
+%let camp_11  = CMA08261;
+%let camp_12  = CMA08252;
+%let camp_13  = CMA08473;
+%let camp_14  = CMA09320;
+%let camp_15  = CMA09319;
+%let camp_16  = CMA09878;
+%let camp_17  = CMA10184;
+%let camp_18  = CMA03742;
+%let camp_19  = CMA10251;
+%let camp_20  = CMA10252;
 
-NOTE: Active Cycle ID     = 202604
-NOTE: Baseline Claims     = 755
-NOTE: Baseline OCR Amount = 4529590.00
-WARNING: Run date month (202605) ne active CycleID (202604).
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.16 seconds
-      cpu time            0.11 seconds
-      
+/* ADD NEW CAMPAIGNS Above THIS LINE          */
 
-NOTE: Week number (next to insert) = 4
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.07 seconds
-      cpu time            0.06 seconds
-      
+%let camp_count = 20; /* <- increment when adding a campaign */
 
-NOTE: Previous week -- Open=638 OCR=2680651.00 Seq=3
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.13 seconds
-      cpu time            0.08 seconds
-      
+%let product_codes =
+  "CMA01986V01M01","CMA01988V01M01","CMA02369V01M01","CMA03742V01M01",
+  "CMA04324V01M01","CMA02775V01M01","CMA02775V02M02","CMA06753V01M01",
+  "CMA02460V01M02","CMA02460V01M03","CMA04589V01M02","CMA03791V01M01",
+  "CMA04004V01M01","CMA08473V02M02","CMA09319V01M01","CMA09320V01M01",
+  "CMA09878V01M02","CMA08261V01M01","CMA08252V01M01","CMA10251V01M01",
+  "CMA10184V01M01","CMA10184V02M09","CMA10184V03M17","CMA10252V01M01", 
+  "CMA10184V01M02","CMA10184V02M10","CMA10184V03M18",
+  "CMA10184V01M03","CMA10184V02M11","CMA10184V03M19",
+  "CMA10184V01M04","CMA10184V02M12","CMA10184V03M20",
+  "CMA10184V01M05","CMA10184V02M13","CMA10184V03M21",
+  "CMA10184V01M06","CMA10184V02M14","CMA10184V03M22",
+  "CMA10184V01M07","CMA10184V02M15","CMA10184V03M23",
+  "CMA10184V01M08","CMA10184V02M16","CMA10184V03M24"
+;
 
-NOTE: Guards passed -- proceeding with Week 4
+/* ============================================================
+   END OF CAMPAIGN CONFIGURATION
+   ============================================================ */
 
-NOTE: There were 1507 observations read from the data set STI_WER.Investigate_Claims.
-NOTE: The data set WORK.SNAPSHOT has 777 observations and 7 variables.
-NOTE: Compressing data set WORK.SNAPSHOT decreased size by 83.33 percent. 
-      Compressed is 3 pages; un-compressed would require 18 pages.
-NOTE: DATA statement used (Total process time):
-      real time           0.09 seconds
-      cpu time            0.06 seconds
-      
 
-NOTE: Motor snapshot extracted -- 777 rows.
+/* ============================================================
+   SECTION 1: CAPTURE PRE-RUN STATE
+   ============================================================ */
 
-NOTE: There were 52403 observations read from the data set STI_WER.vw_OpsClaimsReport.
-NOTE: The data set WORK.CURRENT_EST has 52403 observations and 3 variables.
-NOTE: Compressing data set WORK.CURRENT_EST decreased size by 41.38 percent. 
-      Compressed is 34 pages; un-compressed would require 58 pages.
-7                                                          The SAS System                                00:11 Thursday, May 7, 2026
+proc sql outobs=1;
+create table datetime_old as
+select  date_to_adobe as Date format date9.,
+        time_created_to_adobe as time format time9.
+from    STI_PBI.APNS_DATA
+where   time_created_to_adobe
+            in (select max(time_created_to_adobe)
+                from STI_PBI.APNS_DATA
+                where date_to_adobe in
+                    (select max(date_to_adobe)
+                     from STI_PBI.APNS_DATA));
+run;
 
-NOTE: DATA statement used (Total process time):
-      real time           2.57 seconds
-      cpu time            0.32 seconds
-      
+proc sql;
+select count(CUST_NO) as Number_of_old_records
+into   :Old_records
+from   STI_PBI.APNS_DATA;
+quit;
 
-NOTE: Current estimates extracted -- 52403 rows.
-NOTE: Compressing data set WORK.MOTORCLAIMS_FINAL decreased size by 71.43 percent. 
-      Compressed is 2 pages; un-compressed would require 7 pages.
-NOTE: Table WORK.MOTORCLAIMS_FINAL created, with 777 rows and 6 columns.
+%put &Old_records;
 
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.08 seconds
-      cpu time            0.10 seconds
-      
+proc sql;
+select  date as max_old_records_date format date9.,
+        time as old_olds_records_time format time9.
+into    :Old_date, :Old_time
+from    datetime_old;
+quit;
 
-NOTE: MotorClaims_Final built -- 777 rows.
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.00 seconds
-      cpu time            0.01 seconds
-      
+%put &Old_date &Old_time;
 
-NOTE: Motor claims older than 3 months = 537
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.00 seconds
-      cpu time            0.00 seconds
-      
 
-NOTE: Motor metrics -- Open=640 OCR=2689346
-NOTE: Motor metrics -- CumulClosed=117 ClosedThisWeek=-2
-NOTE: Motor metrics -- OCRReduced=-8695 PctClosed=0.15496688741721
-NOTE: Line generated by the macro function "BQUOTE".
-787        XXXXXX=MSSQL;
-                       _
-                       79
-                        _
-                        79
-ERROR 79-322: Expecting a ).
+/* ============================================================
+   SECTION 2: ASSIGN LIBNAMES
+   ============================================================ */
 
-NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
-NOTE: Line generated by the macro function "BQUOTE".
-787                                    AnsiNPW=1;
-                                        _______
-                                        180
-ERROR 180-322: Statement is not valid or it is used out of proper order.
+libname Pass6    "/data/fnb/clb/archive/5_optimise/passed_phase1";
+libname APN_Pass "/data/fnb/clb/prod_data/5_optimise/passed_phase1";
+libname Drop6    "/data/fnb/clb/archive/5_optimise/dropped_phase1";
+libname APN_Drop "/data/fnb/clb/prod_data/5_optimise/dropped_phase1";
 
-NOTE: Line generated by the macro function "BQUOTE".
-787                                                             AuthenticationMethod=10;
-                                                                 ____________________
-                                                                 180
-ERROR 180-322: Statement is not valid or it is used out of proper order.
 
-NOTE: Line generated by the macro function "BQUOTE".
-787                                                                                                    Database=FNB_STI_Analytics;
-                                                                                                        ________
-                                                                                                        180
-ERROR 180-322: Statement is not valid or it is used out of proper order.
+/* ============================================================
+   SECTION 3: CAMPAIGN TABLE DISCOVERY
+   ============================================================ */
 
-NOTE: Line generated by the macro function "BQUOTE".
-8                                                          The SAS System                                00:11 Thursday, May 7, 2026
+%macro build_campaign_filter(libref, outds);
+  proc sql;
+    create table &outds as
+    select *
+    from dictionary.tables
+    where libname = "&libref"
+      and (
+        %do i = 1 %to &camp_count.;
+          %if &i > 1 %then or;
+          memname like "&&camp_&i..%"
+        %end;
+      );
+  quit;
+%mend;
 
-787                                                                                                                                
-787      !              HostName=LFE-RBPREATLDB1;               PortNumber=1433;               UID=fnbjnb01\SVC_ST_OPDATSCI_PROD;
-                         ________
-                         180
-ERROR 180-322: Statement is not valid or it is used out of proper order.
+%build_campaign_filter(PASS6,    uppend_months_campaigns)
+%build_campaign_filter(APN_PASS, uppend_weeek_campaigns)
 
-NOTE: Line generated by the macro function "BQUOTE".
-787                      PortNumber=1433;
+proc sql;
+select distinct memname
+into   :table1 -
+from   uppend_months_campaigns
+order by memname;
+quit;
 
-__________                                                                                                                          
+proc sql;
+select distinct memname
+into   :tableweek1 -
+from   uppend_weeek_campaigns
+order by memname;
+quit;
 
-180
-ERROR 180-322: Statement is not valid or it is used out of proper order.
+proc sql;
+select crdate
+into   :timetable1 -
+from   uppend_months_campaigns
+order by memname;
+quit;
 
-NOTE: Line generated by the macro function "BQUOTE".
-787                      UID=fnbjnb01\SVC_ST_OPDATSCI_PROD;
+proc sql;
+select crdate
+into   :timetablewk1 -
+from   uppend_weeek_campaigns
+order by memname;
+quit;
 
-___                                                                                                                                 
 
-180
-ERROR 180-322: Statement is not valid or it is used out of proper order.
+/* ============================================================
+   SECTION 4: ITERATION MACROS
+   
+   KEY FIXES vs original:
+   - keep= only lists columns that exist in the SOURCE table.
+     date_to_adobe and time_created_to_adobe are created inside
+     the data step so they cannot be in the source keep= list.
+   - CUST_NO is numeric in the source - kept as-is, renamed to
+     cust_no for consistency downstream.
+   - date/time columns do not exist in source - removed from keep.
+   - Underscore detection done at data step runtime (not macro
+     compile time) to correctly parse new table naming format.
+   ============================================================ */
 
-NOTE: Line generated by the macro function "BQUOTE".
-787         PWD=A&-m!RYUQ@r8x^X
-            ___
-            180
-ERROR 180-322: Statement is not valid or it is used out of proper order.
+%macro iterate_week_drop(count);
+  proc sql;
+    select count(distinct memname) into :count
+    from uppend_weeek_campaigns;
+  quit;
 
-NOTE: Statement not executed due to NOEXEC option.
-NOTE: Statement not executed due to NOEXEC option.
-NOTE: The SAS System stopped processing this step because of errors.
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.00 seconds
-      cpu time            0.01 seconds
-      
-ERROR: INSERT into OCR_Weekly_Tracker failed. SYSERR=3000. Aborting.
-ERROR: Execution canceled by an %ABORT CANCEL statement.
+  proc datasets library=work nolist;
+    delete TABLESdropweek_:;
+  quit;
+
+  %do i = 1 %to &count.;
+    data TABLESdropweek_&i;
+      set APN_DROP.&&tableweek&i.
+          (keep=CUST_NO Product_Code Drop_Reason sub_segment
+                Campaign_Name Brand MUCN);
+      /* Runtime date/time extraction from table name */
+      length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
+      _memname_ = "&&tableweek&i..";
+      if index(_memname_,'_') > 0 then do;
+        _date_raw_ = scan(_memname_, -2, '_');
+        _time_raw_ = scan(_memname_, -1, '_');
+        Date_to_adobe = input(_date_raw_, YYMMDD8.);
+        Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
+                                           substr(_time_raw_,3,2),':00'),
+                                      HHMMSS8.);
+      end;
+      else do;
+        _date_raw_ = substr(_memname_, 16, 8);
+        Date_to_adobe = input(_date_raw_, YYMMDD10.);
+        Time_created_to_adobe = input(substr("&&timetablewk&i..",9,8), HHMMSS.);
+      end;
+      format Date_to_adobe date9.;
+      format Time_created_to_adobe time9.;
+      rename CUST_NO = cust_no
+             MUCN    = mucn
+             Brand   = brand;
+      drop _memname_ _date_raw_ _time_raw_;
+    run;
+  %end;
+%mend;
+%iterate_week_drop(count)
+
+
+%macro iterate_week_pass(count);
+  proc sql;
+    select count(distinct memname) into :count
+    from uppend_weeek_campaigns;
+  quit;
+
+  proc datasets library=work nolist;
+    delete TABLESpassweek_:;
+  quit;
+
+  %do i = 1 %to &count.;
+    data TABLESpassweek_&i;
+      set APN_PASS.&&tableweek&i.
+          (keep=CUST_NO Product_Code Drop_Reason sub_segment
+                Campaign_Name Brand MUCN);
+      length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
+      _memname_ = "&&tableweek&i..";
+      if index(_memname_,'_') > 0 then do;
+        _date_raw_ = scan(_memname_, -2, '_');
+        _time_raw_ = scan(_memname_, -1, '_');
+        Date_to_adobe = input(_date_raw_, YYMMDD8.);
+        Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
+                                           substr(_time_raw_,3,2),':00'),
+                                      HHMMSS8.);
+      end;
+      else do;
+        _date_raw_ = substr(_memname_, 16, 8);
+        Date_to_adobe = input(_date_raw_, YYMMDD10.);
+        Time_created_to_adobe = input(substr("&&timetablewk&i..",9,8), HHMMSS.);
+      end;
+      format Date_to_adobe date9.;
+      format Time_created_to_adobe time9.;
+      rename CUST_NO = cust_no
+             MUCN    = mucn
+             Brand   = brand;
+      drop _memname_ _date_raw_ _time_raw_;
+    run;
+  %end;
+%mend;
+%iterate_week_pass(count)
+
+data Weekly;
+  set TABLESpassweek_:;
+run;
+
+
+%macro iterate_monthly_pass(count);
+  proc sql;
+    select count(distinct memname) into :count
+    from uppend_months_campaigns;
+  quit;
+
+  proc datasets library=work nolist;
+    delete TABLESpass6_:;
+  quit;
+
+  %do i = 1 %to &count.;
+    data TABLESpass6_&i;
+      set PASS6.&&table&i.
+          (keep=CUST_NO Product_Code Drop_Reason sub_segment
+                Campaign_Name Brand MUCN);
+      length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
+      _memname_ = "&&table&i..";
+      if index(_memname_,'_') > 0 then do;
+        _date_raw_ = scan(_memname_, -2, '_');
+        _time_raw_ = scan(_memname_, -1, '_');
+        Date_to_adobe = input(_date_raw_, YYMMDD8.);
+        Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
+                                           substr(_time_raw_,3,2),':00'),
+                                      HHMMSS8.);
+      end;
+      else do;
+        _date_raw_ = substr(_memname_, 16, 8);
+        Date_to_adobe = input(_date_raw_, YYMMDD10.);
+        Time_created_to_adobe = input(substr("&&timetable&i..",9,8), HHMMSS.);
+      end;
+      format Date_to_adobe date9.;
+      format Time_created_to_adobe time9.;
+      rename CUST_NO = cust_no
+             MUCN    = mucn
+             Brand   = brand;
+      drop _memname_ _date_raw_ _time_raw_;
+    run;
+  %end;
+%mend;
+%iterate_monthly_pass(count)
+
+
+%macro iterate_monthly_drop(count);
+  proc sql;
+    select count(distinct memname) into :count
+    from uppend_months_campaigns;
+  quit;
+
+  proc datasets library=work nolist;
+    delete TABLESdrop6_:;
+  quit;
+
+  %do i = 1 %to &count.;
+    data TABLESdrop6_&i;
+      set DROP6.&&table&i.
+          (keep=CUST_NO Product_Code Drop_Reason sub_segment
+                Campaign_Name Brand MUCN);
+      length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
+      _memname_ = "&&table&i..";
+      if index(_memname_,'_') > 0 then do;
+        _date_raw_ = scan(_memname_, -2, '_');
+        _time_raw_ = scan(_memname_, -1, '_');
+        Date_to_adobe = input(_date_raw_, YYMMDD8.);
+        Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
+                                           substr(_time_raw_,3,2),':00'),
+                                      HHMMSS8.);
+      end;
+      else do;
+        _date_raw_ = substr(_memname_, 16, 8);
+        Date_to_adobe = input(_date_raw_, YYMMDD10.);
+        Time_created_to_adobe = input(substr("&&timetable&i..",9,8), HHMMSS.);
+      end;
+      format Date_to_adobe date9.;
+      format Time_created_to_adobe time9.;
+      rename CUST_NO = cust_no
+             MUCN    = mucn
+             Brand   = brand;
+      drop _memname_ _date_raw_ _time_raw_;
+    run;
+  %end;
+%mend;
+%iterate_monthly_drop(count)
+
+
+/* ============================================================
+   SECTION 5: COMBINE ALL CAMPAIGN DATA
+   All tables now have consistent column names after rename,
+   and date_to_adobe/time_created_to_adobe exist in each.
+   ============================================================ */
+
+data CAMPAIGNS_TO_ADOBE;
+  set TABLESpass6_:
+      TABLESdrop6_:
+      TABLESdropweek_:
+      Weekly;
+run;
+
+/* Row count checkpoint - visible in log */
+proc sql;
+  select count(*) as CAMPAIGNS_TO_ADOBE_rows
+  from CAMPAIGNS_TO_ADOBE;
+quit;
+
+
+/* ============================================================
+   SECTION 6: OPTIMISE AGGREGATION
+   ============================================================ */
+
+proc sql;
+create table Optimize_Aggregiated as
+select count(*) as Optimize_Leads,
+       drop_reason, product_code, sub_segment, campaign_name, date_to_adobe
+from CAMPAIGNS_TO_ADOBE
+group by drop_reason, product_code, sub_segment, campaign_name, date_to_adobe;
+quit;
+
+
+/* ============================================================
+   SECTION 7: ADOBE SENDS
+   ============================================================ */
+
+libname REP  "/data/fnb/clb/prod_data/7_tracking/Reporting";
+libname abcd "/data/fnb/d2_deepdata/reporting_data";
+libname APNS "/data/fnb/clb/prod_data/7_tracking_views/Reporting_views";
+
+proc sql;
+select min(Date_to_adobe) as Date_to_adobe_min format date9.
+into   :min_date
+from CAMPAIGNS_TO_ADOBE;
+quit;
+
+%put &min_date.;
+
+data APNS_sends_campaigns (keep=cust_no ucn mucn product_code Date_loaded
+                                Time Drop_reason brand Delivery_code);
+  set APNS.apn_sends_and_feedback;
+  where product_code in (&product_codes.)
+    and datepart(Distribution_date) >= "&min_date."d;
+  Brand         = substr(mucn, 1, 3);
+  Drop_reason   = "";
+  Date_loaded   = datepart(Distribution_date);
+  format Date_loaded date9.;
+  Time          = timepart(Distribution_date);
+  format Time time9.;
+  Delivery_code = UPCASE(Delivery_code);
+run;
+
+
+/* ============================================================
+   SECTION 8: ADOBE DROP-OFFS
+   ============================================================ */
+
+data Adobe_recent_drops;
+  set APNS.adobe_drop_offs_data;
+  where product_code in (&product_codes.)
+    and datepart(Date_loaded) >= "&min_date."d;
+  Date_loaded   = datepart(Date_loaded);
+  format Date_loaded date9.;
+  Time          = timepart(Date_loaded);
+  format Time time9.;
+  Brand         = substr(mucn, 1, 3);
+  Delivery_code = "                    ";
+run;
+
+
+/* ============================================================
+   SECTION 9: COMBINE ADOBE DATA
+   ============================================================ */
+
+data adobe_to_clients_step;
+  set Adobe_recent_drops
+      APNS_sends_campaigns;
+run;
+
+data adobe_to_clients_final (drop=etl_source_data etl_date daymonth);
+  set adobe_to_clients_step;
+  if drop_reason  = "" then success = 1; else success = 0;
+  if drop_reason ne "" then drop    = 1; else drop    = 0;
+run;
+
+
+/* ============================================================
+   SECTION 10: OPTIMISE TABLE PREP FOR JOIN
+   ============================================================ */
+
+data campaigns_to_adobe_step (keep=Optimize sub_segment Drop_reason product_code
+                                   cust_no Date_to_adobe Time_created_to_adobe
+                                   Campaign_name mucn success_to_adobe drop_to_adobe);
+  set campaigns_to_adobe;
+  if drop_reason ne "" then optimize = drop_reason; else optimize = "Sent";
+  if drop_reason  = "" then success_to_adobe = 1;   else success_to_adobe = 0;
+  if drop_reason ne "" then drop_to_adobe = 1;      else drop_to_adobe = 0;
+run;
+
+proc sql;
+create table adobe_leads as
+select count(*) as adobe_leads,
+       product_code, sub_segment, campaign_name, date_to_adobe, optimize
+from campaigns_to_adobe_step
+group by product_code, sub_segment, campaign_name, date_to_adobe, optimize
+order by date_to_adobe;
+quit;
+
+proc sql;
+create table leads_summary as
+select sum(adobe_leads) as Leads_Total,
+       product_code, campaign_name, date_to_adobe, optimize
+from adobe_leads
+group by product_code, campaign_name, date_to_adobe, optimize;
+quit;
+
+proc sql;
+create table adobe_summary_client as
+select count(product_code) as Client_Sent,
+       product_code, date_loaded, drop_reason
+from adobe_to_clients_final
+group by product_code, date_loaded, drop_reason;
+quit;
+
+proc sql;
+create table optimize_adobe_sum as
+select *
+from leads_summary a
+left join adobe_summary_client b
+  on a.product_code = b.product_code
+where a.date_to_adobe <= b.date_loaded
+order by date_to_adobe, date_loaded desc;
+quit;
+
+data optimize_adobe_sum_2;
+  set optimize_adobe_sum;
+  day_diff = intck('day', date_to_adobe, date_loaded);
+run;
+
+proc sql;
+create table optimize_adobe_sum_3 as
+select *
+from optimize_adobe_sum_2
+group by product_code, date_to_adobe
+having min(intck('day', date_to_adobe, date_loaded));
+quit;
+
+
+/* ============================================================
+   SECTION 11: RENAME COLUMNS FOR FINAL JOIN
+   ============================================================ */
+
+data campaigns_to_adobe_renamed;
+  set campaigns_to_adobe_step;
+  rename Drop_Reason  = Drop_reason_to_adobe;
+  rename mucn         = mucn_to_adobe;
+  rename product_code = product_code_to_adobe;
+run;
+
+data adobe_to_clients_step (drop=success drop);
+  set adobe_to_clients_final;
+  if upcase(delivery_code) ne ""         then Adobe  = "      Loaded                                    ";
+  else if upcase(delivery_code) = "TEST" then Adobe  = "TEST";
+  else Adobe = drop_reason;
+
+  if upcase(delivery_code) ne ""         then Client = "      Sent                                              ";
+  else if upcase(delivery_code) = "TEST" then Client = "TEST";
+  else Client = drop_reason;
+
+  if cust_no = "" then cust_no = UCN;
+  else cust_no = cust_no;
+run;
+
+proc sql;
+create table adobe_delivery_tes as
+select distinct Cust_no, date_loaded, product_code, "TEST" as testindicator
+from adobe_to_clients_step
+where delivery_code = "TEST";
+quit;
+
+proc sql;
+create table adobe_final as
+select a.*, b.testindicator
+from adobe_to_clients_step a
+left join adobe_delivery_tes b
+  on  a.cust_no      = b.Cust_no
+  and a.date_loaded  = b.date_loaded
+  and a.product_code = b.product_code;
+quit;
+
+data adobe_final_table_clients;
+  set adobe_final;
+  if testindicator ne "     TEST     " or testindicator = "             "
+    then testindicator = "Actual";
+  else testindicator = testindicator;
+  if testindicator = "TEST" then Adobe  = testindicator; else adobe  = adobe;
+  if testindicator = "TEST" then Client = testindicator; else client = client;
+  rename cust_no = cust_no2;
+run;
+
+
+/* ============================================================
+   SECTION 12: FINAL JOIN - OPTIMISE + ADOBE
+   ============================================================ */
+
+proc sql;
+create table joining as
+select *
+from campaigns_to_adobe_renamed a
+left join adobe_final_table_clients b
+  on  a.cust_no               = b.cust_no2
+  and a.product_code_to_adobe  = b.product_code
+  and (a.date_to_adobe between b.date_loaded and b.date_loaded - 5);
+quit;
+
+data APNS_DATA (drop=Time product_code mucn ucn mucn_to_adobe
+                     success_to_adobe drop_to_adobe);
+  set joining;
+  if Cust_no2 = "" and Optimize = "Sent"
+    then Adobe = "Not loaded into Adobe within 5 days";
+  if cust_no2 = "" and Optimize = "Sent"
+    and intck('day', date_to_adobe, today()) <= 5
+    and Date_loaded = ""d
+    then Adobe = "Sending to Adobe";
+  date_Diff = intck('day', date_to_adobe, date_loaded);
+run;
+
+proc sort data=APNS_DATA;
+  by descending date_loaded Date_to_adobe;
+run;
+
+proc sql;
+create table APNS_Data_Final as
+select *
+from APNS_DATA a
+inner join (
+  select cust_no, product_code_to_adobe, date_to_adobe,
+         min(date_loaded) as min_date_loaded format date9.
+  from APNS_DATA
+  where date_to_adobe ne date_loaded
+  group by cust_no, product_code_to_adobe, date_to_adobe) as b
+  on  a.date_to_adobe          = b.date_to_adobe
+  and a.date_loaded             = b.min_date_loaded
+  and a.cust_no                 = b.cust_no
+  and a.product_code_to_adobe   = b.product_code_to_adobe;
+quit;
+
+data APNS_DATA;
+  set APNS_Data_Final;
+  drop min_date_loaded;
+run;
+
+
+/* ============================================================
+   SECTION 13: LOAD TO PRODUCTION - WITH ZERO-ROW SAFETY GATE
+   ============================================================ */
+
+%macro Loadtable(Table);
+  %if %sysfunc(exist(&table.)) %then %do;
+
+    proc sql noprint;
+      select count(*) into :new_row_count trimmed
+      from &Table.;
+    quit;
+
+    %if &new_row_count = 0 %then %do;
+      %put ERROR: =====================================================;
+      %put ERROR: &Table. has ZERO rows - aborting production load.;
+      %put ERROR: STI_PBI.&Table. has NOT been updated.;
+      %put ERROR: Check campaign config, date extraction and joins.;
+      %put ERROR: =====================================================;
+      data _null_;
+        abort return 1;
+      run;
+    %end;
+    %else %do;
+      %put NOTE: &Table. has &new_row_count rows - loading to production.;
+      proc sql;
+        drop table STI_PBI.&Table.;
+        create table STI_PBI.&Table. as
+        select * from &Table.;
+      quit;
+    %end;
+
+  %end;
+  %else %do;
+    %put ERROR: Work table &Table. does not exist - cannot load to production.;
+  %end;
+%mend;
+
+%Loadtable(APNS_DATA);
+
+
+/* ============================================================
+   SECTION 14: CAPTURE POST-RUN STATE
+   ============================================================ */
+
+proc sql outobs=1;
+create table datetime_new as
+select  date_to_adobe as Date format date9.,
+        time_created_to_adobe as time format time9.
+from    APNS_DATA
+where   time_created_to_adobe
+            in (select max(time_created_to_adobe)
+                from APNS_DATA
+                where date_to_adobe in
+                    (select max(date_to_adobe)
+                     from APNS_DATA));
+run;
+
+proc sql;
+select count(cust_no) as Number_of_new_records
+into   :New_records
+from   APNS_DATA;
+quit;
+
+proc sql;
+select  date as max_new_records_date format date9.,
+        time as max_new_records_time format time9.
+into    :New_date, :New_time
+from    datetime_new;
+quit;
+
+%put &New_date &New_time;
+
+%let Diff_Records = %sysevalf(&New_records - &Old_records);
+%put &Diff_Records;
+
+
+/* ============================================================
+   SECTION 15: EMAIL NOTIFICATION
+   ============================================================ */
+
+%MACRO EMAIL;
+
+  %if &Old_date = &New_date and &Old_time = &New_time %then %do;
+
+    FILENAME EML EMAIL
+      to   = "Morris.Nkomo@fnb.co.za"
+      cc   = "dlfnbstioperationalanalytics@fnb.co.za"
+      from = 'dlfnbstioperationalanalytics@fnb.co.za';
+    DATA _NULL_;
+      FILE EML;
+      PUT "Hi,";
+      PUT "                                          ";
+      PUT "The APNS script ran with no table update,";
+      PUT "please check log for any possible failure(s)";
+      PUT "                                          ";
+      PUT "Max Date in table before run: &Old_date";
+      PUT "Max Time in table before run: &Old_time";
+      PUT "Max Date in table after run:  &New_date";
+      PUT "Max Time in table after run:  &New_time";
+      PUT "                                                                                   ";
+      PUT "The APN Dashboard does not require refreshing";
+      PUT "                                                                                   ";
+      PUT "Kind Regards";
+      PUT "Morris";
+    RUN;
+
+    FILENAME EML EMAIL
+      from = 'Morris.Nkomo@fnb.co.za';
+    DATA _NULL_;
+      FILE EML;
+      PUT "Hi,";
+      PUT "                                          ";
+      PUT "The APNS script ran with no table update,";
+      PUT "please check log for any possible failure(s)";
+      PUT "                                          ";
+      PUT "Max Date in table before run: &Old_date";
+      PUT "Max Time in table before run: &Old_time";
+      PUT "Max Date in table after run:  &New_date";
+      PUT "Max Time in table after run:  &New_time";
+      PUT "                                                                                   ";
+      PUT "The APN Dashboard does not require refreshing";
+      PUT "                                                                                   ";
+      PUT "Kind Regards";
+      PUT "Morris";
+    RUN;
+
+  %end;
+
+  %else %if &Old_date ne &New_date and &Old_time ne &New_time %then %do;
+
+    FILENAME EML EMAIL
+      to   = "Morris.Nkomo@fnb.co.za"
+      cc   = "dlfnbstioperationalanalytics@fnb.co.za"
+      from = 'dlfnbstioperationalanalytics@fnb.co.za';
+    DATA _NULL_;
+      FILE EML;
+      PUT "Hi,";
+      PUT "APNS script ran with a table update.";
+      PUT "Max Date in table before run: &Old_date";
+      PUT "Max Time in table before run: &Old_time";
+      PUT "Max Date in table after run:  &New_date";
+      PUT "Max Time in table after run:  &New_time";
+      PUT "                                                                                                 ";
+      PUT "The APN Dashboard can be refreshed";
+      PUT "                                                                                                 ";
+      PUT "Kind Regards";
+      PUT "Morris";
+    RUN;
+
+    FILENAME EML EMAIL
+      from = "Morris.Nkomo@fnb.co.za";
+    DATA _NULL_;
+      FILE EML;
+      PUT "Hi,";
+      PUT "APNS script ran with a table update.";
+      PUT "Max Date in table before run: &Old_date";
+      PUT "Max Time in table before run: &Old_time";
+      PUT "Max Date in table after run:  &New_date";
+      PUT "Max Time in table after run:  &New_time";
+      PUT "                                                                                                 ";
+      PUT "The APN Dashboard can be refreshed";
+      PUT "                                                                                                 ";
+      PUT "Kind Regards";
+      PUT "Morris";
+    RUN;
+
+  %end;
+
+  %else %if %sysfunc(exist(STI_PBI.APNS_DATA)) = 0 %then %do;
+
+    FILENAME EML EMAIL
+      to      = "Morris.Nkomo@fnb.co.za"
+      cc      = "dlfnbstioperationalanalytics@fnb.co.za"
+      from    = 'dlfnbstioperationalanalytics@fnb.co.za'
+      subject = "Table Missing";
+    DATA _NULL_;
+      FILE EML;
+      PUT "Good Day,";
+      PUT ;
+      PUT "Kindly note that the APN_DATA table is missing, currently investigating the problem.";
+      PUT ;
+      PUT "Kind Regards,";
+      PUT "Morris";
+    RUN;
+
+    FILENAME EML EMAIL
+      from    = "Morris.Nkomo@fnb.co.za"
+      subject = "Table Missing";
+    DATA _NULL_;
+      FILE EML;
+      PUT "Good Day,";
+      PUT ;
+      PUT "Kindly note that the APN_DATA table is missing, currently investigating the problem.";
+      PUT ;
+      PUT "Kind Regards,";
+      PUT "Morris";
+    RUN;
+
+  %end;
+
+%mend email;
+
+options mprint mlogic symbolgen;
+%email;
+
+proc printto;
+run;
