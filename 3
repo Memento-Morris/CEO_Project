@@ -1,676 +1,1093 @@
+/*==============================================================
+  FILE: OCR_03_Weekly.sas
+  PURPOSE: Runs every week. Handles Motor AND Non-Motor trackers.
+
+  FIXES APPLIED:
+  1. Replaced max(RunDate) subquery for resolving previous-week
+     Open_Claims / Current_OCR_Amt with WeekSequence = week_num-1.
+     Reason: RunDate has no time component so same-day runs
+     caused closed_this_week = 0 or -1.
+
+  2. Option A OCR tracking: Current_Estimate_OCR = original
+     flagged Estimate_OCR if claim still has a live estimate,
+     zero if settled. OCR reduction comes from claims closing
+     only, not from reserve movements. Ensures weekly job and
+     baseline script use the same field, preventing negative
+     ocr_reduced values.
+
+  3. cumul_closed and ocr_this_week derived from live snapshot
+     directly (claims with Current_Estimate_OCR > 0) rather
+     than baseline_claims - open_this_week, which could go
+     negative if new claims were added post-baseline.
+
+  4. OCR_Job_Log removed entirely. Audit trail not required --
+     OCR_Weekly_Tracker / NM_Weekly_Tracker plus timestamped
+     emails and Excel files serve as the record of each run.
+
+  5. FIX (was broken): PROC SQL CONNECT noprompt= string was
+     wrapped in %bquote(), which caused the macro parser to
+     tokenise the Driver=MSSQL keyword as a macro assignment
+     (ERROR 79-322: Expecting a )) and abort the INSERT.
+
+     Root cause: %bquote() evaluates its argument first, then
+     quotes the result. The '=' sign in 'Driver=MSSQL' and the
+     special characters in the password (&, !, ^) are seen by
+     the macro parser BEFORE quoting takes effect, corrupting
+     the token stream.
+
+     Fix applied: The noprompt= value is built in two steps:
+       a. A %let macro variable holds the static part of the
+          connection string using %nrstr() to suppress all
+          tokenisation at definition time.
+       b. At CONNECT time the variable is resolved with
+          &&conn_str. -- the double-ampersand forces a second
+          resolution pass so &User. and &FNB_Login. inside the
+          string are expanded correctly at run time.
+
+     This is the only pattern that:
+       - Keeps Driver= visible to the parser as a plain string.
+       - Allows &User. / &FNB_Login. to resolve at run time.
+       - Survives passwords with &, !, ^, %, (, ) without
+         breaking the macro token stream.
+
+  6. CC recipients commented out for testing. Uncomment when
+     ready to go live.
+==============================================================*/
+
+/*--------------------------------------------------------------
+  Libname -- must stay in open code.
+--------------------------------------------------------------*/
 %include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
 
-
-/* ============================================================================
-   PART 1: TIME PERIOD SETUP
-   ============================================================================ */
-
-/* Load QA period reference table and derive readable month label */
-data Periods;
-    set sti_meta.qa_loc_periods;
-    character_month = put(QA_Period, monyy7.);
-run;
-
-/* Hardcode OBR cycle start — used to derive the sheet name */
-%let OBR_Month_start_date = '24FEB2026'd;
-
-/* Derive the sheet name (e.g. MAR2026) from the periods table */
-data _null_;
-    set Periods;
-    where QA_Period = &OBR_Month_start_date;
-    call symput('sheet', strip(character_month));
-run;
-
-%put -------> Sheet name: &sheet;
-
-/* -----------------------------------------------------------------------
-   Hardcode OBR cycle and scorecard date boundaries
-   OBR Period  : 24 Feb 2026 – 30 Mar 2026
-   Scorecards  : Mondays — 02, 09, 16, 23 Mar 2026
-   ----------------------------------------------------------------------- */
-%let OBR_Month_start_date          = '24FEB2026'd;
-%let OBR_Month_end_date            = '30MAR2026'd;
-%let current_obr_period_start_date = '02MAR2026'd;
-%let current_obr_period_end_date   = '30MAR2026'd;
-
-/* QA fallback window: Nov 2025 to Jan 2026 (3-month average) */
-%let QA_Fallback_start = '01NOV2025'd;
-%let QA_Fallback_end   = '31JAN2026'd;
-
-%put OBR Start      : &OBR_Month_start_date;
-%put OBR End        : &OBR_Month_end_date;
-%put SC Start       : &current_obr_period_start_date;
-%put SC End         : &current_obr_period_end_date;
-%put QA Fallback    : &QA_Fallback_start to &QA_Fallback_end;
-
-
-/* ============================================================================
-   PART 2: 3-MONTH HISTORICAL SCORECARD SCORES
-   ============================================================================ */
-
-PROC IMPORT
-    DATAFILE="\\lfe-rbgfs01\FNB_Insure\FSR STI Corporate Actuarial\Dashboards\Operational\OBR_Records\run\Input_Files\OBR PBI Input Sheet.xlsx"
-    OUT=OBR_History
-    DBMS=excelcs
-    REPLACE;
-    SHEET="Operations OBR data";
-    SERVER='lfe-rbgfs01';
-    PORT=9621;
-RUN;
-
-DATA Historical_Scores;
-    SET OBR_History;
-    WHERE Division = 'Servicing';
-    KEEP Fnumber UserName Team Score OpsYM DateVar;
-
-    Year    = INT(OpsYM / 100);
-    Month   = MOD(OpsYM, 100);
-    DateVar = INTNX('month', MDY(Month, 1, Year), 0, 'E');
-    FORMAT DateVar DATE9.;
-RUN;
-
-proc sql;
-    create table Leave_Score as
-    select a.*, b.EmployeeNumber as EmployeeNumber2
-    from Historical_Scores a
-    inner join STI_PBI.STI_Servicing_Agents b
-        on a.Fnumber = b.EmployeeNumber;
-quit;
-
-proc sql;
-    create table Leave_Score_2_tmp as
-    select  UserName,
-            EmployeeNumber2          as employeenumber,
-            round(mean(Score), 0.01) as three_month_score
-    from Leave_Score
-    where DateVar between intnx('month', &OBR_Month_start_date, -3, 'b')
-                      and intnx('month', &OBR_Month_start_date, -1, 'e')
-    group by UserName, EmployeeNumber2;
-quit;
-
-proc sql;
-    create table Leave_Score_2 as
-    select a.*
-    from Leave_Score_2_tmp a
-    where a.EmployeeNumber in (select EmployeeNumber
-                               from STI_PBI.STI_Servicing_Agents
-                               where Active = 1);
-quit;
-
-proc sql; drop table Leave_Score_2_tmp; quit;
-
-
-/* ============================================================================
-   PART 3: LEAVE RECORDS
-   ============================================================================ */
-
-PROC IMPORT
-    DATAFILE="\\lfe-rbgfs01\FNB_Insure\FSR STI Corporate Actuarial\Dashboards\Operational\OBR_Records\Leave_Template.xlsx"
-    OUT=Leave_Template
-    DBMS=excelcs
-    REPLACE;
-    SERVER='lfe-rbgfs01';
-    PORT=9621;
-    SHEET="&sheet";
-RUN;
-
-data Leave_Template;
-    set Leave_Template;
-    rename 'Scorecard_Affected_Date(Which Mo'n = Score_Affected_Date;
-run;
-
-data Leave_Template2;
-    set Leave_Template;
-    length Scorecard_Day_affected2 8.;
-    format Scorecard_Day_affected2 date9.;
-    if 'Leave Days'n >= 5 then Scorecard_Day_affected2 = Score_Affected_Date;
-    else Scorecard_Day_affected2 = .;
-run;
-
-
-/* ============================================================================
-   PART 4: WEEKLY SCORECARD SCORES
-   ============================================================================ */
-
-proc sql;
-    create table Servicing_Scores_tmp as
-    select *
-    from STI_SC.Servicing_Scores b
-    where sql_export_day = (select max(sql_export_day)
-                            from STI_SC.Servicing_Scores c
-                            where b.run_date = c.run_date
-                              and b.EmployeeNumber = c.EmployeeNumber)
-      and run_date between &current_obr_period_start_date and &current_obr_period_end_date
-      and weekday(run_date) = 2
-      and active = 1
-    order by EmployeeNumber;
-quit;
-
-proc sql;
-    create table Servicing_Scores_active as
-    select a.*
-    from Servicing_Scores_tmp a
-    where a.EmployeeNumber in (select EmployeeNumber
-                               from STI_PBI.STI_Servicing_Agents
-                               where Active = 1);
-quit;
-
-proc sql; drop table Servicing_Scores_tmp; quit;
-
-data Servicing_Scores_active;
-    set Servicing_Scores_active;
-    drop full_name;
-run;
-
-proc sql;
-    create table Servicing_Scores as
-    select catx(' ', b.Name, b.Surname) as full_name
-          ,a.*
-    from Servicing_Scores_active a
-    left join STI_PBI.STI_Servicing_Agents b
-        on a.EmployeeNumber = b.EmployeeNumber;
-quit;
-
-proc sql; drop table Servicing_Scores_active; quit;
-
-proc sql;
-    select distinct run_date
-    from Servicing_Scores;
-quit;
-
-
-/* ============================================================================
-   PART 5: MERGE SCORES + LEAVE ADJUSTMENT
-   ============================================================================ */
-
-proc sql;
-    create table Servicing_Scores_WLeave as
-    select  a.*,
-            b.three_month_score,
-            c.Scorecard_Day_affected2
-    from Servicing_Scores a
-    left join Leave_Score_2 b
-        on a.EmployeeNumber = b.employeenumber
-    left join Leave_Template2 c
-        on  a.EmployeeNumber = c.F_Number
-        and a.run_date       = c.Scorecard_Day_affected2;
-quit;
-
-data Servicing_Scores_WLeave;
-    set Servicing_Scores_WLeave;
-    if EmployeeNumber = 'F5485428' then line = 'Comp 1';
-run;
-
-
-/* ============================================================================
-   PART 6: SPLIT INTO LOC AND COMP OUTPUT DATASETS
-   ============================================================================ */
-
-data LOC_Servicing_Remm   COMP_Servicing_Remm;
-    set Servicing_Scores_WLeave (
-        keep   = Full_Name line EmployeeNumber run_date Active scorecard
-                 three_month_score Scorecard_Day_affected2
-        rename = (EmployeeNumber = Employee_Number)
-    );
-    if Scorecard_Day_affected2 ne . and scorecard < three_month_score then
-        scorecard = three_month_score;
-    if line in ('LOC 1', 'LOC 2') then output LOC_Servicing_Remm;
-    else output COMP_Servicing_Remm;
-run;
-
-
-/* ============================================================================
-   PART 7: QUICK VALIDATION CHECKS
-   ============================================================================ */
-
-%put === LOC Servicing Remm ===;
-proc sql; select count(*) as n_rows from LOC_Servicing_Remm; quit;
-
-%put === COMP Servicing Remm ===;
-proc sql; select count(*) as n_rows from COMP_Servicing_Remm; quit;
-
-proc sql;
-    select Employee_Number, Full_Name
-    from LOC_Servicing_Remm
-    where three_month_score is null
-    union
-    select Employee_Number, Full_Name
-    from COMP_Servicing_Remm
-    where three_month_score is null;
-quit;
-
-
-/* ============================================================================
-   PART 8: CALCULATING EARN BASED OFF METRICS AND SCORES
-   ============================================================================ */
-
-%macro importing(output, sheet);
-proc import
-    datafile="/data/fnbinsurance/Corporate_Actuarial/Short_Term/LOC/All_teams_metrics.xlsx"
-    dbms=xlsx replace
-    out=&output;
-    sheet=&sheet;
-quit;
+/*--------------------------------------------------------------
+  Database libname.
+  NOTE: noprompt= in LIBNAME uses its own quoting -- do NOT
+  wrap in %bquote() as that masks semicolons and breaks parsing.
+--------------------------------------------------------------*/
+%macro logging(libname, database, schema, server);
+LIBNAME &libname odbc noprompt="
+  Driver=MSSQL;
+  AnsiNPW=1;
+  AuthenticationMethod=10;
+  ApplicationUsingThreads=1;
+  BulkLoadOptions=2;
+  Database=&database;
+  FetchTWFSasTime=1;
+  HostName=&server;
+  PortNumber=1433;
+  UID=&User.;
+  PWD=&FNB_Login."
+Schema=&schema;
 %mend;
-%importing(LOC_Earn_Metrics, LOC_Servicing_Earn);
-%importing(COMP_Earn_Metrics, COMP_Servicing_Earn);
-%importing(QA_factors, QA_Factor);
 
-%macro Remuneration(Office_Remuneration, Office_Monday_Score, Office_Earn_Metrics,
-                    Office_Scorecard_Total, LB_score, UP_Score);
-proc sql;
-    create table &Office_Remuneration as
-    select      a.*,
-                b.Earn as Earn_before_QA
-    from        &Office_Monday_Score a
-    left join   &Office_Earn_Metrics b
-        on  (a.run_date between b.start_date and b.end_date)
-        and (a.&Office_Scorecard_Total between b.&LB_score and b.&UP_Score)
-    order by a.Employee_Number;
-quit;
-%mend;
-%Remuneration(LOC_Servicing_Earn, LOC_Servicing_Remm, LOC_Earn_Metrics,
-              ScoreCard, LB_LOC_Servicing_Score, UP_LOC_Servicing_Score);
-%Remuneration(COMP_Servicing_Earn, COMP_Servicing_Remm, COMP_Earn_Metrics,
-              ScoreCard, LB_COMP_Servicing_Score, UP_COMP_Servicing_Score);
+%logging(STI_WER, FNB_STI_Analytics, Claims, LFE-RBPREATLDB1);
 
-%macro SORTING_REMUNERATION(TABLE1, TABLE2);
-proc sort data=&TABLE1 out=&TABLE2 noduprecs;
-    by _all_;
-run;
-%mend;
-%SORTING_REMUNERATION(LOC_Servicing_Earn, LOC_Servicing_Earn);
-%SORTING_REMUNERATION(COMP_Servicing_Earn, COMP_Servicing_Earn);
+/*--------------------------------------------------------------
+  Run date -- override with %let rd = 20250421; for back-testing.
+--------------------------------------------------------------*/
+%if not %symexist(rd) %then %do;
+  %let rd = %sysfunc(today(), yymmddn8.);
+%end;
 
-%macro ALL_OFFICE_MONTHLY_EARN(Office_Name, From_Office_Remm);
-proc sql;
-    create table &Office_Name as
-    select      a.Full_Name,
-                a.line,
-                a.Employee_Number,
-                round(avg(ScoreCard), 0.01)  as Monthly_Score,
-                sum(a.Earn_before_QA)        as Monthly_Earn_before_QA,
-                a.active,
-                b.QA_Period
-    from        &From_Office_Remm a
-    inner join  Periods b
-        on (a.run_date between b.Start_Date and b.End_date)
-    group by    a.Full_Name, a.Employee_Number, a.line, a.active, b.QA_Period;
-quit;
-%mend;
-%ALL_OFFICE_MONTHLY_EARN(LOC_SER_Monthly_Earn_PreQA, LOC_Servicing_Earn);
-%ALL_OFFICE_MONTHLY_EARN(COMP_SER_Monthly_Earn_PreQA, COMP_Servicing_Earn);
+/*--------------------------------------------------------------
+  Stale-claims threshold (months).
+  Claims with ReportedMonth older than this are shown in Chart 3.
+--------------------------------------------------------------*/
+%let stale_months = 3;
+
+/*--------------------------------------------------------------
+  FIX #5 -- Build the ODBC connection string once, safely.
+
+  %nrstr() suppresses ALL macro tokenisation (& % ; = etc.) at
+  the point of the %let, so Driver=MSSQL is stored as a plain
+  literal. &User. and &FNB_Login. are written as &&User. and
+  &&FNB_Login. (double-ampersand) so they resolve on the SECOND
+  macro pass -- i.e. at CONNECT time when their values are known.
+
+  Nothing else in this file should use %bquote() on a CONNECT
+  noprompt= value.
+--------------------------------------------------------------*/
+%let _conn_static = %nrstr(Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;Database=FNB_STI_Analytics;HostName=LFE-RBPREATLDB1;PortNumber=1433;UID=&&User..;PWD=&&FNB_Login..);
 
 
-/* ============================================================================
-   PART 9: QA FALLBACK — CURRENT MONTH QA NOT YET AVAILABLE
-   Average QA_Score_Perc from Nov 2025 to Jan 2026 used as proxy for Mar 2026.
-   Incentive_Factor_To_Be_Paid is derived from the averaged score via
-   QA_factors using only the score band (LB_QA / UP_QA) — no date filter
-   applied since we are deliberately using a historical average outside the
-   current period. Agents with no QA history in the fallback window default
-   to QA_Score_Perc = 100 and factor = 1.
+/*==============================================================
+  MOTOR WEEKLY JOB
+==============================================================*/
 
-   KEY FIX: QA_FINAL_Perioded now stamps every agent with OBR_Month_start_date
-   as QA_Period directly — no sub-select against Periods with SC date bounds
-   that previously returned zero rows. The %Final_Earn join has also been
-   simplified to match on Employee_Number only, removing the QA_Period
-   comparison that was silently failing and nulling all QA columns.
-   ============================================================================ */
+%global cycle_id baseline_claims baseline_ocr
+        baseline_ocr_fmt baseline_claims_fmt
+        prev_open prev_ocr_amt
+        week_num existing_rows seq_exists
+        open_this_week ocr_this_week
+        cumul_closed closed_this_week ocr_reduced pct_closed
+        cycle_mismatch_flag rd_yyyymm outfile
+        email_open_fmt email_baseline_fmt email_ocr_fmt
+        email_reduced_fmt email_closed_fmt email_cumul_fmt email_pct_fmt
+        claims_over_3m claims_over_3m_fmt;
 
-/* Step 1: Load raw QA source */
-data Service_QA_Raw;
-    set sti_pbi.Service_QA_Final;
-    Evaluations2 = Evaluations;
-    if score = . then evaluations = 0;
-run;
+%macro ocr_weekly_main;
 
-/* Step 2: Aggregate to per-agent average over Nov 2025 – Jan 2026 */
-proc sql;
-    create table QA_Fallback_Avg as
-    select      Employee_number,
-                round(sum(Score_M) / sum(Evaluations), 0.01) as QA_Score_Perc,
-                sum(Evaluations2)                             as QA_Evaluations,
-                &QA_Fallback_start  as Fallback_Start   format date9.,
-                &QA_Fallback_end    as Fallback_End     format date9.
-    from        Service_QA_Raw
-    where       date_stamp between &QA_Fallback_start and &QA_Fallback_end
-    group by    Employee_number;
+%put NOTE: ============================================================;
+%put NOTE: MOTOR WEEKLY JOB STARTED -- rd=&rd.;
+%put NOTE: ============================================================;
+
+/*--- Resolve active cycle ---*/
+proc sql noprint;
+  select CycleID, BaselineClaims, BaselineOCR
+  into :cycle_id trimmed, :baseline_claims trimmed, :baseline_ocr trimmed
+  from STI_WER.OCR_Cycle_Control
+  where Status = 'ACTIVE'
+  order by BaselineDate desc;
 quit;
 
-%put === Agents with fallback QA score ===;
-proc sql;
-    select count(*) as agents_with_fallback_QA from QA_Fallback_Avg;
+%if &sqlobs. = 0 %then %do;
+  %put ERROR: No ACTIVE cycle found in OCR_Cycle_Control.;
+  %put ERROR: Run OCR_02_Baseline.sas on the 16th first.;
+  %abort cancel;
+%end;
+
+%put NOTE: Active Cycle ID     = &cycle_id.;
+%put NOTE: Baseline Claims     = &baseline_claims.;
+%put NOTE: Baseline OCR Amount = &baseline_ocr.;
+
+%let baseline_ocr_fmt    = %sysfunc(putn(&baseline_ocr.,    comma18.2));
+%let baseline_claims_fmt = %sysfunc(putn(&baseline_claims., comma10.));
+
+/*--- Cycle / run-date mismatch flag ---*/
+%let rd_yyyymm = %sysfunc(substr(&rd., 1, 6));
+
+%if %str(&rd_yyyymm.) ne %str(&cycle_id.) %then %do;
+  %put WARNING: Run date month (&rd_yyyymm.) ne active CycleID (&cycle_id.).;
+  %let cycle_mismatch_flag = Y;
+%end;
+%else %let cycle_mismatch_flag = N;
+
+/*--- Next week number.
+      The baseline job seeds WeekSequence=0, so existing_rows=1
+      on the first weekly run, giving week_num=1 naturally.     ---*/
+proc sql noprint;
+  select count(*)
+  into :existing_rows trimmed
+  from STI_WER.OCR_Weekly_Tracker
+  where CycleID = "&cycle_id.";
 quit;
 
-/* Diagnostic: print the QA_factors table so we can confirm score bands exist */
-%put === QA_factors contents ===;
-proc sql;
-    select * from QA_factors order by LB_QA;
+%let week_num = &existing_rows.;
+%put NOTE: Week number (next to insert) = &week_num.;
+
+/*--- Previous week values.
+      FIX #1: Use WeekSequence = week_num - 1 instead of max(RunDate).
+      max(RunDate) is ambiguous when the baseline and first weekly
+      job run on the same calendar day -- both rows share the same
+      RunDate so the subquery returns the current row instead of
+      the prior one, causing closed_this_week = 0 or -1.
+      WeekSequence is always unique within a CycleID.           ---*/
+proc sql noprint;
+  select Open_Claims, Current_OCR_Amt
+  into :prev_open trimmed, :prev_ocr_amt trimmed
+  from STI_WER.OCR_Weekly_Tracker
+  where CycleID      = "&cycle_id."
+    and WeekSequence = %eval(&week_num. - 1);
 quit;
 
-/* Step 3: Look up incentive factor using ONLY the score band — no date filter */
-proc sql;
-    create table QA_FINAL as
-    select      a.Employee_number,
-                a.QA_Score_Perc,
-                a.QA_Evaluations,
-                a.Fallback_Start                as start_date   format date9.,
-                a.Fallback_End                  as end_date     format date9.,
-                b.Incentive_Factor_To_Be_Paid,
-                'NOV25-JAN26 Avg'               as QA_Source
-    from        QA_Fallback_Avg a
-    left join   QA_factors b
-        on  (a.QA_Score_Perc between b.LB_QA and b.UP_QA);
+%if &sqlobs. = 0 %then %do;
+  %put ERROR: Could not resolve Open_Claims / Current_OCR_Amt from WeekSequence=%eval(&week_num.-1).;
+  %abort cancel;
+%end;
+
+%put NOTE: Previous week -- Open=&prev_open. OCR=&prev_ocr_amt. Seq=%eval(&week_num.-1);
+
+/*--- Duplicate-run guard ---*/
+proc sql noprint;
+  select count(*)
+  into :seq_exists trimmed
+  from STI_WER.OCR_Weekly_Tracker
+  where CycleID = "&cycle_id." and WeekSequence = &week_num.;
 quit;
 
-/* Diagnostic: confirm factors are populating correctly */
-%put === QA_FINAL after factor join — sample ===;
-proc sql;
-    select Employee_number, QA_Score_Perc, Incentive_Factor_To_Be_Paid, QA_Source
-    from QA_FINAL
-    order by Employee_number;
-quit;
+%if &seq_exists. > 0 %then %do;
+  %put ERROR: Row for CycleID=&cycle_id. WeekSequence=&week_num. already exists. Aborting.;
+  %abort cancel;
+%end;
 
-/* Check how many still have a null factor after the fix */
-proc sql;
-    select count(*) as still_null_factor
-    from QA_FINAL
-    where Incentive_Factor_To_Be_Paid is null;
-quit;
+/*--- Max-weeks guard ---*/
+%if &week_num. > 5 %then %do;
+  %put ERROR: WeekSequence &week_num. exceeds maximum of 5 for CycleID=&cycle_id.. Aborting.;
+  %abort cancel;
+%end;
 
-/* Step 4: Default any agent missing from the fallback window to 100% / factor 1 */
-proc sql;
-    create table QA_FINAL_Missing as
-    select      strip(a.Employee_Number) as Employee_number,
-                100                      as QA_Score_Perc,
-                0                        as QA_Evaluations,
-                &QA_Fallback_start       as start_date   format date9.,
-                &QA_Fallback_end         as end_date     format date9.,
-                1                        as Incentive_Factor_To_Be_Paid,
-                'Default 100%'           as QA_Source
-    from        COMP_SER_Monthly_Earn_PreQA a
-    where strip(a.Employee_Number) not in
-              (select strip(Employee_number) from QA_FINAL)
-    union
-    select      strip(a.Employee_Number),
-                100, 0,
-                &QA_Fallback_start,
-                &QA_Fallback_end,
-                1,
-                'Default 100%'
-    from        LOC_SER_Monthly_Earn_PreQA a
-    where strip(a.Employee_Number) not in
-              (select strip(Employee_number) from QA_FINAL);
-quit;
+%put NOTE: Guards passed -- proceeding with Week &week_num.;
 
-/* Step 5: Combine matched and defaulted records */
-data QA_FINAL;
-    set QA_FINAL QA_FINAL_Missing;
+/*--- Pull snapshot: Motor + Retail ---*/
+data work.snapshot;
+  set STI_WER.Investigate_Claims(
+    keep= ClaimCode SubClaimCode ReportMonth
+          Estimate_OCR ProductTypeSplit Division ClaimHandler
+  );
+  if upcase(strip(ProductTypeSplit)) ne 'MOTOR'  then delete;
+  if upcase(strip(Division))         ne 'RETAIL' then delete;
 run;
 
-proc sql; drop table QA_FINAL_Missing; quit;
+%put NOTE: Motor snapshot extracted -- &sysnobs. rows.;
 
-/* -----------------------------------------------------------------------
-   FIX (Step 6): Stamp QA_Period directly from OBR_Month_start_date.
-   Previously this used a sub-select filtering Periods where QA_Period
-   was BETWEEN current_obr_period_start_date and current_obr_period_end_date.
-   Because QA_Period in the Periods table is stored as month-start (24FEB2026)
-   and current_obr_period_start_date = 02MAR2026, the filter returned zero
-   rows — making QA_FINAL_Perioded empty and silently nulling all QA columns
-   in the final table.  We now stamp every row with the known OBR period date
-   directly, which is guaranteed to exist in the Periods table.
-   ----------------------------------------------------------------------- */
+/*--- Current estimates ---*/
+data work.current_est;
+  set STI_WER.vw_OpsClaimsReport(
+    keep= SubClaimCode Total_Estimate_OCR_ExVAT Total_Paid_ExVAT
+  );
+run;
+
+%put NOTE: Current estimates extracted -- &sysnobs. rows.;
+
+/*--- Build final claims detail.
+      Option A: Current_Estimate_OCR = original flagged
+      Estimate_OCR if the claim still has a live estimate
+      in vw_OpsClaimsReport (Total_Estimate_OCR_ExVAT > 0),
+      zero if settled/closed.
+      OCR reduction comes from claims closing only -- reserve
+      movements do not affect the tracked OCR amount.
+      This keeps the weekly figures consistent with the baseline
+      which was also seeded from Estimate_OCR.                 ---*/
 proc sql;
-    create table QA_FINAL_Perioded as
-    select  a.*,
-            &OBR_Month_start_date as QA_Period format date9.
-    from    QA_FINAL a;
+  create table work.MotorClaims_Final as
+  select
+      c.ClaimCode,
+      c.ReportMonth                                          as ReportedMonth,
+      c.ClaimHandler,
+      c.Estimate_OCR                                         as Estimate_OCR_When_Flagged,
+      case
+        when coalesce(a.Total_Estimate_OCR_ExVAT, 0) > 0
+        then round(c.Estimate_OCR, 0.01)
+        else 0
+      end                                                    as Current_Estimate_OCR,
+      case
+        when coalesce(a.Total_Estimate_OCR_ExVAT, 0) > 0
+        then 0
+        else -round(c.Estimate_OCR, 0.01)
+      end                                                    as OCR_Movement
+  from work.snapshot c
+  left join work.current_est a
+      on c.SubClaimCode = a.SubClaimCode
+  order by c.ReportMonth desc;
 quit;
 
-%put === QA_FINAL_Perioded — row count (should match agent count) ===;
-proc sql; select count(*) as total_rows from QA_FINAL_Perioded; quit;
+%put NOTE: MotorClaims_Final built -- &sqlobs. rows.;
 
-/* Confirm period and scores look correct */
-proc sql;
-    select Employee_number,
-           QA_Period                    format date9.,
-           QA_Score_Perc,
-           Incentive_Factor_To_Be_Paid,
-           QA_Source
-    from QA_FINAL_Perioded
-    order by Employee_number;
+/*--- Count Motor claims older than &stale_months. months ---*/
+proc sql noprint;
+  select count(distinct ClaimCode)
+  into :claims_over_3m trimmed
+  from work.MotorClaims_Final
+  where ReportedMonth < intnx('month', today(), -&stale_months., 'beginning');
 quit;
 
+%let claims_over_3m_fmt = %sysfunc(putn(&claims_over_3m., comma10.));
+%put NOTE: Motor claims older than &stale_months. months = &claims_over_3m.;
 
-/* ---------------------------------------------------------------------------
-   Calculating Earn: After QA — using fallback QA scores
+/*--- Weekly summary metrics.
+      FIX #3: open_this_week / cumul_closed / ocr_this_week all
+      derived directly from the live snapshot, not from arithmetic
+      against baseline_claims. This prevents negative values when
+      new claims are added to the investigation list post-baseline.
 
-   FIX: Join is now on Employee_Number only.
-   The previous double join (Employee_Number AND QA_Period) was failing
-   because QA_Period in the monthly earn tables is set from the Periods
-   table via run_date, which resolves to 24FEB2026, but minor format
-   differences or value mismatches caused the join to produce no matches
-   even after the input(put()) casting. Removing the QA_Period condition
-   is safe here because every agent has exactly one fallback QA row —
-   there is no multi-period ambiguity to protect against.
-   --------------------------------------------------------------------------- */
-%macro Final_Earn(Earn_Table, from_earn, QA);
-proc sql;
-    create table &Earn_Table as
-    select      a.*,
-                b.start_date,
-                b.end_date,
-                b.QA_Evaluations,
-                b.QA_Score_Perc,
-                b.Incentive_Factor_To_Be_Paid,
-                b.QA_Source,
-                a.Monthly_Earn_before_QA * b.Incentive_Factor_To_Be_Paid
-                    as Monthly_Earn_after_QA
-    from        &from_earn a
-    left join   &QA b
-        on  strip(a.Employee_Number) = strip(b.Employee_number)
-    order by a.QA_Period desc;
-quit;
-%mend;
-%Final_Earn(COMP_Final_Monthly_Earn, COMP_SER_Monthly_Earn_PreQA, QA_FINAL_Perioded);
-%Final_Earn(LOC_Final_Monthly_Earn,  LOC_SER_Monthly_Earn_PreQA,  QA_FINAL_Perioded);
+      open_this_week  = claims still with a live estimate.
+      ocr_this_week   = sum of ORIGINAL flagged amounts for open
+                        claims (Option A -- consistent with baseline).
+      cumul_closed    = claims whose live estimate is now zero.
+      closed_this_week = prev_open minus open_this_week.
+      ocr_reduced     = prev_ocr_amt minus ocr_this_week.      ---*/
+proc sql noprint;
+  select count(distinct ClaimCode), sum(Estimate_OCR_When_Flagged)
+  into :open_this_week trimmed, :ocr_this_week trimmed
+  from work.MotorClaims_Final
+  where Current_Estimate_OCR > 0;
 
-data Sum_Earns_With_QA;
-    set COMP_Final_Monthly_Earn LOC_Final_Monthly_Earn;
-run;
-
-/* Sanity check — no agent should have null factor after fallback logic */
-%put === Agents with null Incentive_Factor after fallback ===;
-proc sql;
-    select Employee_Number, Full_Name, QA_Score_Perc, Incentive_Factor_To_Be_Paid
-    from Sum_Earns_With_QA
-    where Incentive_Factor_To_Be_Paid is null;
+  select count(distinct ClaimCode)
+  into :cumul_closed trimmed
+  from work.MotorClaims_Final
+  where Current_Estimate_OCR = 0;
 quit;
 
+%let closed_this_week = %sysevalf(&prev_open.    - &open_this_week.);
+%let ocr_reduced      = %sysevalf(&prev_ocr_amt. - &ocr_this_week.);
 
-/* ============================================================================
-   PART 10: INCORPORATING BONUSES
-   ============================================================================ */
+%if %sysevalf(&baseline_claims. > 0, boolean) %then
+  %let pct_closed = %sysevalf(&cumul_closed. / &baseline_claims.);
+%else
+  %let pct_closed = 0;
 
-proc sql;
-    create table Servicing_Score_Months_Pre as
-    select * from Servicing_Scores_WLeave;
+%put NOTE: Motor metrics -- Open=&open_this_week. OCR=&ocr_this_week.;
+%put NOTE: Motor metrics -- CumulClosed=&cumul_closed. ClosedThisWeek=&closed_this_week.;
+%put NOTE: Motor metrics -- OCRReduced=&ocr_reduced. PctClosed=&pct_closed.;
+
+/*--- Insert weekly row.
+      FIX #5: Connection string is resolved from &&_conn_static.
+      The double-ampersand triggers a second macro resolution
+      pass: _conn_static was stored with %nrstr() so Driver=MSSQL
+      was never tokenised, and &&User.. / &&FNB_Login.. expand
+      to their run-time values on the second pass.
+      No %bquote() wrapper needed or used here.                ---*/
+proc sql noprint;
+  connect to odbc as sqlsvr (noprompt="&&_conn_static.");
+
+  execute (
+    INSERT INTO FNB_STI_Analytics.Claims.OCR_Weekly_Tracker
+      (CycleID, WeekSequence, WeekLabel, RunDate,
+       Baseline_Claims, Open_Claims,
+       Current_OCR_Amt, Cumul_Closed, Closed_This_Week,
+       OCR_Reduced_This_Week, Pct_Claims_Closed)
+    VALUES (
+      "&cycle_id.", &week_num., "Week &week_num.",
+      CONVERT(DATE, "&rd.", 112),
+      &baseline_claims., &open_this_week., &ocr_this_week.,
+      &cumul_closed., &closed_this_week., &ocr_reduced., &pct_closed.
+    )
+  ) by sqlsvr;
+
+  disconnect from sqlsvr;
 quit;
 
+%if &syserr. ne 0 %then %do;
+  %put ERROR: INSERT into OCR_Weekly_Tracker failed. SYSERR=&syserr.. Aborting.;
+  %abort cancel;
+%end;
+
+%put NOTE: OCR_Weekly_Tracker row inserted -- Week &week_num.;
+
+/*--- Pull full tracker for this cycle (Week 1+ only for charts) ---*/
 proc sql;
-    create table Servicing_Score_Months as
-    select      a.Full_name,
-                a.line,
-                a.EmployeeNumber,
-                a.run_date,
-                a.scorecard,
-                b.QA_Period,
-                b.Weeks_in_Month,
-                b.start_date
-    from        Servicing_Score_Months_Pre a
-    left join   Periods b
-        on (a.run_date between b.Start_Date and b.End_date)
-    order by    a.run_date, a.employeeNumber;
+  create table work.tracker_this_cycle as
+  select * from STI_WER.OCR_Weekly_Tracker
+  where CycleID = "&cycle_id."
+    and WeekSequence >= 1
+  order by WeekSequence;
 quit;
 
-proc sort data=Servicing_Score_Months;
-    by _all_;
-run;
-
+/*--- Claims-by-month summary (used for Chart 3) ---*/
 proc sql;
-    select min(run_date) format date9.
-    into :min_date
-    from Servicing_Score_Months;
+  create table work.Motor_Monthly_Count as
+  select
+      put(ReportedMonth, yymmn6.) as MonthLabel length=7,
+      count(distinct ClaimCode)   as ClaimCount
+  from work.MotorClaims_Final
+  where ReportedMonth < intnx('month', today(), -&stale_months., 'beginning')
+  group by ReportedMonth
+  order by ReportedMonth;
 quit;
 
-data Servicing_Performance_Incentive (drop=Weeks_in_Month start_date);
-    set Servicing_Score_Months;
-    QA_Period = "&min_date"d;
-    if Scorecard >= 4.3 then count = 1;
-    else count = 0;
-    Monday_of_the_period = abs(intck('day', "&min_date"d, run_date) / 7) + 1;
+/*--------------------------------------------------------------
+  PNG Charts
+  Chart 1: OCR trend line.
+  Chart 2: Claims closed bar.
+  Chart 3: Claims count by reported month.
+  Week 2+ only for Charts 1 & 2; Chart 3 produced every week.
+--------------------------------------------------------------*/
+%let png_ocr_outfile =
+  /data/fnbinsurance/Short_Term/Monitoring/MotorOCR_Trend_&rd..png;
+%let png_closed_outfile =
+  /data/fnbinsurance/Short_Term/Monitoring/MotorOCR_Closed_&rd..png;
+%let png_monthly_outfile =
+  /data/fnbinsurance/Short_Term/Monitoring/MotorOCR_Monthly_&rd..png;
+
+%if &week_num. >= 2 %then %do;
+
+  /* Chart 1 -- OCR Amount Trend */
+  ods listing image_dpi=150
+    gpath="/data/fnbinsurance/Short_Term/Monitoring";
+  ods graphics on / reset=all imagename="MotorOCR_Trend_&rd."
+    outputfmt=png width=800px height=400px;
+
+  title "OCR Amount Movement -- Motor Retail (CycleID &cycle_id.)";
+  footnote j=left
+    "Baseline: R &baseline_ocr_fmt.  |  Claims: &baseline_claims_fmt.  |  Run: &rd.";
+
+  proc sgplot data=work.tracker_this_cycle;
+    series x=WeekLabel y=Current_OCR_Amt /
+      markers
+      markerattrs=(symbol=circlefilled size=10 color=CX54B9AC)
+      lineattrs=(thickness=2 color=CX54B9AC);
+    yaxis label="Current OCR Amount (R)" grid valuesformat=comma18.;
+    xaxis label="Week" discreteorder=data;
+  run;
+
+  title; footnote;
+  ods graphics off;
+  ods listing close;
+
+  /* Chart 2 -- Claims Closed Bar */
+  ods listing image_dpi=150
+    gpath="/data/fnbinsurance/Short_Term/Monitoring";
+  ods graphics on / reset=all imagename="MotorOCR_Closed_&rd."
+    outputfmt=png width=800px height=400px;
+
+  title "Claims Closed Per Week -- Motor Retail (CycleID &cycle_id.)";
+
+  proc sgplot data=work.tracker_this_cycle;
+    vbar WeekLabel / response=Closed_This_Week
+      fillattrs=(color=CX54B9AC)
+      datalabel
+      datalabelattrs=(size=10 weight=bold);
+    yaxis label="Claims Closed This Week" grid;
+    xaxis label="Week" discreteorder=data;
+  run;
+
+  title;
+  ods graphics off;
+  ods listing close;
+
+  %put NOTE: Motor charts 1+2 exported for Week &week_num.;
+
+%end;
+%else %do;
+  %put NOTE: Week 1 -- Motor charts 1+2 deferred to Week 2+.;
+%end;
+
+/* Chart 3 -- Claims Count by Reported Month (every week) */
+ods listing image_dpi=150
+  gpath="/data/fnbinsurance/Short_Term/Monitoring";
+ods graphics on / reset=all imagename="MotorOCR_Monthly_&rd."
+  outputfmt=png width=800px height=400px;
+
+title "Open Claims Older Than &stale_months. Months by Reported Month -- Motor Retail (CycleID &cycle_id.)";
+footnote j=left "Run: &rd.  |  Claims with report month before &stale_months. months ago";
+
+proc sgplot data=work.Motor_Monthly_Count;
+  vbar MonthLabel / response=ClaimCount
+    fillattrs=(color=CX54B9AC)
+    datalabel
+    datalabelattrs=(size=10 weight=bold);
+  yaxis label="Number of Open Claims" grid;
+  xaxis label="Reported Month" discreteorder=data;
 run;
 
-proc sort data=Servicing_Performance_Incentive noduprecs;
-    by EmployeeNumber QA_Period;
+title; footnote;
+ods graphics off;
+ods listing close;
+
+%put NOTE: Motor chart 3 exported for Week &week_num.;
+
+/*--------------------------------------------------------------
+  Export to Excel -- Claims Detail sheet ONLY.
+--------------------------------------------------------------*/
+%let outfile =
+  /data/fnbinsurance/Short_Term/Monitoring/MotorOCR_Tracker_&rd..xlsx;
+
+proc template;
+  define style OCR_Style;
+    parent = styles.excel;
+    style Header /
+      background  = CX54B9AC
+      color       = white
+      font_weight = bold;
+  end;
 run;
 
-data Servicing_Performance_count;
-    set Servicing_Performance_Incentive;
-    by EmployeeNumber QA_Period;
-    retain sum_of_count;
-    if first.QA_Period then sum_of_count = count;
-    else sum_of_count + count;
-run;
-
-data Servicing_Incentive_Earn;
-    set Servicing_Performance_count;
-    if (Monday_of_the_period in (1,2,3) and Scorecard >= 4.3) or
-       (Monday_of_the_period in (2,3,4) and Scorecard >= 4.3) or
-       (Monday_of_the_period in (3,4,5) and Scorecard >= 4.3)
-    then Perfomance_Incentive = 1000;
-    else Perfomance_Incentive = 0;
-run;
-
-data Servicing_Incentive_Earn;
-    set Servicing_Incentive_Earn;
-    where sum_of_count in (3,4,5)
-      and Scorecard >= 4.3
-      and QA_Period >= "&min_date"d;
-run;
-
-proc sql;
-    create table Performance_bonus as
-    select Full_name, EmployeeNumber, line, QA_Period, Perfomance_Incentive
-    from Servicing_Incentive_Earn;
-quit;
-
-proc sort data=Performance_bonus noduprecs;
-    by _all_;
-run;
-
-
-/* ---------------------------------------------------------------------------
-   Sales Bonus
-   --------------------------------------------------------------------------- */
-PROC IMPORT
-    DATAFILE="\\lfe-rbgfs01\FNB_Insure\FSR STI Corporate Actuarial\Dashboards\Operational\OBR_Records\Servicing_Sales.xlsx"
-    OUT=Sales_Incentive
-    DBMS=excelcs
-    REPLACE;
-    SERVER='lfe-rbgfs01';
-    PORT=9621;
-    SHEET="&sheet";
-RUN;
-
-proc sql;
-    create table sales_incentives_serv as
-    select a.*, b.EmployeeNumber
-    from Sales_Incentive a
-    left join sti_pbi.service_employee b
-        on upcase(scan(a.name, 1)) = upcase(b.Name);
-quit;
-
-
-/* ============================================================================
-   PART 11: FINAL EARN AND FINAL ADJUSTMENTS
-   ============================================================================ */
-
-data SERVICING_PREFINAL;
-    set COMP_Final_Monthly_Earn LOC_Final_Monthly_Earn;
-    if Monthly_Earn_after_QA = . then Monthly_Earn_after_QA = Monthly_Earn_before_QA;
-run;
-
-proc sql;
-    create table SERVICING_MONTHLY_INCENTIVE as
-    select      a.*,
-                b.Perfomance_Incentive,
-                c.Amount                as Sales_Incentive,
-                sum(a.Monthly_Earn_after_QA,
-                    b.Perfomance_Incentive,
-                    c.Amount)           as Total_incentive
-    from        SERVICING_PREFINAL a
-    left join   Performance_bonus b
-        on  (a.Employee_Number = b.EmployeeNumber
-         and a.line            = b.line)
-    left join   sales_incentives_serv c
-        on  a.Employee_Number = c.EmployeeNumber;
-quit;
-
-proc sort data=SERVICING_MONTHLY_INCENTIVE noduprecs;
-    by Full_Name QA_Period;
-run;
-
-/* Manual adjustments: agents on Secure Chat */
-data SERVICING_MONTHLY_INCENTIVE;
-    set SERVICING_MONTHLY_INCENTIVE;
-
-    if Employee_Number = 'F5324823' then Monthly_Earn_after_QA = 3000; /* Nqobile Magani     */
-    if Employee_Number = 'F5330246' then Monthly_Earn_after_QA = 3000; /* Lesego Motala       */
-    if Employee_Number = 'F5530563' then Monthly_Earn_after_QA = 3000; /* Chase Moses         */
-    if Employee_Number = 'F4903773' then Monthly_Earn_after_QA = 3000; /* Tarryn Fredricks    */
-    if Employee_Number = 'F8872893' then Monthly_Earn_after_QA = 3000; /* Sevushen Thaver     */
-    if Employee_Number = 'F3446921' then Monthly_Earn_after_QA = 3000; /* Stacey Thomas       */
-    if Employee_Number = 'F5663393' then Monthly_Earn_after_QA = 3000; /* Thenjiwe Mnikathi   */
-
-    if Perfomance_Incentive = . then Perfomance_Incentive = 0;
-    if QA_Score_Perc        = . then QA_Score_Perc        = 100;
-    if Sales_Incentive      = . then Sales_Incentive      = 0;
-
-    Total_incentive = Monthly_Earn_after_QA + Perfomance_Incentive + Sales_Incentive;
-run;
-
-data LOC_Monthly_Earn   COMP_Monthly_Earn;
-    set SERVICING_MONTHLY_INCENTIVE;
-    if line in ('LOC 2', 'LOC 1') then output LOC_Monthly_Earn;
-    else output COMP_Monthly_Earn;
-run;
-
-
-/* ============================================================================
-   PART 12: EXPORT TO EXCEL
-   NOTE: Update file name to current run date before exporting
-   ============================================================================ */
-ods excel file='/data/fnbinsurance/Corporate_Actuarial/Short_Term/Servicing/Serv_Output_MAR2026_run1.csv'
-    options(sheet_name='COMP Final_Earns');
-    proc print data=COMP_Monthly_Earn noobs; run;
-ods excel options(sheet_name='LOC FinalEarns');
-    proc print data=LOC_Monthly_Earn noobs; run;
-ods excel options(sheet_name='COMP_WeeklyEarns_before_QA');
-    proc print data=COMP_Servicing_Earn noobs; run;
-ods excel options(sheet_name='LOC_WeeklyEarns_before_QA');
-    proc print data=LOC_Servicing_Earn noobs; run;
-ods excel options(sheet_name='Performance_Incentive');
-    proc print data=Performance_bonus noobs; run;
-ods excel options(sheet_name='Sales_Incentive');
-    proc print data=sales_incentives_serv noobs; run;
-ods excel options(sheet_name='QA_Fallback_Used');
-    proc print data=QA_FINAL_Perioded noobs; run;
+ods excel file="&outfile."
+  style = OCR_Style
+  options(
+    sheet_name      = "Claims Detail"
+    embedded_titles = "yes"
+    frozen_headers  = "yes"
+    autofilter      = "yes"
+    flow            = "tables"
+  );
+  title "Motor Retail Claims Under Investigation -- Week &week_num.";
+  proc print data=work.MotorClaims_Final noobs label;
+    format Estimate_OCR_When_Flagged Current_Estimate_OCR OCR_Movement comma18.2;
+  run;
 ods excel close;
+title;
 
-/* Active agent reference */
-data Secure_Chat_Agents;
-    set STI_PBI.STI_Servicing_Agents;
-    where Active = 1;
+%put NOTE: Motor Excel exported -- &outfile.;
+
+/*--------------------------------------------------------------
+  Pre-format email values.
+--------------------------------------------------------------*/
+%let email_open_fmt     = %sysfunc(putn(&open_this_week.,   comma10.));
+%let email_baseline_fmt = %sysfunc(putn(&baseline_claims.,  comma10.));
+%let email_ocr_fmt      = %sysfunc(putn(&ocr_this_week.,    comma18.2));
+%let email_reduced_fmt  = %sysfunc(putn(&ocr_reduced.,      comma18.2));
+%let email_closed_fmt   = %sysfunc(putn(&closed_this_week., comma10.));
+%let email_cumul_fmt    = %sysfunc(putn(&cumul_closed.,     comma10.));
+%let email_pct_fmt      = %sysfunc(putn(%sysevalf(&pct_closed.*100), 8.1));
+
+/*--------------------------------------------------------------
+  Email
+--------------------------------------------------------------*/
+filename outbox email;
+
+%macro motor_email_body;
+    put "Morning Monique";
+    put " ";
+    put "I hope you're well.";
+    put " ";
+    %if &week_num. >= 2 %then %do;
+      put "Please find below the Motor claims progress update for Week &week_num..";
+    %end;
+    %else %do;
+      put "Please be advised that the monthly Motor OCR tracking process has been restarted.";
+      put "The attached workbook reflects the opening position for Cycle &cycle_id..";
+    %end;
+    put " ";
+    put "-------------------------------";
+    put "Motor OCR Summary";
+    put "-------------------------------";
+    put " ";
+    put "Claims closed this week:";
+    put "  &email_closed_fmt.";
+    put " ";
+    put "Cumulative claims closed:";
+    put "  &email_cumul_fmt. of &email_baseline_fmt. (&email_pct_fmt.%)";
+    put " ";
+    put "Current OCR amount:";
+    put "  R &email_ocr_fmt.";
+    put " ";
+    put "OCR reduced this week:";
+    put "  R &email_reduced_fmt.";
+    put " ";
+    put "-----------------------------------------------------";
+    put "Number of Claims older than &stale_months. months:";
+    put "  &claims_over_3m_fmt.";
+    put "-----------------------------------------------------";
+    put " ";
+    put " ";
+    %if &week_num. >= 2 %then %do;
+      put "The outstanding Motor claims list and trend charts are attached.";
+    %end;
+    %else %do;
+      put "The outstanding Motor claims list is attached.";
+      put "Trend charts will be included from Week 2 onwards.";
+    %end;
+    put " ";
+    put "I will share another update next week.";
+    put " ";
+    put "Kind regards";
+    put "Morris";
+%mend motor_email_body;
+
+%if &week_num. >= 2 %then %do;
+
+  data _null_;
+    file outbox
+      to      = ("morris.nkomo@fnb.co.za")
+      /* cc   = ("asher.levin@fnb.co.za" "webster.khoza@fnb.co.za") */
+      from    = ("FNB ST Analytics <fnbst-analytics@fnb.co.za>")
+      subject = "TEST Motor OCR Tracker -- Week &week_num. (&rd.) [Cycle &cycle_id.]"
+      attach  = (
+        "&outfile."
+          content_type=
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "&png_ocr_outfile."
+          content_type="image/png"
+        "&png_closed_outfile."
+          content_type="image/png"
+        "&png_monthly_outfile."
+          content_type="image/png"
+      );
+    %motor_email_body;
+  run;
+
+%end;
+%else %do;
+
+  data _null_;
+    file outbox
+      to      = ("morris.nkomo@fnb.co.za")
+      /* cc   = ("asher.levin@fnb.co.za" "webster.khoza@fnb.co.za") */
+      from    = ("FNB ST Analytics <fnbst-analytics@fnb.co.za>")
+      subject = "TEST Motor OCR Tracker -- Week &week_num. (&rd.) [Cycle &cycle_id.]"
+      attach  = (
+        "&outfile."
+          content_type=
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "&png_monthly_outfile."
+          content_type="image/png"
+      );
+    %motor_email_body;
+  run;
+
+%end;
+
+%put NOTE: Motor email sent -- Week &week_num. to morris.nkomo@fnb.co.za;
+
+%put NOTE: ============================================================;
+%put NOTE: MOTOR WEEKLY JOB COMPLETE -- Week &week_num. CycleID &cycle_id.;
+%put NOTE: Open=&open_this_week. OCR=&ocr_this_week. Closed=&cumul_closed.;
+%put NOTE: ============================================================;
+
+%mend ocr_weekly_main;
+
+%ocr_weekly_main;
+
+
+/*==============================================================
+  NON-MOTOR WEEKLY JOB
+==============================================================*/
+
+%global nm_cycle_id nm_baseline_claims nm_baseline_ocr
+        nm_baseline_ocr_fmt nm_baseline_claims_fmt
+        nm_prev_open nm_prev_ocr_amt
+        nm_week_num nm_existing_rows nm_seq_exists
+        nm_open_this_week nm_ocr_this_week
+        nm_cumul_closed nm_closed_this_week nm_ocr_reduced nm_pct_closed
+        nm_cycle_mismatch_flag nm_outfile
+        nm_email_open_fmt nm_email_baseline_fmt nm_email_ocr_fmt
+        nm_email_reduced_fmt nm_email_closed_fmt nm_email_cumul_fmt nm_email_pct_fmt
+        nm_claims_over_3m nm_claims_over_3m_fmt;
+
+%macro nm_weekly_main;
+
+%put NOTE: ============================================================;
+%put NOTE: NON-MOTOR WEEKLY JOB STARTED -- rd=&rd.;
+%put NOTE: ============================================================;
+
+/*--- Resolve active cycle ---*/
+proc sql noprint;
+  select CycleID, BaselineClaims, BaselineOCR
+  into :nm_cycle_id trimmed, :nm_baseline_claims trimmed, :nm_baseline_ocr trimmed
+  from STI_WER.NM_Cycle_Control
+  where Status = 'ACTIVE'
+  order by BaselineDate desc;
+quit;
+
+%if &sqlobs. = 0 %then %do;
+  %put ERROR: No ACTIVE Non-Motor cycle found in NM_Cycle_Control.;
+  %put ERROR: Run OCR_02_Baseline.sas on the 16th first.;
+  %abort cancel;
+%end;
+
+%put NOTE: [NM] Active Cycle ID     = &nm_cycle_id.;
+%put NOTE: [NM] Baseline Claims     = &nm_baseline_claims.;
+%put NOTE: [NM] Baseline OCR Amount = &nm_baseline_ocr.;
+
+%let nm_baseline_ocr_fmt    = %sysfunc(putn(&nm_baseline_ocr.,    comma18.2));
+%let nm_baseline_claims_fmt = %sysfunc(putn(&nm_baseline_claims., comma10.));
+
+/*--- Cycle / run-date mismatch flag ---*/
+%let rd_yyyymm = %sysfunc(substr(&rd., 1, 6));
+
+%if %str(&rd_yyyymm.) ne %str(&nm_cycle_id.) %then %do;
+  %put WARNING: [NM] Run date month (&rd_yyyymm.) ne active CycleID (&nm_cycle_id.).;
+  %let nm_cycle_mismatch_flag = Y;
+%end;
+%else %let nm_cycle_mismatch_flag = N;
+
+/*--- Next week number.
+      The baseline job seeds WeekSequence=0, so existing_rows=1
+      on the first weekly run, giving nm_week_num=1 naturally.  ---*/
+proc sql noprint;
+  select count(*)
+  into :nm_existing_rows trimmed
+  from STI_WER.NM_Weekly_Tracker
+  where CycleID = "&nm_cycle_id.";
+quit;
+
+%let nm_week_num = &nm_existing_rows.;
+%put NOTE: [NM] Week number (next to insert) = &nm_week_num.;
+
+/*--- Previous week values.
+      FIX #1: Use WeekSequence = nm_week_num - 1 instead of
+      max(RunDate). See Motor section above for explanation.    ---*/
+proc sql noprint;
+  select Open_Claims, Current_OCR_Amt
+  into :nm_prev_open trimmed, :nm_prev_ocr_amt trimmed
+  from STI_WER.NM_Weekly_Tracker
+  where CycleID      = "&nm_cycle_id."
+    and WeekSequence = %eval(&nm_week_num. - 1);
+quit;
+
+%if &sqlobs. = 0 %then %do;
+  %put ERROR: [NM] Could not resolve Open_Claims / Current_OCR_Amt from WeekSequence=%eval(&nm_week_num.-1).;
+  %abort cancel;
+%end;
+
+%put NOTE: [NM] Previous week -- Open=&nm_prev_open. OCR=&nm_prev_ocr_amt. Seq=%eval(&nm_week_num.-1);
+
+/*--- Duplicate-run guard ---*/
+proc sql noprint;
+  select count(*)
+  into :nm_seq_exists trimmed
+  from STI_WER.NM_Weekly_Tracker
+  where CycleID = "&nm_cycle_id." and WeekSequence = &nm_week_num.;
+quit;
+
+%if &nm_seq_exists. > 0 %then %do;
+  %put ERROR: [NM] Row for CycleID=&nm_cycle_id. WeekSequence=&nm_week_num. already exists. Aborting.;
+  %abort cancel;
+%end;
+
+/*--- Max-weeks guard ---*/
+%if &nm_week_num. > 5 %then %do;
+  %put ERROR: [NM] WeekSequence &nm_week_num. exceeds maximum of 5. Aborting.;
+  %abort cancel;
+%end;
+
+%put NOTE: [NM] Guards passed -- proceeding with Week &nm_week_num.;
+
+/*--- Pull snapshot: Non-Motor + Retail ---*/
+data work.nm_snapshot;
+  set STI_WER.Investigate_Claims(
+    keep= ClaimCode SubClaimCode ReportMonth
+          Estimate_OCR ProductTypeSplit Division ClaimHandler
+  );
+  if upcase(strip(ProductTypeSplit)) = 'MOTOR'   then delete;
+  if upcase(strip(Division))         ne 'RETAIL' then delete;
 run;
+
+%put NOTE: [NM] Non-Motor snapshot extracted -- &sysnobs. rows.;
+
+/*--- Current estimates (reuse work.current_est if Motor ran first) ---*/
+%if not %sysfunc(exist(work.current_est)) %then %do;
+  data work.current_est;
+    set STI_WER.vw_OpsClaimsReport(
+      keep= SubClaimCode Total_Estimate_OCR_ExVAT Total_Paid_ExVAT
+    );
+  run;
+%end;
+
+/*--- Build final claims detail.
+      Option A: same logic as Motor.
+      Current_Estimate_OCR = original flagged Estimate_OCR
+      if Total_Estimate_OCR_ExVAT > 0, else zero.            ---*/
+proc sql;
+  create table work.NMClaims_Final as
+  select
+      c.ClaimCode,
+      c.ReportMonth                                          as ReportedMonth,
+      c.ClaimHandler,
+      c.Estimate_OCR                                         as Estimate_OCR_When_Flagged,
+      case
+        when coalesce(a.Total_Estimate_OCR_ExVAT, 0) > 0
+        then round(c.Estimate_OCR, 0.01)
+        else 0
+      end                                                    as Current_Estimate_OCR,
+      case
+        when coalesce(a.Total_Estimate_OCR_ExVAT, 0) > 0
+        then 0
+        else -round(c.Estimate_OCR, 0.01)
+      end                                                    as OCR_Movement
+  from work.nm_snapshot c
+  left join work.current_est a
+      on c.SubClaimCode = a.SubClaimCode
+  order by c.ReportMonth desc;
+quit;
+
+%put NOTE: [NM] NMClaims_Final built -- &sqlobs. rows.;
+
+/*--- Count NM claims older than &stale_months. months ---*/
+proc sql noprint;
+  select count(distinct ClaimCode)
+  into :nm_claims_over_3m trimmed
+  from work.NMClaims_Final
+  where ReportedMonth < intnx('month', today(), -&stale_months., 'beginning');
+quit;
+
+%let nm_claims_over_3m_fmt = %sysfunc(putn(&nm_claims_over_3m., comma10.));
+%put NOTE: [NM] Claims older than &stale_months. months = &nm_claims_over_3m.;
+
+/*--- Weekly summary metrics.
+      FIX #3: same approach as Motor -- derive all counts
+      directly from the live snapshot.                         ---*/
+proc sql noprint;
+  select count(distinct ClaimCode), sum(Estimate_OCR_When_Flagged)
+  into :nm_open_this_week trimmed, :nm_ocr_this_week trimmed
+  from work.NMClaims_Final
+  where Current_Estimate_OCR > 0;
+
+  select count(distinct ClaimCode)
+  into :nm_cumul_closed trimmed
+  from work.NMClaims_Final
+  where Current_Estimate_OCR = 0;
+quit;
+
+%let nm_closed_this_week = %sysevalf(&nm_prev_open.    - &nm_open_this_week.);
+%let nm_ocr_reduced      = %sysevalf(&nm_prev_ocr_amt. - &nm_ocr_this_week.);
+
+%if %sysevalf(&nm_baseline_claims. > 0, boolean) %then
+  %let nm_pct_closed = %sysevalf(&nm_cumul_closed. / &nm_baseline_claims.);
+%else
+  %let nm_pct_closed = 0;
+
+%put NOTE: [NM] metrics -- Open=&nm_open_this_week. OCR=&nm_ocr_this_week.;
+%put NOTE: [NM] metrics -- CumulClosed=&nm_cumul_closed. ClosedThisWeek=&nm_closed_this_week.;
+%put NOTE: [NM] metrics -- OCRReduced=&nm_ocr_reduced. PctClosed=&nm_pct_closed.;
+
+/*--- Insert weekly row.
+      FIX #5: same &&_conn_static. pattern as Motor.          ---*/
+proc sql noprint;
+  connect to odbc as sqlsvr (noprompt="&&_conn_static.");
+
+  execute (
+    INSERT INTO FNB_STI_Analytics.Claims.NM_Weekly_Tracker
+      (CycleID, WeekSequence, WeekLabel, RunDate,
+       Baseline_Claims, Open_Claims,
+       Current_OCR_Amt, Cumul_Closed, Closed_This_Week,
+       OCR_Reduced_This_Week, Pct_Claims_Closed)
+    VALUES (
+      "&nm_cycle_id.", &nm_week_num., "Week &nm_week_num.",
+      CONVERT(DATE, "&rd.", 112),
+      &nm_baseline_claims., &nm_open_this_week., &nm_ocr_this_week.,
+      &nm_cumul_closed., &nm_closed_this_week., &nm_ocr_reduced., &nm_pct_closed.
+    )
+  ) by sqlsvr;
+
+  disconnect from sqlsvr;
+quit;
+
+%if &syserr. ne 0 %then %do;
+  %put ERROR: [NM] INSERT into NM_Weekly_Tracker failed. SYSERR=&syserr.. Aborting.;
+  %abort cancel;
+%end;
+
+%put NOTE: [NM] NM_Weekly_Tracker row inserted -- Week &nm_week_num.;
+
+/*--- Pull full tracker for this cycle (Week 1+ only for charts) ---*/
+proc sql;
+  create table work.nm_tracker_this_cycle as
+  select * from STI_WER.NM_Weekly_Tracker
+  where CycleID = "&nm_cycle_id."
+    and WeekSequence >= 1
+  order by WeekSequence;
+quit;
+
+/*--- Claims-by-month summary (used for Chart 3) ---*/
+proc sql;
+  create table work.NM_Monthly_Count as
+  select
+      put(ReportedMonth, yymmn6.) as MonthLabel length=7,
+      count(distinct ClaimCode)   as ClaimCount
+  from work.NMClaims_Final
+  where ReportedMonth < intnx('month', today(), -&stale_months., 'beginning')
+  group by ReportedMonth
+  order by ReportedMonth;
+quit;
+
+/*--------------------------------------------------------------
+  PNG Charts
+--------------------------------------------------------------*/
+%let nm_png_ocr_outfile =
+  /data/fnbinsurance/Short_Term/Monitoring/NonMotorOCR_Trend_&rd..png;
+%let nm_png_closed_outfile =
+  /data/fnbinsurance/Short_Term/Monitoring/NonMotorOCR_Closed_&rd..png;
+%let nm_png_monthly_outfile =
+  /data/fnbinsurance/Short_Term/Monitoring/NonMotorOCR_Monthly_&rd..png;
+
+%if &nm_week_num. >= 2 %then %do;
+
+  /* Chart 1 -- OCR Amount Trend */
+  ods listing image_dpi=150
+    gpath="/data/fnbinsurance/Short_Term/Monitoring";
+  ods graphics on / reset=all imagename="NonMotorOCR_Trend_&rd."
+    outputfmt=png width=800px height=400px;
+
+  title "OCR Amount Movement -- Non-Motor Retail (CycleID &nm_cycle_id.)";
+  footnote j=left
+    "Baseline: R &nm_baseline_ocr_fmt.  |  Claims: &nm_baseline_claims_fmt.  |  Run: &rd.";
+
+  proc sgplot data=work.nm_tracker_this_cycle;
+    series x=WeekLabel y=Current_OCR_Amt /
+      markers
+      markerattrs=(symbol=circlefilled size=10 color=CX54B9AC)
+      lineattrs=(thickness=2 color=CX54B9AC);
+    yaxis label="Current OCR Amount (R)" grid valuesformat=comma18.;
+    xaxis label="Week" discreteorder=data;
+  run;
+
+  title; footnote;
+  ods graphics off;
+  ods listing close;
+
+  /* Chart 2 -- Claims Closed Bar */
+  ods listing image_dpi=150
+    gpath="/data/fnbinsurance/Short_Term/Monitoring";
+  ods graphics on / reset=all imagename="NonMotorOCR_Closed_&rd."
+    outputfmt=png width=800px height=400px;
+
+  title "Claims Closed Per Week -- Non-Motor Retail (CycleID &nm_cycle_id.)";
+
+  proc sgplot data=work.nm_tracker_this_cycle;
+    vbar WeekLabel / response=Closed_This_Week
+      fillattrs=(color=CX54B9AC)
+      datalabel
+      datalabelattrs=(size=10 weight=bold);
+    yaxis label="Claims Closed This Week" grid;
+    xaxis label="Week" discreteorder=data;
+  run;
+
+  title;
+  ods graphics off;
+  ods listing close;
+
+  %put NOTE: [NM] Charts 1+2 exported for Week &nm_week_num.;
+
+%end;
+%else %do;
+  %put NOTE: [NM] Week 1 -- charts 1+2 deferred to Week 2+.;
+%end;
+
+/* Chart 3 -- Claims Count by Reported Month (every week) */
+ods listing image_dpi=150
+  gpath="/data/fnbinsurance/Short_Term/Monitoring";
+ods graphics on / reset=all imagename="NonMotorOCR_Monthly_&rd."
+  outputfmt=png width=800px height=400px;
+
+title "Open Claims Older Than &stale_months. Months by Reported Month -- Non-Motor Retail (CycleID &nm_cycle_id.)";
+footnote j=left "Run: &rd.  |  Claims with report month before &stale_months. months ago";
+
+proc sgplot data=work.NM_Monthly_Count;
+  vbar MonthLabel / response=ClaimCount
+    fillattrs=(color=CX54B9AC)
+    datalabel
+    datalabelattrs=(size=10 weight=bold);
+  yaxis label="Number of Open Claims" grid;
+  xaxis label="Reported Month" discreteorder=data;
+run;
+
+title; footnote;
+ods graphics off;
+ods listing close;
+
+%put NOTE: [NM] Chart 3 exported for Week &nm_week_num.;
+
+/*--------------------------------------------------------------
+  Export to Excel -- Claims Detail sheet ONLY.
+--------------------------------------------------------------*/
+%let nm_outfile =
+  /data/fnbinsurance/Short_Term/Monitoring/NonMotorOCR_Tracker_&rd..xlsx;
+
+ods excel file="&nm_outfile."
+  style = OCR_Style
+  options(
+    sheet_name      = "Claims Detail"
+    embedded_titles = "yes"
+    frozen_headers  = "yes"
+    autofilter      = "yes"
+    flow            = "tables"
+  );
+  title "Non-Motor Retail Claims Under Investigation -- Week &nm_week_num.";
+  proc print data=work.NMClaims_Final noobs label;
+    format Estimate_OCR_When_Flagged Current_Estimate_OCR OCR_Movement comma18.2;
+  run;
+ods excel close;
+title;
+
+%put NOTE: [NM] Non-Motor Excel exported -- &nm_outfile.;
+
+/*--------------------------------------------------------------
+  Pre-format email values.
+--------------------------------------------------------------*/
+%let nm_email_open_fmt     = %sysfunc(putn(&nm_open_this_week.,   comma10.));
+%let nm_email_baseline_fmt = %sysfunc(putn(&nm_baseline_claims.,  comma10.));
+%let nm_email_ocr_fmt      = %sysfunc(putn(&nm_ocr_this_week.,    comma18.2));
+%let nm_email_reduced_fmt  = %sysfunc(putn(&nm_ocr_reduced.,      comma18.2));
+%let nm_email_closed_fmt   = %sysfunc(putn(&nm_closed_this_week., comma10.));
+%let nm_email_cumul_fmt    = %sysfunc(putn(&nm_cumul_closed.,     comma10.));
+%let nm_email_pct_fmt      = %sysfunc(putn(%sysevalf(&nm_pct_closed.*100), 8.1));
+
+/*--------------------------------------------------------------
+  Email
+--------------------------------------------------------------*/
+filename nm_outbx email;
+
+%macro nm_email_body;
+    put "Morning Phumeza";
+    put " ";
+    put "I hope you're well.";
+    put " ";
+    %if &nm_week_num. >= 2 %then %do;
+      put "Please find below the Non-Motor claims progress update for Week &nm_week_num..";
+    %end;
+    %else %do;
+      put "Please be advised that the monthly Non-Motor OCR tracking process has been restarted.";
+      put "The attached workbook reflects the opening position for Cycle &nm_cycle_id..";
+    %end;
+    put " ";
+    put "-------------------------------";
+    put "Non-Motor OCR Summary";
+    put "-------------------------------";
+    put " ";
+    put "Claims closed this week:";
+    put "  &nm_email_closed_fmt.";
+    put " ";
+    put "Cumulative claims closed:";
+    put "  &nm_email_cumul_fmt. of &nm_email_baseline_fmt. (&nm_email_pct_fmt.%)";
+    put " ";
+    put "Current OCR amount:";
+    put "  R &nm_email_ocr_fmt.";
+    put " ";
+    put "OCR reduced this week:";
+    put "  R &nm_email_reduced_fmt.";
+    put " ";
+    put "-----------------------------------------------------";
+    put "Number of Claims older than &stale_months. months:";
+    put "  &nm_claims_over_3m_fmt.";
+    put "-----------------------------------------------------";
+    put " ";
+    put " ";
+    %if &nm_week_num. >= 2 %then %do;
+      put "The outstanding Non-Motor claims list and trend charts are attached.";
+    %end;
+    %else %do;
+      put "The outstanding Non-Motor claims list is attached.";
+      put "Trend charts will be included from Week 2 onwards.";
+    %end;
+    put " ";
+    put "I will share another update next week.";
+    put " ";
+    put "Kind regards";
+    put "Morris";
+%mend nm_email_body;
+
+%if &nm_week_num. >= 2 %then %do;
+
+  data _null_;
+    file nm_outbx
+      to      = ("morris.nkomo@fnb.co.za")
+      /* cc   = ("asher.levin@fnb.co.za" "webster.khoza@fnb.co.za") */
+      from    = ("FNB ST Analytics <fnbst-analytics@fnb.co.za>")
+      subject = "TEST Non-Motor OCR Tracker -- Week &nm_week_num. (&rd.) [Cycle &nm_cycle_id.]"
+      attach  = (
+        "&nm_outfile."
+          content_type=
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "&nm_png_ocr_outfile."
+          content_type="image/png"
+        "&nm_png_closed_outfile."
+          content_type="image/png"
+        "&nm_png_monthly_outfile."
+          content_type="image/png"
+      );
+    %nm_email_body;
+  run;
+
+%end;
+%else %do;
+
+  data _null_;
+    file nm_outbx
+      to      = ("morris.nkomo@fnb.co.za")
+      /* cc   = ("asher.levin@fnb.co.za" "webster.khoza@fnb.co.za") */
+      from    = ("FNB ST Analytics <fnbst-analytics@fnb.co.za>")
+      subject = "TEST Non-Motor OCR Tracker -- Week &nm_week_num. (&rd.) [Cycle &nm_cycle_id.]"
+      attach  = (
+        "&nm_outfile."
+          content_type=
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "&nm_png_monthly_outfile."
+          content_type="image/png"
+      );
+    %nm_email_body;
+  run;
+
+%end;
+
+%put NOTE: [NM] Non-Motor email sent -- Week &nm_week_num. to morris.nkomo@fnb.co.za;
+
+%put NOTE: ============================================================;
+%put NOTE: NON-MOTOR WEEKLY JOB COMPLETE -- Week &nm_week_num. CycleID &nm_cycle_id.;
+%put NOTE: Open=&nm_open_this_week. OCR=&nm_ocr_this_week. Closed=&nm_cumul_closed.;
+%put NOTE: ============================================================;
+
+%mend nm_weekly_main;
+
+%nm_weekly_main;
