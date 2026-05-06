@@ -1,1 +1,51 @@
-Identify the breakout points. What each table are doing. Different domains. What fields relate. Progress Update/Goal to complete. High level breakdown, not complete description. Copilot/Code Assist.
+libname reportV '/data/fnb/clb/prod_data/7_tracking_views/Reporting_views';
+
+proc sql;
+    /* Campaign 1 */
+    CREATE TABLE APN_CMA10251 as
+    SELECT 
+        'CMA10251V01M01'                                                    as Campaign_Code,
+        COUNT(PRIMARY_KEY)                                                  as Total_Sent,
+        SUM(CASE WHEN date_received IS NOT MISSING THEN 1 ELSE 0 END)      as Total_Opened,
+        SUM(CASE WHEN date_received IS MISSING     THEN 1 ELSE 0 END)      as Total_Not_Opened,
+        CALCULATED Total_Opened / CALCULATED Total_Sent * 100              as Open_Rate         format=8.2,
+        "APN"                                                               as DISTRIBUTION_CHANNEL
+    FROM reportV.APN_SENDS_AND_FEEDBACK
+    WHERE product_code = 'CMA10251V01M01'
+    ;
+
+    /* Campaign 2 */
+    CREATE TABLE APN_CMA10252 as
+    SELECT 
+        'CMA10252V01M01'                                                    as Campaign_Code,
+        COUNT(PRIMARY_KEY)                                                  as Total_Sent,
+        SUM(CASE WHEN date_received IS NOT MISSING THEN 1 ELSE 0 END)      as Total_Opened,
+        SUM(CASE WHEN date_received IS MISSING     THEN 1 ELSE 0 END)      as Total_Not_Opened,
+        CALCULATED Total_Opened / CALCULATED Total_Sent * 100              as Open_Rate         format=8.2,
+        "APN"                                                               as DISTRIBUTION_CHANNEL
+    FROM reportV.APN_SENDS_AND_FEEDBACK
+    WHERE product_code = 'CMA10252V01M01'
+    ;
+quit;
+
+proc print data=APN_CMA10251 noobs label;
+    title "APN Distribution - Campaign CMA10251V01M01";
+    label 
+        Campaign_Code        = "Campaign"
+        Total_Sent           = "Total Sent"
+        Total_Opened         = "Total Opened"
+        Total_Not_Opened     = "Total Not Opened"
+        Open_Rate            = "Open Rate (%)"
+        DISTRIBUTION_CHANNEL = "Channel";
+run;
+
+proc print data=APN_CMA10252 noobs label;
+    title "APN Distribution - Campaign CMA10252V01M01";
+    label 
+        Campaign_Code        = "Campaign"
+        Total_Sent           = "Total Sent"
+        Total_Opened         = "Total Opened"
+        Total_Not_Opened     = "Total Not Opened"
+        Open_Rate            = "Open Rate (%)"
+        DISTRIBUTION_CHANNEL = "Channel";
+run;
