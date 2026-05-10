@@ -1,51 +1,981 @@
-libname reportV '/data/fnb/clb/prod_data/7_tracking_views/Reporting_views';
+/* ============================================================
+   JOB:      STI_CA_D_APNS_DATA
+   STATUS:   PROD
+   PURPOSE:  Operational - APN Campaign Data to Adobe
+   ============================================================ */
 
-proc sql;
-    /* Campaign 1 */
-    CREATE TABLE APN_CMA10251 as
-    SELECT 
-        'CMA10251V01M01'                                                    as Campaign_Code,
-        COUNT(PRIMARY_KEY)                                                  as Total_Sent,
-        SUM(CASE WHEN date_received IS NOT MISSING THEN 1 ELSE 0 END)      as Total_Opened,
-        SUM(CASE WHEN date_received IS MISSING     THEN 1 ELSE 0 END)      as Total_Not_Opened,
-        CALCULATED Total_Opened / CALCULATED Total_Sent * 100              as Open_Rate         format=8.2,
-        "APN"                                                               as DISTRIBUTION_CHANNEL
-    FROM reportV.APN_SENDS_AND_FEEDBACK
-    WHERE product_code = 'CMA10251V01M01'
-    ;
+%put TAG:JobName1=STI_CA_D_APNS_DATA;
+%put TAG:JobName2=Daily;
+%put TAG:JobCategory=Campaigns;
+%put TAG:JobPurpose=Operational;
+%put TAG:JobPriority=Medium;
+%put TAG:JobStatus=Prod;
 
-    /* Campaign 2 */
-    CREATE TABLE APN_CMA10252 as
-    SELECT 
-        'CMA10252V01M01'                                                    as Campaign_Code,
-        COUNT(PRIMARY_KEY)                                                  as Total_Sent,
-        SUM(CASE WHEN date_received IS NOT MISSING THEN 1 ELSE 0 END)      as Total_Opened,
-        SUM(CASE WHEN date_received IS MISSING     THEN 1 ELSE 0 END)      as Total_Not_Opened,
-        CALCULATED Total_Opened / CALCULATED Total_Sent * 100              as Open_Rate         format=8.2,
-        "APN"                                                               as DISTRIBUTION_CHANNEL
-    FROM reportV.APN_SENDS_AND_FEEDBACK
-    WHERE product_code = 'CMA10252V01M01'
-    ;
+proc printto log="/data/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Logs/BGA/APN_DATA/STI_CA_D_APNS_DATA.log" new;
+run;
+
+%include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
+
+
+/* ============================================================
+   *** CAMPAIGN CONFIGURATION - ONLY SECTION YOU NEED TO EDIT ***
+   To add a new campaign:
+     1. Add prefix:   %let camp_19 = CMAxxxxx;
+     2. Increment camp_count by 1
+     3. Add product code(s) to product_codes list
+   ============================================================ */
+
+%let camp_01  = CMA02369;
+%let camp_02  = CMA01988;
+%let camp_03  = CMA01986;
+%let camp_04  = CMA04324;
+%let camp_05  = CMA02775;
+%let camp_06  = CMA06753;
+%let camp_07  = CMA02460;
+%let camp_08  = CMA04589;
+%let camp_09  = CMA03791;
+%let camp_10  = CMA04004;
+%let camp_11  = CMA08261;
+%let camp_12  = CMA08252;
+%let camp_13  = CMA08473;
+%let camp_14  = CMA09320;
+%let camp_15  = CMA09319;
+%let camp_16  = CMA09878;
+%let camp_17  = CMA10184;
+%let camp_18  = CMA03742;
+%let camp_19  = CMA10251;
+%let camp_20  = CMA10252;
+
+/* ADD NEW CAMPAIGNS ABOVE THIS LINE          */
+
+%let camp_count = 20; /* <- increment when adding a campaign */
+
+/* FIX: Added missing comma between CMA10251V01M02 and CMA10184V01M04 row
+   (original had a missing comma causing SAS to concatenate the two strings) */
+%let product_codes =
+  "CMA01986V01M01","CMA01988V01M01","CMA02369V01M01","CMA03742V01M01",
+  "CMA04324V01M01","CMA02775V01M02","CMA02775V02M02","CMA06753V01M01",
+  "CMA02460V01M02","CMA02460V01M03","CMA04589V01M02","CMA03791V01M01",
+  "CMA04004V01M01","CMA08473V02M02","CMA09319V01M01","CMA09320V01M01",
+  "CMA09878V01M02","CMA08261V01M01","CMA08252V01M01","CMA10251V01M01",
+  "CMA10184V01M01","CMA10184V02M09","CMA10184V03M17","CMA10252V01M01",
+  "CMA10184V01M02","CMA10184V02M10","CMA10184V03M18","CMA10252V01M02",
+  "CMA10184V01M03","CMA10184V02M11","CMA10184V03M19","CMA10251V01M02",
+  "CMA10184V01M04","CMA10184V02M12","CMA10184V03M20",
+  "CMA10184V01M05","CMA10184V02M13","CMA10184V03M21",
+  "CMA10184V01M06","CMA10184V02M14","CMA10184V03M22",
+  "CMA10184V01M07","CMA10184V02M15","CMA10184V03M23",
+  "CMA10184V01M08","CMA10184V02M16","CMA10184V03M24"
+;
+
+/* ============================================================
+   END OF CAMPAIGN CONFIGURATION
+   ============================================================ */
+
+
+/* ============================================================
+   SECTION 1: CAPTURE PRE-RUN STATE
+   ============================================================ */
+
+/* CHECK: Abort cleanly if production table does not exist at all */
+%if %sysfunc(exist(STI_PBI.APNS_DATA)) = 0 %then %do;
+  %put ERROR: =====================================================;
+  %put ERROR: STI_PBI.APNS_DATA does not exist.;
+  %put ERROR: Cannot capture pre-run state. Aborting.;
+  %put ERROR: =====================================================;
+
+  /* Send missing-table email before aborting */
+  %macro email_missing_table;
+    FILENAME EML EMAIL
+      to      = "Morris.Nkomo@fnb.co.za"
+      cc      = "dlfnbstioperationalanalytics@fnb.co.za"
+      from    = 'dlfnbstioperationalanalytics@fnb.co.za'
+      subject = "WARNING: APNS_DATA Table Missing - Job Aborted";
+    DATA _NULL_;
+      FILE EML;
+      PUT "Good Day,";
+      PUT " ";
+      PUT "Kindly note that the STI_PBI.APNS_DATA table is missing.";
+      PUT "The job has been aborted. Please investigate.";
+      PUT " ";
+      PUT "Kind Regards,";
+      PUT "Morris";
+    RUN;
+  %mend;
+  %email_missing_table;
+
+  data _null_; abort return 1; run;
+%end;
+
+proc sql outobs=1;
+  create table datetime_old as
+  select  date_to_adobe            as Date format date9.,
+          time_created_to_adobe    as time format time9.
+  from    STI_PBI.APNS_DATA
+  where   time_created_to_adobe
+              in (select max(time_created_to_adobe)
+                  from STI_PBI.APNS_DATA
+                  where date_to_adobe in
+                      (select max(date_to_adobe)
+                       from STI_PBI.APNS_DATA));
+run;
+
+proc sql noprint;
+  select count(CUST_NO)          into :Old_records trimmed from STI_PBI.APNS_DATA;
+  select max(date_to_adobe)      into :Old_max_date trimmed from STI_PBI.APNS_DATA;
 quit;
 
-proc print data=APN_CMA10251 noobs label;
-    title "APN Distribution - Campaign CMA10251V01M01";
-    label 
-        Campaign_Code        = "Campaign"
-        Total_Sent           = "Total Sent"
-        Total_Opened         = "Total Opened"
-        Total_Not_Opened     = "Total Not Opened"
-        Open_Rate            = "Open Rate (%)"
-        DISTRIBUTION_CHANNEL = "Channel";
+proc sql noprint;
+  select date format date9.,
+         time format time9.
+  into   :Old_date trimmed,
+         :Old_time trimmed
+  from   datetime_old;
+quit;
+
+%put NOTE: Pre-run record count : &Old_records;
+%put NOTE: Pre-run max date     : &Old_date;
+%put NOTE: Pre-run max time     : &Old_time;
+%put NOTE: Pre-run max date raw : &Old_max_date;
+
+
+/* ============================================================
+   SECTION 2: ASSIGN LIBNAMES
+   ============================================================ */
+
+libname Pass6    "/data/fnb/clb/archive/5_optimise/passed_phase1";
+libname APN_Pass "/data/fnb/clb/prod_data/5_optimise/passed_phase1";
+libname Drop6    "/data/fnb/clb/archive/5_optimise/dropped_phase1";
+libname APN_Drop "/data/fnb/clb/prod_data/5_optimise/dropped_phase1";
+
+
+/* ============================================================
+   SECTION 3: CAMPAIGN TABLE DISCOVERY
+   ============================================================ */
+
+%macro build_campaign_filter(libref, outds);
+  proc sql;
+    create table &outds as
+    select *
+    from dictionary.tables
+    where libname = "%upcase(&libref.)"
+      and (
+        %do i = 1 %to &camp_count.;
+          %if &i > 1 %then or;
+          memname like "&&camp_&i..%"
+        %end;
+      );
+  quit;
+
+  /* CHECK: Warn if no tables found for a given library */
+  proc sql noprint;
+    select count(distinct memname) into :_found_count trimmed
+    from &outds;
+  quit;
+
+  %if &_found_count = 0 %then
+    %put WARNING: No campaign tables found in &libref. - &outds will be empty.;
+  %else
+    %put NOTE: &_found_count campaign table(s) found in &libref.;
+%mend;
+
+%build_campaign_filter(PASS6,    uppend_months_campaigns)
+%build_campaign_filter(APN_PASS, uppend_weeek_campaigns)
+
+/* CHECK: Abort if BOTH discovery tables are empty - nothing to process */
+proc sql noprint;
+  select count(distinct memname) into :_monthly_count trimmed from uppend_months_campaigns;
+  select count(distinct memname) into :_weekly_count  trimmed from uppend_weeek_campaigns;
+quit;
+
+%if &_monthly_count = 0 and &_weekly_count = 0 %then %do;
+  %put ERROR: =====================================================;
+  %put ERROR: No campaign tables found in either Pass6 or APN_Pass.;
+  %put ERROR: Aborting - production table will not be overwritten.;
+  %put ERROR: =====================================================;
+  data _null_; abort return 1; run;
+%end;
+
+proc sql noprint;
+  select distinct memname into :table1      - from uppend_months_campaigns order by memname;
+  select distinct memname into :tableweek1  - from uppend_weeek_campaigns  order by memname;
+  select crdate           into :timetable1  - from uppend_months_campaigns order by memname;
+  select crdate           into :timetablewk1- from uppend_weeek_campaigns  order by memname;
+quit;
+
+
+/* ============================================================
+   SECTION 4: ITERATION MACROS
+   ============================================================ */
+
+%macro iterate_week_drop(count);
+  proc sql noprint;
+    select count(distinct memname) into :count trimmed
+    from uppend_weeek_campaigns;
+  quit;
+
+  %if &count = 0 %then %do;
+    %put WARNING: iterate_week_drop - no weekly tables found, skipping.;
+    %goto exit_week_drop;
+  %end;
+
+  proc datasets library=work nolist; delete TABLESdropweek_:; quit;
+
+  %do i = 1 %to &count.;
+    data TABLESdropweek_&i;
+      set APN_DROP.&&tableweek&i.
+          (keep=CUST_NO Product_Code Drop_Reason sub_segment
+                Campaign_Name Brand MUCN);
+      length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
+      _memname_ = "&&tableweek&i..";
+      if index(_memname_,'_') > 0 then do;
+        _date_raw_ = scan(_memname_, -2, '_');
+        _time_raw_ = scan(_memname_, -1, '_');
+        Date_to_adobe = input(_date_raw_, YYMMDD8.);
+        Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
+                                           substr(_time_raw_,3,2),':00'),
+                                      HHMMSS8.);
+      end;
+      else do;
+        _date_raw_ = substr(_memname_, 16, 8);
+        Date_to_adobe = input(_date_raw_, YYMMDD10.);
+        Time_created_to_adobe = input(substr("&&timetablewk&i..",9,8), HHMMSS.);
+      end;
+      format Date_to_adobe date9.;
+      format Time_created_to_adobe time9.;
+      rename CUST_NO = cust_no
+             MUCN    = mucn
+             Brand   = brand;
+      drop _memname_ _date_raw_ _time_raw_;
+    run;
+  %end;
+
+  %exit_week_drop:
+%mend;
+%iterate_week_drop(count)
+
+
+%macro iterate_week_pass(count);
+  proc sql noprint;
+    select count(distinct memname) into :count trimmed
+    from uppend_weeek_campaigns;
+  quit;
+
+  %if &count = 0 %then %do;
+    %put WARNING: iterate_week_pass - no weekly tables found, skipping.;
+    %goto exit_week_pass;
+  %end;
+
+  proc datasets library=work nolist; delete TABLESpassweek_:; quit;
+
+  %do i = 1 %to &count.;
+    data TABLESpassweek_&i;
+      set APN_PASS.&&tableweek&i.
+          (keep=CUST_NO Product_Code Drop_Reason sub_segment
+                Campaign_Name Brand MUCN);
+      length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
+      _memname_ = "&&tableweek&i..";
+      if index(_memname_,'_') > 0 then do;
+        _date_raw_ = scan(_memname_, -2, '_');
+        _time_raw_ = scan(_memname_, -1, '_');
+        Date_to_adobe = input(_date_raw_, YYMMDD8.);
+        Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
+                                           substr(_time_raw_,3,2),':00'),
+                                      HHMMSS8.);
+      end;
+      else do;
+        _date_raw_ = substr(_memname_, 16, 8);
+        Date_to_adobe = input(_date_raw_, YYMMDD10.);
+        Time_created_to_adobe = input(substr("&&timetablewk&i..",9,8), HHMMSS.);
+      end;
+      format Date_to_adobe date9.;
+      format Time_created_to_adobe time9.;
+      rename CUST_NO = cust_no
+             MUCN    = mucn
+             Brand   = brand;
+      drop _memname_ _date_raw_ _time_raw_;
+    run;
+  %end;
+
+  %exit_week_pass:
+%mend;
+%iterate_week_pass(count)
+
+data Weekly;
+  set TABLESpassweek_:;
 run;
 
-proc print data=APN_CMA10252 noobs label;
-    title "APN Distribution - Campaign CMA10252V01M01";
-    label 
-        Campaign_Code        = "Campaign"
-        Total_Sent           = "Total Sent"
-        Total_Opened         = "Total Opened"
-        Total_Not_Opened     = "Total Not Opened"
-        Open_Rate            = "Open Rate (%)"
-        DISTRIBUTION_CHANNEL = "Channel";
+
+%macro iterate_monthly_pass(count);
+  proc sql noprint;
+    select count(distinct memname) into :count trimmed
+    from uppend_months_campaigns;
+  quit;
+
+  %if &count = 0 %then %do;
+    %put WARNING: iterate_monthly_pass - no monthly tables found, skipping.;
+    %goto exit_monthly_pass;
+  %end;
+
+  proc datasets library=work nolist; delete TABLESpass6_:; quit;
+
+  %do i = 1 %to &count.;
+    data TABLESpass6_&i;
+      set PASS6.&&table&i.
+          (keep=CUST_NO Product_Code Drop_Reason sub_segment
+                Campaign_Name Brand MUCN);
+      length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
+      _memname_ = "&&table&i..";
+      if index(_memname_,'_') > 0 then do;
+        _date_raw_ = scan(_memname_, -2, '_');
+        _time_raw_ = scan(_memname_, -1, '_');
+        Date_to_adobe = input(_date_raw_, YYMMDD8.);
+        Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
+                                           substr(_time_raw_,3,2),':00'),
+                                      HHMMSS8.);
+      end;
+      else do;
+        _date_raw_ = substr(_memname_, 16, 8);
+        Date_to_adobe = input(_date_raw_, YYMMDD10.);
+        Time_created_to_adobe = input(substr("&&timetable&i..",9,8), HHMMSS.);
+      end;
+      format Date_to_adobe date9.;
+      format Time_created_to_adobe time9.;
+      rename CUST_NO = cust_no
+             MUCN    = mucn
+             Brand   = brand;
+      drop _memname_ _date_raw_ _time_raw_;
+    run;
+  %end;
+
+  %exit_monthly_pass:
+%mend;
+%iterate_monthly_pass(count)
+
+
+%macro iterate_monthly_drop(count);
+  proc sql noprint;
+    select count(distinct memname) into :count trimmed
+    from uppend_months_campaigns;
+  quit;
+
+  %if &count = 0 %then %do;
+    %put WARNING: iterate_monthly_drop - no monthly tables found, skipping.;
+    %goto exit_monthly_drop;
+  %end;
+
+  proc datasets library=work nolist; delete TABLESdrop6_:; quit;
+
+  %do i = 1 %to &count.;
+    data TABLESdrop6_&i;
+      set DROP6.&&table&i.
+          (keep=CUST_NO Product_Code Drop_Reason sub_segment
+                Campaign_Name Brand MUCN);
+      length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
+      _memname_ = "&&table&i..";
+      if index(_memname_,'_') > 0 then do;
+        _date_raw_ = scan(_memname_, -2, '_');
+        _time_raw_ = scan(_memname_, -1, '_');
+        Date_to_adobe = input(_date_raw_, YYMMDD8.);
+        Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
+                                           substr(_time_raw_,3,2),':00'),
+                                      HHMMSS8.);
+      end;
+      else do;
+        _date_raw_ = substr(_memname_, 16, 8);
+        Date_to_adobe = input(_date_raw_, YYMMDD10.);
+        Time_created_to_adobe = input(substr("&&timetable&i..",9,8), HHMMSS.);
+      end;
+      format Date_to_adobe date9.;
+      format Time_created_to_adobe time9.;
+      rename CUST_NO = cust_no
+             MUCN    = mucn
+             Brand   = brand;
+      drop _memname_ _date_raw_ _time_raw_;
+    run;
+  %end;
+
+  %exit_monthly_drop:
+%mend;
+%iterate_monthly_drop(count)
+
+
+/* ============================================================
+   SECTION 5: COMBINE ALL CAMPAIGN DATA
+   ============================================================ */
+
+data CAMPAIGNS_TO_ADOBE;
+  set TABLESpass6_:
+      TABLESdrop6_:
+      TABLESdropweek_:
+      Weekly;
 run;
+
+/* CHECK: Row count and date sanity on combined table */
+proc sql noprint;
+  select count(*)           into :_camp_rows    trimmed from CAMPAIGNS_TO_ADOBE;
+  select max(date_to_adobe) into :_camp_max_date trimmed from CAMPAIGNS_TO_ADOBE;
+  select min(date_to_adobe) into :_camp_min_date trimmed from CAMPAIGNS_TO_ADOBE;
+quit;
+
+%put NOTE: CAMPAIGNS_TO_ADOBE row count : &_camp_rows;
+%put NOTE: CAMPAIGNS_TO_ADOBE min date  : &_camp_min_date;
+%put NOTE: CAMPAIGNS_TO_ADOBE max date  : &_camp_max_date;
+
+%if &_camp_rows = 0 %then %do;
+  %put ERROR: CAMPAIGNS_TO_ADOBE has zero rows. Aborting.;
+  data _null_; abort return 1; run;
+%end;
+
+
+/* ============================================================
+   SECTION 6: OPTIMISE AGGREGATION
+   ============================================================ */
+
+proc sql;
+  create table Optimize_Aggregiated as
+  select count(*)      as Optimize_Leads,
+         drop_reason, product_code, sub_segment, campaign_name, date_to_adobe
+  from   CAMPAIGNS_TO_ADOBE
+  group by drop_reason, product_code, sub_segment, campaign_name, date_to_adobe;
+quit;
+
+
+/* ============================================================
+   SECTION 7: ADOBE SENDS
+   ============================================================ */
+
+libname REP  "/data/fnb/clb/prod_data/7_tracking/Reporting";
+libname abcd "/data/fnb/d2_deepdata/reporting_data";
+libname APNS "/data/fnb/clb/prod_data/7_tracking_views/Reporting_views";
+
+proc sql noprint;
+  select min(Date_to_adobe) into :min_date trimmed
+  from CAMPAIGNS_TO_ADOBE;
+quit;
+
+%put NOTE: Adobe sends filter min date: &min_date;
+
+data APNS_sends_campaigns (keep=cust_no ucn mucn product_code Date_loaded
+                                Time Drop_reason brand Delivery_code);
+  set APNS.apn_sends_and_feedback;
+  where product_code in (&product_codes.)
+    and datepart(Distribution_date) >= "&min_date."d;
+  Brand         = substr(mucn, 1, 3);
+  Drop_reason   = "";
+  Date_loaded   = datepart(Distribution_date);
+  format Date_loaded date9.;
+  Time          = timepart(Distribution_date);
+  format Time time9.;
+  Delivery_code = UPCASE(Delivery_code);
+run;
+
+/* CHECK: Warn if sends table is empty */
+proc sql noprint;
+  select count(*) into :_sends_rows trimmed from APNS_sends_campaigns;
+quit;
+%if &_sends_rows = 0 %then
+  %put WARNING: APNS_sends_campaigns is empty for min date &min_date - check product codes and date filter.;
+%else
+  %put NOTE: APNS_sends_campaigns row count: &_sends_rows;
+
+
+/* ============================================================
+   SECTION 8: ADOBE DROP-OFFS
+   ============================================================ */
+
+data Adobe_recent_drops;
+  set APNS.adobe_drop_offs_data;
+  where product_code in (&product_codes.)
+    and datepart(Date_loaded) >= "&min_date."d;
+  Date_loaded   = datepart(Date_loaded);
+  format Date_loaded date9.;
+  Time          = timepart(Date_loaded);
+  format Time time9.;
+  Brand         = substr(mucn, 1, 3);
+  Delivery_code = " ";
+run;
+
+/* CHECK: Warn if drop-offs table is empty */
+proc sql noprint;
+  select count(*) into :_drops_rows trimmed from Adobe_recent_drops;
+quit;
+%if &_drops_rows = 0 %then
+  %put WARNING: Adobe_recent_drops is empty for min date &min_date - check product codes and date filter.;
+%else
+  %put NOTE: Adobe_recent_drops row count: &_drops_rows;
+
+
+/* ============================================================
+   SECTION 9: COMBINE ADOBE DATA
+   ============================================================ */
+
+data adobe_to_clients_step;
+  set Adobe_recent_drops
+      APNS_sends_campaigns;
+run;
+
+data adobe_to_clients_final (drop=etl_source_data etl_date daymonth);
+  set adobe_to_clients_step;
+  if drop_reason  = "" then success = 1; else success = 0;
+  if drop_reason ne "" then drop    = 1; else drop    = 0;
+run;
+
+
+/* ============================================================
+   SECTION 10: OPTIMISE TABLE PREP FOR JOIN
+   ============================================================ */
+
+data campaigns_to_adobe_step (keep=Optimize sub_segment Drop_reason product_code
+                                   cust_no Date_to_adobe Time_created_to_adobe
+                                   Campaign_name mucn success_to_adobe drop_to_adobe);
+  set CAMPAIGNS_TO_ADOBE;
+  if drop_reason ne "" then optimize        = drop_reason; else optimize        = "Sent";
+  if drop_reason  = "" then success_to_adobe = 1;           else success_to_adobe = 0;
+  if drop_reason ne "" then drop_to_adobe    = 1;           else drop_to_adobe    = 0;
+run;
+
+proc sql;
+  create table adobe_leads as
+  select count(*) as adobe_leads,
+         product_code, sub_segment, campaign_name, date_to_adobe, optimize
+  from   campaigns_to_adobe_step
+  group by product_code, sub_segment, campaign_name, date_to_adobe, optimize
+  order by date_to_adobe;
+quit;
+
+proc sql;
+  create table leads_summary as
+  select sum(adobe_leads) as Leads_Total,
+         product_code, campaign_name, date_to_adobe, optimize
+  from   adobe_leads
+  group by product_code, campaign_name, date_to_adobe, optimize;
+quit;
+
+proc sql;
+  create table adobe_summary_client as
+  select count(product_code) as Client_Sent,
+         product_code, date_loaded, drop_reason
+  from   adobe_to_clients_final
+  group by product_code, date_loaded, drop_reason;
+quit;
+
+proc sql;
+  create table optimize_adobe_sum as
+  select *
+  from   leads_summary a
+  left join adobe_summary_client b
+    on  a.product_code = b.product_code
+  /* FIX: Adobe loads happen AFTER the optimise date (not before).
+     Original had the range backwards: between date_loaded and date_loaded-5
+     which always evaluated to an empty or negative range. */
+  where b.date_loaded between a.date_to_adobe and a.date_to_adobe + 5
+     or b.date_loaded is null
+  order by date_to_adobe, date_loaded desc;
+quit;
+
+data optimize_adobe_sum_2;
+  set optimize_adobe_sum;
+  day_diff = intck('day', date_to_adobe, date_loaded);
+run;
+
+proc sql;
+  create table optimize_adobe_sum_3 as
+  select *
+  from   optimize_adobe_sum_2
+  group  by product_code, date_to_adobe
+  having intck('day', date_to_adobe, date_loaded) =
+         min(intck('day', date_to_adobe, date_loaded));
+quit;
+
+
+/* ============================================================
+   SECTION 11: RENAME COLUMNS FOR FINAL JOIN
+   ============================================================ */
+
+data campaigns_to_adobe_renamed;
+  set campaigns_to_adobe_step;
+  rename Drop_Reason  = Drop_reason_to_adobe;
+  rename mucn         = mucn_to_adobe;
+  rename product_code = product_code_to_adobe;
+run;
+
+data adobe_to_clients_step2 (drop=success drop);
+  set adobe_to_clients_final;
+  /* Delivery_code logic: non-empty = Loaded, TEST = TEST, else = drop_reason */
+  if      strip(upcase(delivery_code)) = "TEST" then Adobe  = "TEST";
+  else if strip(delivery_code)        ne ""      then Adobe  = "Loaded";
+  else                                                Adobe  = drop_reason;
+
+  if      strip(upcase(delivery_code)) = "TEST" then Client = "TEST";
+  else if strip(delivery_code)        ne ""      then Client = "Sent";
+  else                                                Client = drop_reason;
+
+  /* Prefer cust_no; fall back to UCN when cust_no is missing */
+  if strip(cust_no) = "" then cust_no = UCN;
+run;
+
+proc sql;
+  create table adobe_delivery_tes as
+  select distinct Cust_no, date_loaded, product_code, "TEST" as testindicator
+  from   adobe_to_clients_step2
+  where  strip(upcase(delivery_code)) = "TEST";
+quit;
+
+proc sql;
+  create table adobe_final as
+  select a.*, b.testindicator
+  from   adobe_to_clients_step2 a
+  left join adobe_delivery_tes  b
+    on  a.cust_no      = b.Cust_no
+    and a.date_loaded  = b.date_loaded
+    and a.product_code = b.product_code;
+quit;
+
+/* FIX: Original condition was broken:
+     if testindicator ne "TEST" or testindicator = ""  then testindicator = "Actual"
+   The "ne TEST OR = blank" logic is always true when testindicator IS "TEST" because
+   "TEST" ne "TEST" is false but "TEST" = "" is also false - however padding issues
+   in the original string literals caused erratic results.
+   Simplified to: if not TEST -> Actual. */
+data adobe_final_table_clients;
+  set adobe_final;
+  if strip(testindicator) ne "TEST" then testindicator = "Actual";
+  if strip(testindicator)  = "TEST" then do;
+    Adobe  = "TEST";
+    Client = "TEST";
+  end;
+  rename cust_no = cust_no2;
+run;
+
+
+/* ============================================================
+   SECTION 12: FINAL JOIN - OPTIMISE + ADOBE
+   FIX: The original BETWEEN clause had the range backwards:
+        a.date_to_adobe BETWEEN b.date_loaded AND b.date_loaded - 5
+   This means date_to_adobe had to be between a date and 5 days
+   BEFORE that date - a range that is always empty unless both
+   dates are equal. The correct logic is: Adobe's load date must
+   fall within 5 days AFTER the optimise date.
+   ============================================================ */
+
+proc sql;
+  create table joining as
+  select *
+  from   campaigns_to_adobe_renamed a
+  left join adobe_final_table_clients b
+    on  a.cust_no              = b.cust_no2
+    and a.product_code_to_adobe = b.product_code
+    /* FIX: adobe date_loaded must be on or after date_to_adobe, within 5 days */
+    and b.date_loaded between a.date_to_adobe and a.date_to_adobe + 5;
+quit;
+
+/* CHECK: Log join match rate */
+proc sql noprint;
+  select count(*)                    into :_join_total   trimmed from joining;
+  select count(cust_no2)             into :_join_matched trimmed from joining where cust_no2 ne "";
+quit;
+%put NOTE: Join total rows   : &_join_total;
+%put NOTE: Join matched rows : &_join_matched;
+
+data APNS_DATA (drop=Time product_code mucn ucn mucn_to_adobe
+                     success_to_adobe drop_to_adobe);
+  set joining;
+  /* Flag records sent to Optimise but not yet seen in Adobe */
+  if strip(Cust_no2) = "" and strip(Optimize) = "Sent" then do;
+    if intck('day', date_to_adobe, today()) <= 5
+      then Adobe = "Sending to Adobe";
+    else      Adobe = "Not loaded into Adobe within 5 days";
+  end;
+  date_Diff = intck('day', date_to_adobe, date_loaded);
+run;
+
+proc sort data=APNS_DATA;
+  by descending date_loaded Date_to_adobe;
+run;
+
+/* Deduplicate: keep only the row with the earliest adobe load date per customer/product/date */
+proc sql;
+  create table APNS_Data_Final as
+  select a.*
+  from   APNS_DATA a
+  inner join (
+    select cust_no, product_code_to_adobe, date_to_adobe,
+           min(date_loaded) as min_date_loaded format date9.
+    from   APNS_DATA
+    where  date_to_adobe ne date_loaded
+       or  date_loaded is null
+    group by cust_no, product_code_to_adobe, date_to_adobe
+  ) as b
+    on  a.date_to_adobe        = b.date_to_adobe
+    and a.cust_no               = b.cust_no
+    and a.product_code_to_adobe = b.product_code_to_adobe
+    /* Include unmatched rows (date_loaded null) to preserve "Sending to Adobe" records */
+    and (a.date_loaded = b.min_date_loaded or a.date_loaded is null);
+quit;
+
+data APNS_DATA;
+  set APNS_Data_Final;
+  drop min_date_loaded;
+run;
+
+/* CHECK: Row count after deduplication */
+proc sql noprint;
+  select count(*)           into :_final_rows     trimmed from APNS_DATA;
+  select max(date_to_adobe) into :_final_max_date trimmed from APNS_DATA;
+quit;
+%put NOTE: APNS_DATA after dedup - rows    : &_final_rows;
+%put NOTE: APNS_DATA after dedup - max date: &_final_max_date;
+
+
+/* ============================================================
+   SECTION 13: LOAD TO PRODUCTION - WITH FULL SAFETY GATES
+   Checks (in order):
+     1. Work table exists
+     2. Row count > 0
+     3. Max date in new data is NOT earlier than max date in prod
+        (date regression guard - prevents overwriting good data
+         with stale output caused by broken join logic)
+   ============================================================ */
+
+%macro Loadtable(Table);
+
+  %if %sysfunc(exist(&table.)) %then %do;
+
+    /* CHECK 1: row count */
+    proc sql noprint;
+      select count(*) into :new_row_count trimmed from &Table.;
+    quit;
+
+    %if &new_row_count = 0 %then %do;
+      %put ERROR: =====================================================;
+      %put ERROR: &Table. has ZERO rows - aborting production load.;
+      %put ERROR: STI_PBI.&Table. has NOT been updated.;
+      %put ERROR: Check campaign config, date extraction and joins.;
+      %put ERROR: =====================================================;
+      data _null_; abort return 1; run;
+    %end;
+
+    /* CHECK 2: date regression guard */
+    proc sql noprint;
+      select max(date_to_adobe) into :_prod_max_date trimmed
+      from STI_PBI.&Table.;
+
+      select max(date_to_adobe) into :_new_max_date trimmed
+      from &Table.;
+    quit;
+
+    %if %sysevalf(&_new_max_date < &_prod_max_date) %then %do;
+      %put ERROR: =====================================================;
+      %put ERROR: DATE REGRESSION DETECTED in &Table.;
+      %put ERROR: New max date  : &_new_max_date;
+      %put ERROR: Prod max date : &_prod_max_date;
+      %put ERROR: The new data is OLDER than what is already in prod.;
+      %put ERROR: STI_PBI.&Table. has NOT been updated.;
+      %put ERROR: Most likely cause: join range in Section 12.;
+      %put ERROR: =====================================================;
+      data _null_; abort return 1; run;
+    %end;
+
+    /* All checks passed - load to prod */
+    %put NOTE: &Table. passed all checks (&new_row_count rows, max date &_new_max_date) - loading to production.;
+    proc sql;
+      drop table STI_PBI.&Table.;
+      create table STI_PBI.&Table. as
+      select * from &Table.;
+    quit;
+    %put NOTE: STI_PBI.&Table. updated successfully.;
+
+  %end;
+  %else %do;
+    %put ERROR: Work table &Table. does not exist - cannot load to production.;
+    data _null_; abort return 1; run;
+  %end;
+
+%mend;
+
+%Loadtable(APNS_DATA);
+
+
+/* ============================================================
+   SECTION 14: CAPTURE POST-RUN STATE
+   ============================================================ */
+
+proc sql outobs=1;
+  create table datetime_new as
+  select  date_to_adobe            as Date format date9.,
+          time_created_to_adobe    as time format time9.
+  from    STI_PBI.APNS_DATA
+  where   time_created_to_adobe
+              in (select max(time_created_to_adobe)
+                  from STI_PBI.APNS_DATA
+                  where date_to_adobe in
+                      (select max(date_to_adobe)
+                       from STI_PBI.APNS_DATA));
+run;
+
+proc sql noprint;
+  select count(cust_no) into :New_records trimmed from STI_PBI.APNS_DATA;
+quit;
+
+proc sql noprint;
+  select date format date9.,
+         time format time9.
+  into   :New_date trimmed,
+         :New_time trimmed
+  from   datetime_new;
+quit;
+
+%let Diff_Records = %sysevalf(&New_records - &Old_records);
+
+%put NOTE: Post-run record count : &New_records;
+%put NOTE: Post-run max date     : &New_date;
+%put NOTE: Post-run max time     : &New_time;
+%put NOTE: Record difference     : &Diff_Records;
+
+
+/* ============================================================
+   SECTION 15: EMAIL NOTIFICATION
+   Conditions (evaluated top-to-bottom, first match wins):
+     A. Date regression  - new max date is earlier than old max date
+     B. No update        - date and time both unchanged
+     C. Updated          - date OR time changed (normal success case)
+     D. Table missing    - STI_PBI.APNS_DATA does not exist (failsafe)
+   ============================================================ */
+
+%macro EMAIL;
+
+  /* --------------------------------------------------------
+     A. DATE REGRESSION - new data is older than what was
+        already in production. This should have been caught
+        by the Loadtable gate, but included here as a
+        belt-and-braces notification safety net.
+     -------------------------------------------------------- */
+  %if %sysevalf(&New_date < &Old_date) %then %do;
+
+    FILENAME EML EMAIL
+      to      = "Morris.Nkomo@fnb.co.za"
+      cc      = "dlfnbstioperationalanalytics@fnb.co.za"
+      from    = 'dlfnbstioperationalanalytics@fnb.co.za'
+      subject = "WARNING: APNS Date Regression Detected";
+    DATA _NULL_;
+      FILE EML;
+      PUT "Hi,";
+      PUT " ";
+      PUT "WARNING: The APNS script completed but the max date in the";
+      PUT "production table is now EARLIER than it was before the run.";
+      PUT "This indicates a date regression - the join logic may be";
+      PUT "returning stale data. The table may have been overwritten";
+      PUT "with older records. Please investigate immediately.";
+      PUT " ";
+      PUT "Max Date before run : &Old_date (&Old_time)";
+      PUT "Max Date after run  : &New_date (&New_time)";
+      PUT "Records before run  : &Old_records";
+      PUT "Records after run   : &New_records";
+      PUT "Record difference   : &Diff_Records";
+      PUT " ";
+      PUT "Likely cause: join BETWEEN range in Section 12.";
+      PUT "Check the log for further detail.";
+      PUT " ";
+      PUT "The APN Dashboard should NOT be refreshed until investigated.";
+      PUT " ";
+      PUT "Kind Regards";
+      PUT "Morris";
+    RUN;
+
+  %end;
+
+  /* --------------------------------------------------------
+     B. NO UPDATE - dates and times are identical before/after
+     -------------------------------------------------------- */
+  %else %if &Old_date = &New_date and &Old_time = &New_time %then %do;
+
+    FILENAME EML EMAIL
+      to   = "Morris.Nkomo@fnb.co.za"
+      cc   = "dlfnbstioperationalanalytics@fnb.co.za"
+      from = 'dlfnbstioperationalanalytics@fnb.co.za'
+      subject = "INFO: APNS Script Ran - No Table Update";
+    DATA _NULL_;
+      FILE EML;
+      PUT "Hi,";
+      PUT " ";
+      PUT "The APNS script ran but no new data was loaded.";
+      PUT "The production table is unchanged. Please check the";
+      PUT "log for any warnings or failures.";
+      PUT " ";
+      PUT "Max Date before run : &Old_date (&Old_time)";
+      PUT "Max Date after run  : &New_date (&New_time)";
+      PUT "Records before run  : &Old_records";
+      PUT "Records after run   : &New_records";
+      PUT "Record difference   : &Diff_Records";
+      PUT " ";
+      PUT "The APN Dashboard does not require refreshing.";
+      PUT " ";
+      PUT "Kind Regards";
+      PUT "Morris";
+    RUN;
+
+  %end;
+
+  /* --------------------------------------------------------
+     C. SUCCESSFUL UPDATE - date or time has moved forward
+     -------------------------------------------------------- */
+  %else %if &Old_date ne &New_date or &Old_time ne &New_time %then %do;
+
+    FILENAME EML EMAIL
+      to      = "Morris.Nkomo@fnb.co.za"
+      cc      = "dlfnbstioperationalanalytics@fnb.co.za"
+      from    = 'dlfnbstioperationalanalytics@fnb.co.za'
+      subject = "SUCCESS: APNS Script Ran - Table Updated";
+    DATA _NULL_;
+      FILE EML;
+      PUT "Hi,";
+      PUT " ";
+      PUT "The APNS script ran successfully and the table was updated.";
+      PUT " ";
+      PUT "Max Date before run : &Old_date (&Old_time)";
+      PUT "Max Date after run  : &New_date (&New_time)";
+      PUT "Records before run  : &Old_records";
+      PUT "Records after run   : &New_records";
+      PUT "New records added   : &Diff_Records";
+      PUT " ";
+      PUT "The APN Dashboard can be refreshed.";
+      PUT " ";
+      PUT "Kind Regards";
+      PUT "Morris";
+    RUN;
+
+  %end;
+
+  /* --------------------------------------------------------
+     D. TABLE MISSING - failsafe, should not be reached if
+        the early-abort at Section 1 fired correctly
+     -------------------------------------------------------- */
+  %else %if %sysfunc(exist(STI_PBI.APNS_DATA)) = 0 %then %do;
+
+    FILENAME EML EMAIL
+      to      = "Morris.Nkomo@fnb.co.za"
+      cc      = "dlfnbstioperationalanalytics@fnb.co.za"
+      from    = 'dlfnbstioperationalanalytics@fnb.co.za'
+      subject = "WARNING: APNS_DATA Table Missing";
+    DATA _NULL_;
+      FILE EML;
+      PUT "Good Day,";
+      PUT " ";
+      PUT "Kindly note that the STI_PBI.APNS_DATA table is missing.";
+      PUT "Currently investigating the problem.";
+      PUT " ";
+      PUT "Kind Regards,";
+      PUT "Morris";
+    RUN;
+
+  %end;
+
+%mend email;
+
+options mprint mlogic symbolgen;
+%email;
+
+proc printto;
+run;
+
