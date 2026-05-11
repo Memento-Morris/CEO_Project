@@ -1,87 +1,256 @@
-1                                                          The SAS System                                 02:03 Monday, May 11, 2026
+Campaign_Name Brand MUCN);
+MPRINT(ITERATE_MONTHLY_DROP):   length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 376
+SYMBOLGEN:  Macro variable TABLE376 resolves to CMA10251V01M01_20260421_1256
+MPRINT(ITERATE_MONTHLY_DROP):   _memname_ = "CMA10251V01M01_20260421_1256";
+MPRINT(ITERATE_MONTHLY_DROP):   if index(_memname_,'_') > 0 then do;
+MPRINT(ITERATE_MONTHLY_DROP):   _date_raw_ = scan(_memname_, -2, '_');
+MPRINT(ITERATE_MONTHLY_DROP):   _time_raw_ = scan(_memname_, -1, '_');
+MPRINT(ITERATE_MONTHLY_DROP):   Date_to_adobe = input(_date_raw_, YYMMDD8.);
+MPRINT(ITERATE_MONTHLY_DROP):   Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':', substr(_time_raw_,3,2),':00'), 
+HHMMSS8.);
+MPRINT(ITERATE_MONTHLY_DROP):   end;
+MPRINT(ITERATE_MONTHLY_DROP):   else do;
+MPRINT(ITERATE_MONTHLY_DROP):   _date_raw_ = substr(_memname_, 16, 8);
+MPRINT(ITERATE_MONTHLY_DROP):   Date_to_adobe = input(_date_raw_, YYMMDD10.);
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 376
+SYMBOLGEN:  Macro variable TIMETABLE376 resolves to 22APR26:12:26:34
+MPRINT(ITERATE_MONTHLY_DROP):   Time_created_to_adobe = input(substr("22APR26:12:26:34",9,8), HHMMSS.);
+MPRINT(ITERATE_MONTHLY_DROP):   end;
+MPRINT(ITERATE_MONTHLY_DROP):   format Date_to_adobe date9.;
+MPRINT(ITERATE_MONTHLY_DROP):   format Time_created_to_adobe time9.;
+MPRINT(ITERATE_MONTHLY_DROP):   rename CUST_NO = cust_no MUCN = mucn Brand = brand;
+MPRINT(ITERATE_MONTHLY_DROP):   drop _memname_ _date_raw_ _time_raw_;
+MPRINT(ITERATE_MONTHLY_DROP):   run;
 
-1          ;*';*";*/;quit;run;
-2          OPTIONS PAGENO=MIN;
-3          %LET _CLIENTTASKLABEL='Program 1';
-4          %LET _CLIENTPROCESSFLOWNAME='Standalone Not In Project';
-5          %LET _CLIENTPROJECTPATH='';
-6          %LET _CLIENTPROJECTPATHHOST='';
-7          %LET _CLIENTPROJECTNAME='';
-8          %LET _SASPROGRAMFILE='';
-9          %LET _SASPROGRAMFILEHOST='';
-10         
-11         ODS _ALL_ CLOSE;
-12         OPTIONS DEV=SVG;
-13         GOPTIONS XPIXELS=0 YPIXELS=0;
-14         %macro HTML5AccessibleGraphSupported;
-15             %if %_SAS_VERCOMP_FV(9,4,4, 0,0,0) >= 0 %then ACCESSIBLE_GRAPH;
-16         %mend;
-17         FILENAME EGHTML TEMP;
-18         ODS HTML5(ID=EGHTML) FILE=EGHTML
-19             OPTIONS(BITMAP_MODE='INLINE')
-20             %HTML5AccessibleGraphSupported
-21             ENCODING='utf-8'
-22             STYLE=HtmlBlue
-23             NOGTITLE
-24             NOGFOOTNOTE
-25             GPATH=&sasworklocation
-26         ;
-NOTE: Writing HTML5(EGHTML) Body file: EGHTML
-27         
-28         /* ============================================================
-29            JOB:      STI_CA_D_APNS_DATA
-30            STATUS:   PROD
-31            PURPOSE:  Operational - APN Campaign Data to Adobe
-32            VERSION:  FIXED - Full defensive rebuild
-33            FIXES APPLIED:
-34              F01 - APNS_sends_campaigns empty: product_code case/trim mismatch
-35              F02 - APNS_sends_campaigns empty: Distribution_date not a datetime
-36              F03 - APNS_sends_campaigns empty: min_date too far forward
-37              F04 - APNS_sends_campaigns empty: APNS view stale / underlying empty
-38              F05 - Adobe_recent_drops empty:   same root causes as F01-F04
-39              F06 - product_codes list: missing comma bug (was in original, kept fixed)
-40              F07 - BETWEEN range backwards in optimize_adobe_sum (kept fixed)
-41              F08 - BETWEEN range backwards in final join Section 12 (kept fixed)
-42              F09 - testindicator condition logic broken (kept fixed)
-43              F10 - Date regression guard in Loadtable (kept)
-44              F11 - iterate_week_drop writes TABLESdropweek_ but combine step
-45                    references them before Weekly is built - reordered SET
-46              F12 - Macro parameter &count shadowed by proc sql into :count -
-47                    renamed internal resolve macro vars throughout
-48              F13 - %goto label scope: labels moved inside macro correctly
-49              F14 - adobe_to_clients_final drops etl_source_data/etl_date/daymonth
-50                    which may not exist - guarded with conditional drop
-51              F15 - UCN fallback: strip() used consistently
-52              F16 - Dedup inner join excludes nulls on date_to_adobe ne date_loaded -
-53                    loosened to OR IS NULL already present, verified
-54            ============================================================ */
-55         
-56         %put TAG:JobName1=STI_CA_D_APNS_DATA;
-TAG:JobName1=STI_CA_D_APNS_DATA
-2                                                          The SAS System                                 02:03 Monday, May 11, 2026
-
-57         %put TAG:JobName2=Daily;
-TAG:JobName2=Daily
-58         %put TAG:JobCategory=Campaigns;
-TAG:JobCategory=Campaigns
-59         %put TAG:JobPurpose=Operational;
-TAG:JobPurpose=Operational
-60         %put TAG:JobPriority=Medium;
-TAG:JobPriority=Medium
-61         %put TAG:JobStatus=Prod;
-TAG:JobStatus=Prod
-62         
-63         proc printto log="/data/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Logs/BGA/APN_DATA/STI_CA_D_APNS_DATA.log" new;
-64         run;
-
-ERROR: Errors printed on pages 2,7,24,25,26,27,28,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,
-                               74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,631.
-
-NOTE: SAS Institute Inc., SAS Campus Drive, Cary, NC USA 27513-2414
-NOTE: The SAS System used (Total process time):
-      real time           4:20.36
-632                                                        The SAS System                                 02:03 Monday, May 11, 2026
-
-      cpu time            3:18.81
+NOTE: There were 288283 observations read from the data set DROP6.CMA10251V01M01_20260421_1256.
+NOTE: The data set WORK.TABLESDROP6_376 has 288283 observations and 9 variables.
+NOTE: Compressing data set WORK.TABLESDROP6_376 decreased size by 60.53 percent. 
+      Compressed is 643 pages; un-compressed would require 1629 pages.
+NOTE: DATA statement used (Total process time):
+      real time           2.55 seconds
+      cpu time            1.58 seconds
       
-Error: The connection to the server has been lost.
+
+MLOGIC(ITERATE_MONTHLY_DROP):  %DO loop index variable I is now 377; loop will iterate again.
+SYMBOLGEN:  Macro variable I resolves to 377
+MPRINT(ITERATE_MONTHLY_DROP):   data TABLESdrop6_377;
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 377
+607                                                        The SAS System                                 02:12 Monday, May 11, 2026
+
+SYMBOLGEN:  Macro variable TABLE377 resolves to CMA10251V01M01_20260424_1800
+MPRINT(ITERATE_MONTHLY_DROP):   set DROP6.CMA10251V01M01_20260424_1800 (keep=CUST_NO Product_Code Drop_Reason sub_segment 
+Campaign_Name Brand MUCN);
+MPRINT(ITERATE_MONTHLY_DROP):   length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 377
+SYMBOLGEN:  Macro variable TABLE377 resolves to CMA10251V01M01_20260424_1800
+MPRINT(ITERATE_MONTHLY_DROP):   _memname_ = "CMA10251V01M01_20260424_1800";
+MPRINT(ITERATE_MONTHLY_DROP):   if index(_memname_,'_') > 0 then do;
+MPRINT(ITERATE_MONTHLY_DROP):   _date_raw_ = scan(_memname_, -2, '_');
+MPRINT(ITERATE_MONTHLY_DROP):   _time_raw_ = scan(_memname_, -1, '_');
+MPRINT(ITERATE_MONTHLY_DROP):   Date_to_adobe = input(_date_raw_, YYMMDD8.);
+MPRINT(ITERATE_MONTHLY_DROP):   Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':', substr(_time_raw_,3,2),':00'), 
+HHMMSS8.);
+MPRINT(ITERATE_MONTHLY_DROP):   end;
+MPRINT(ITERATE_MONTHLY_DROP):   else do;
+MPRINT(ITERATE_MONTHLY_DROP):   _date_raw_ = substr(_memname_, 16, 8);
+MPRINT(ITERATE_MONTHLY_DROP):   Date_to_adobe = input(_date_raw_, YYMMDD10.);
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 377
+SYMBOLGEN:  Macro variable TIMETABLE377 resolves to 25APR26:12:14:59
+MPRINT(ITERATE_MONTHLY_DROP):   Time_created_to_adobe = input(substr("25APR26:12:14:59",9,8), HHMMSS.);
+MPRINT(ITERATE_MONTHLY_DROP):   end;
+MPRINT(ITERATE_MONTHLY_DROP):   format Date_to_adobe date9.;
+MPRINT(ITERATE_MONTHLY_DROP):   format Time_created_to_adobe time9.;
+MPRINT(ITERATE_MONTHLY_DROP):   rename CUST_NO = cust_no MUCN = mucn Brand = brand;
+MPRINT(ITERATE_MONTHLY_DROP):   drop _memname_ _date_raw_ _time_raw_;
+MPRINT(ITERATE_MONTHLY_DROP):   run;
+
+NOTE: There were 312373 observations read from the data set DROP6.CMA10251V01M01_20260424_1800.
+NOTE: The data set WORK.TABLESDROP6_377 has 312373 observations and 9 variables.
+NOTE: Compressing data set WORK.TABLESDROP6_377 decreased size by 60.79 percent. 
+      Compressed is 692 pages; un-compressed would require 1765 pages.
+NOTE: DATA statement used (Total process time):
+      real time           2.94 seconds
+      cpu time            1.80 seconds
+      
+
+MLOGIC(ITERATE_MONTHLY_DROP):  %DO loop index variable I is now 378; loop will iterate again.
+SYMBOLGEN:  Macro variable I resolves to 378
+MPRINT(ITERATE_MONTHLY_DROP):   data TABLESdrop6_378;
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 378
+SYMBOLGEN:  Macro variable TABLE378 resolves to CMA10251V01M02_20260311_1626
+MPRINT(ITERATE_MONTHLY_DROP):   set DROP6.CMA10251V01M02_20260311_1626 (keep=CUST_NO Product_Code Drop_Reason sub_segment 
+Campaign_Name Brand MUCN);
+MPRINT(ITERATE_MONTHLY_DROP):   length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 378
+SYMBOLGEN:  Macro variable TABLE378 resolves to CMA10251V01M02_20260311_1626
+MPRINT(ITERATE_MONTHLY_DROP):   _memname_ = "CMA10251V01M02_20260311_1626";
+MPRINT(ITERATE_MONTHLY_DROP):   if index(_memname_,'_') > 0 then do;
+MPRINT(ITERATE_MONTHLY_DROP):   _date_raw_ = scan(_memname_, -2, '_');
+MPRINT(ITERATE_MONTHLY_DROP):   _time_raw_ = scan(_memname_, -1, '_');
+MPRINT(ITERATE_MONTHLY_DROP):   Date_to_adobe = input(_date_raw_, YYMMDD8.);
+MPRINT(ITERATE_MONTHLY_DROP):   Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':', substr(_time_raw_,3,2),':00'), 
+HHMMSS8.);
+MPRINT(ITERATE_MONTHLY_DROP):   end;
+608                                                        The SAS System                                 02:12 Monday, May 11, 2026
+
+MPRINT(ITERATE_MONTHLY_DROP):   else do;
+MPRINT(ITERATE_MONTHLY_DROP):   _date_raw_ = substr(_memname_, 16, 8);
+MPRINT(ITERATE_MONTHLY_DROP):   Date_to_adobe = input(_date_raw_, YYMMDD10.);
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 378
+SYMBOLGEN:  Macro variable TIMETABLE378 resolves to 12MAR26:12:43:15
+MPRINT(ITERATE_MONTHLY_DROP):   Time_created_to_adobe = input(substr("12MAR26:12:43:15",9,8), HHMMSS.);
+MPRINT(ITERATE_MONTHLY_DROP):   end;
+MPRINT(ITERATE_MONTHLY_DROP):   format Date_to_adobe date9.;
+MPRINT(ITERATE_MONTHLY_DROP):   format Time_created_to_adobe time9.;
+MPRINT(ITERATE_MONTHLY_DROP):   rename CUST_NO = cust_no MUCN = mucn Brand = brand;
+MPRINT(ITERATE_MONTHLY_DROP):   drop _memname_ _date_raw_ _time_raw_;
+MPRINT(ITERATE_MONTHLY_DROP):   run;
+
+NOTE: There were 1 observations read from the data set DROP6.CMA10251V01M02_20260311_1626.
+NOTE: The data set WORK.TABLESDROP6_378 has 1 observations and 9 variables.
+NOTE: Compressing data set WORK.TABLESDROP6_378 increased size by 100.00 percent. 
+      Compressed is 2 pages; un-compressed would require 1 pages.
+NOTE: DATA statement used (Total process time):
+      real time           0.01 seconds
+      cpu time            0.01 seconds
+      
+
+MLOGIC(ITERATE_MONTHLY_DROP):  %DO loop index variable I is now 379; loop will iterate again.
+SYMBOLGEN:  Macro variable I resolves to 379
+MPRINT(ITERATE_MONTHLY_DROP):   data TABLESdrop6_379;
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 379
+SYMBOLGEN:  Macro variable TABLE379 resolves to CMA10252V01M01_20260310_1011
+MPRINT(ITERATE_MONTHLY_DROP):   set DROP6.CMA10252V01M01_20260310_1011 (keep=CUST_NO Product_Code Drop_Reason sub_segment 
+Campaign_Name Brand MUCN);
+MPRINT(ITERATE_MONTHLY_DROP):   length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 379
+SYMBOLGEN:  Macro variable TABLE379 resolves to CMA10252V01M01_20260310_1011
+MPRINT(ITERATE_MONTHLY_DROP):   _memname_ = "CMA10252V01M01_20260310_1011";
+MPRINT(ITERATE_MONTHLY_DROP):   if index(_memname_,'_') > 0 then do;
+MPRINT(ITERATE_MONTHLY_DROP):   _date_raw_ = scan(_memname_, -2, '_');
+MPRINT(ITERATE_MONTHLY_DROP):   _time_raw_ = scan(_memname_, -1, '_');
+MPRINT(ITERATE_MONTHLY_DROP):   Date_to_adobe = input(_date_raw_, YYMMDD8.);
+MPRINT(ITERATE_MONTHLY_DROP):   Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':', substr(_time_raw_,3,2),':00'), 
+HHMMSS8.);
+MPRINT(ITERATE_MONTHLY_DROP):   end;
+MPRINT(ITERATE_MONTHLY_DROP):   else do;
+MPRINT(ITERATE_MONTHLY_DROP):   _date_raw_ = substr(_memname_, 16, 8);
+MPRINT(ITERATE_MONTHLY_DROP):   Date_to_adobe = input(_date_raw_, YYMMDD10.);
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 379
+SYMBOLGEN:  Macro variable TIMETABLE379 resolves to 11MAR26:11:32:51
+MPRINT(ITERATE_MONTHLY_DROP):   Time_created_to_adobe = input(substr("11MAR26:11:32:51",9,8), HHMMSS.);
+MPRINT(ITERATE_MONTHLY_DROP):   end;
+MPRINT(ITERATE_MONTHLY_DROP):   format Date_to_adobe date9.;
+MPRINT(ITERATE_MONTHLY_DROP):   format Time_created_to_adobe time9.;
+MPRINT(ITERATE_MONTHLY_DROP):   rename CUST_NO = cust_no MUCN = mucn Brand = brand;
+MPRINT(ITERATE_MONTHLY_DROP):   drop _memname_ _date_raw_ _time_raw_;
+MPRINT(ITERATE_MONTHLY_DROP):   run;
+
+NOTE: There were 1 observations read from the data set DROP6.CMA10252V01M01_20260310_1011.
+609                                                        The SAS System                                 02:12 Monday, May 11, 2026
+
+NOTE: The data set WORK.TABLESDROP6_379 has 1 observations and 9 variables.
+NOTE: Compressing data set WORK.TABLESDROP6_379 increased size by 100.00 percent. 
+      Compressed is 2 pages; un-compressed would require 1 pages.
+NOTE: DATA statement used (Total process time):
+      real time           0.02 seconds
+      cpu time            0.01 seconds
+      
+
+MLOGIC(ITERATE_MONTHLY_DROP):  %DO loop index variable I is now 380; loop will iterate again.
+SYMBOLGEN:  Macro variable I resolves to 380
+MPRINT(ITERATE_MONTHLY_DROP):   data TABLESdrop6_380;
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 380
+SYMBOLGEN:  Macro variable TABLE380 resolves to CMA10252V01M01_20260310_958
+MPRINT(ITERATE_MONTHLY_DROP):   set DROP6.CMA10252V01M01_20260310_958 (keep=CUST_NO Product_Code Drop_Reason sub_segment 
+Campaign_Name Brand MUCN);
+MPRINT(ITERATE_MONTHLY_DROP):   length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 380
+SYMBOLGEN:  Macro variable TABLE380 resolves to CMA10252V01M01_20260310_958
+MPRINT(ITERATE_MONTHLY_DROP):   _memname_ = "CMA10252V01M01_20260310_958";
+MPRINT(ITERATE_MONTHLY_DROP):   if index(_memname_,'_') > 0 then do;
+MPRINT(ITERATE_MONTHLY_DROP):   _date_raw_ = scan(_memname_, -2, '_');
+MPRINT(ITERATE_MONTHLY_DROP):   _time_raw_ = scan(_memname_, -1, '_');
+MPRINT(ITERATE_MONTHLY_DROP):   Date_to_adobe = input(_date_raw_, YYMMDD8.);
+MPRINT(ITERATE_MONTHLY_DROP):   Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':', substr(_time_raw_,3,2),':00'), 
+HHMMSS8.);
+MPRINT(ITERATE_MONTHLY_DROP):   end;
+MPRINT(ITERATE_MONTHLY_DROP):   else do;
+MPRINT(ITERATE_MONTHLY_DROP):   _date_raw_ = substr(_memname_, 16, 8);
+MPRINT(ITERATE_MONTHLY_DROP):   Date_to_adobe = input(_date_raw_, YYMMDD10.);
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 380
+SYMBOLGEN:  Macro variable TIMETABLE380 resolves to 11MAR26:11:32:05
+MPRINT(ITERATE_MONTHLY_DROP):   Time_created_to_adobe = input(substr("11MAR26:11:32:05",9,8), HHMMSS.);
+MPRINT(ITERATE_MONTHLY_DROP):   end;
+MPRINT(ITERATE_MONTHLY_DROP):   format Date_to_adobe date9.;
+MPRINT(ITERATE_MONTHLY_DROP):   format Time_created_to_adobe time9.;
+MPRINT(ITERATE_MONTHLY_DROP):   rename CUST_NO = cust_no MUCN = mucn Brand = brand;
+MPRINT(ITERATE_MONTHLY_DROP):   drop _memname_ _date_raw_ _time_raw_;
+MPRINT(ITERATE_MONTHLY_DROP):   run;
+
+NOTE: There were 0 observations read from the data set DROP6.CMA10252V01M01_20260310_958.
+NOTE: The data set WORK.TABLESDROP6_380 has 0 observations and 9 variables.
+NOTE: DATA statement used (Total process time):
+      real time           0.01 seconds
+      cpu time            0.01 seconds
+      
+
+MLOGIC(ITERATE_MONTHLY_DROP):  %DO loop index variable I is now 381; loop will iterate again.
+SYMBOLGEN:  Macro variable I resolves to 381
+MPRINT(ITERATE_MONTHLY_DROP):   data TABLESdrop6_381;
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 381
+SYMBOLGEN:  Macro variable TABLE381 resolves to CMA10252V01M01_20260312_1056
+MPRINT(ITERATE_MONTHLY_DROP):   set DROP6.CMA10252V01M01_20260312_1056 (keep=CUST_NO Product_Code Drop_Reason sub_segment 
+Campaign_Name Brand MUCN);
+MPRINT(ITERATE_MONTHLY_DROP):   length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
+610                                                        The SAS System                                 02:12 Monday, May 11, 2026
+
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 381
+SYMBOLGEN:  Macro variable TABLE381 resolves to CMA10252V01M01_20260312_1056
+MPRINT(ITERATE_MONTHLY_DROP):   _memname_ = "CMA10252V01M01_20260312_1056";
+MPRINT(ITERATE_MONTHLY_DROP):   if index(_memname_,'_') > 0 then do;
+MPRINT(ITERATE_MONTHLY_DROP):   _date_raw_ = scan(_memname_, -2, '_');
+MPRINT(ITERATE_MONTHLY_DROP):   _time_raw_ = scan(_memname_, -1, '_');
+MPRINT(ITERATE_MONTHLY_DROP):   Date_to_adobe = input(_date_raw_, YYMMDD8.);
+MPRINT(ITERATE_MONTHLY_DROP):   Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':', substr(_time_raw_,3,2),':00'), 
+HHMMSS8.);
+MPRINT(ITERATE_MONTHLY_DROP):   end;
+MPRINT(ITERATE_MONTHLY_DROP):   else do;
+MPRINT(ITERATE_MONTHLY_DROP):   _date_raw_ = substr(_memname_, 16, 8);
+MPRINT(ITERATE_MONTHLY_DROP):   Date_to_adobe = input(_date_raw_, YYMMDD10.);
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 381
+SYMBOLGEN:  Macro variable TIMETABLE381 resolves to 13MAR26:11:45:37
+MPRINT(ITERATE_MONTHLY_DROP):   Time_created_to_adobe = input(substr("13MAR26:11:45:37",9,8), HHMMSS.);
+MPRINT(ITERATE_MONTHLY_DROP):   end;
+MPRINT(ITERATE_MONTHLY_DROP):   format Date_to_adobe date9.;
+MPRINT(ITERATE_MONTHLY_DROP):   format Time_created_to_adobe time9.;
+MPRINT(ITERATE_MONTHLY_DROP):   rename CUST_NO = cust_no MUCN = mucn Brand = brand;
+MPRINT(ITERATE_MONTHLY_DROP):   drop _memname_ _date_raw_ _time_raw_;
+MPRINT(ITERATE_MONTHLY_DROP):   run;
+
+NOTE: There were 1 observations read from the data set DROP6.CMA10252V01M01_20260312_1056.
+NOTE: The data set WORK.TABLESDROP6_381 has 1 observations and 9 variables.
+NOTE: Compressing data set WORK.TABLESDROP6_381 increased size by 100.00 percent. 
+      Compressed is 2 pages; un-compressed would require 1 pages.
+NOTE: DATA statement used (Total process time):
+      real time           0.01 seconds
+      cpu time            0.00 seconds
+      
