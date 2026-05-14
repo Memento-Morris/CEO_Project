@@ -1,7 +1,10 @@
-proc sql;
-  select name, type, length
-  from dictionary.columns
-  where libname = 'WORK'
-    and memname in ('CAMPAIGNS_TO_ADOBE_RENAMED', 'ADOBE_FINAL_TABLE_CLIENTS')
-    and upcase(name) in ('CUST_NO', 'CUST_NO2');
-quit;
+
+Column Name
+
+Column Type
+
+Column Length
+
+
+cust_no2 num 8 
+CUST_NO num 8 
