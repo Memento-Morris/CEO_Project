@@ -1,24 +1,120 @@
-proc contents data=campaigns_to_adobe_renamed;
-  var cust_no;
-run;
 
-proc contents data=adobe_final_table_clients;
-  var cust_no2;
-run;
 
-proc sql;
-  select distinct product_code_to_adobe from campaigns_to_adobe_renamed;
-quit;
+product_code_to_adobe
 
-proc sql;
-  select distinct product_code from adobe_final_table_clients;
-quit;
 
-proc sql;
-  select min(date_to_adobe), max(date_to_adobe) from campaigns_to_adobe_renamed;
-  select min(date_loaded),   max(date_loaded)   from adobe_final_table_clients;
-quit;
+CMA03742V01M01 
+CMA08473V02M02 
+CMA09319V01M01 
+CMA09320V01M01 
+CMA10184V01M01 
+CMA10184V01M02 
+CMA10184V01M03 
+CMA10184V01M04 
+CMA10184V01M05 
+CMA10184V01M06 
+CMA10184V01M07 
+CMA10184V01M08 
+CMA10184V02M09 
+CMA10184V02M10 
+CMA10184V02M11 
+CMA10184V02M12 
+CMA10184V02M13 
+CMA10184V02M14 
+CMA10184V02M15 
+CMA10184V02M16 
+CMA10184V03M17 
+CMA10184V03M18 
+CMA10184V03M19 
+CMA10184V03M20 
+CMA10184V03M21 
+CMA10184V03M22 
+CMA10184V03M23 
+CMA10184V03M24 
+CMA10251V01M01 
+CMA10251V01M02 
+CMA10252V01M01 
+CMA10252V01M02 
 
-proc sql;
-  select count(*) from adobe_final_table_clients;
-quit;
+
+
+
+
+
+
+
+product_code
+
+
+CMA02369V01M01 
+CMA02460V01M03 
+CMA03742V01M01 
+CMA04324V01M01 
+CMA08473V02M02 
+CMA10184V01M01 
+CMA10184V01M02 
+CMA10184V01M03 
+CMA10184V01M04 
+CMA10184V01M05 
+CMA10184V01M06 
+CMA10184V01M07 
+CMA10184V01M08 
+CMA10184V02M09 
+CMA10184V02M10 
+CMA10184V02M11 
+CMA10184V02M12 
+CMA10184V02M13 
+CMA10184V02M14 
+CMA10184V02M15 
+CMA10184V02M16 
+CMA10184V03M17 
+CMA10184V03M18 
+CMA10184V03M19 
+CMA10184V03M20 
+CMA10184V03M21 
+CMA10184V03M22 
+CMA10184V03M23 
+CMA10184V03M24 
+CMA10251V01M01 
+CMA10252V01M01 
+
+
+
+
+
+
+
+
+
+ 
+
+ 
+
+
+24148 24240 
+
+
+
+
+
+
+
+
+ 
+
+ 
+
+
+24148 24238 
+
+
+
+
+
+
+
+
+ 
+
+
+276579 
