@@ -1,10 +1,29 @@
+proc sql;
+  select count(*) as matched_no_date
+  from campaigns_to_adobe_renamed a
+  inner join adobe_final_table_clients b
+    on a.cust_no = b.cust_no2
+   and a.product_code_to_adobe = b.product_code;
+quit;
 
-Column Name
+proc sql;
+  select count(*) as matched_with_date
+  from campaigns_to_adobe_renamed a
+  inner join adobe_final_table_clients b
+    on a.cust_no = b.cust_no2
+   and a.product_code_to_adobe = b.product_code
+   and b.date_loaded between a.date_to_adobe and a.date_to_adobe + 5;
+quit;
 
-Column Type
-
-Column Length
-
-
-cust_no2 num 8 
-CUST_NO num 8 
+proc sql outobs=20;
+  select 
+    a.cust_no,
+    a.product_code_to_adobe,
+    a.date_to_adobe,
+    a.date_to_adobe + 5 as window_end,
+    b.date_loaded
+  from campaigns_to_adobe_renamed a
+  inner join adobe_final_table_clients b
+    on a.cust_no = b.cust_no2
+   and a.product_code_to_adobe = b.product_code;
+quit;
