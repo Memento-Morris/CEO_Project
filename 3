@@ -1,2 +1,312 @@
-proc contents data=APNS.apn_sends_and_feedback; run;
-proc contents data=APNS.adobe_drop_offs_data; run;
+
+
+The CONTENTS Procedure
+
+
+
+
+
+
+
+
+
+
+Data Set Name
+APNS.APN_SENDS_AND_FEEDBACK 
+Observations
+. 
+
+Member Type
+VIEW 
+Variables
+29 
+
+Engine
+SQLVIEW 
+Indexes
+0 
+
+Created
+12/09/2025 09:46:19 
+Observation Length
+2581 
+
+Last Modified
+12/09/2025 09:46:19 
+Deleted Observations
+0 
+
+Protection
+  
+Compressed
+NO 
+
+Data Set Type
+  
+Sorted
+NO 
+
+Label
+  
+ 
+  
+
+Data Representation
+Default 
+ 
+  
+
+Encoding
+Default 
+ 
+  
+
+
+
+
+
+
+
+
+
+
+
+
+Alphabetic List of Variables and Attributes
+
+
+#
+
+Variable
+
+Type
+
+Len
+
+Format
+
+Informat
+
+
+
+7
+CREATION_DATE Num 8 DATETIME18. DATETIME18. 
+
+10
+DISTRIBUTION_CHANNEL Char 30 $30. $17. 
+
+8
+DISTRIBUTION_DATE Num 8 DATETIME18. DATETIME18. 
+
+6
+LOAD_DATE Num 8 DATETIME18. DATETIME18. 
+
+1
+MFT_File_Name Char 49 $49.   
+
+3
+PRIMARY_KEY Num 8 BEST32. BEST10. 
+
+14
+adobe_processed_status Char 46 $46. $14. 
+
+27
+answer Char 815 $815.   
+
+5
+campaign_label Char 116 $116. $52. 
+
+2
+cust_no Num 8 BEST32. BEST10. 
+
+26
+date_received Num 8 DATETIME18. DATETIME18. 
+
+13
+delivery_code Char 35 $35. $11. 
+
+9
+distribution_status Char 43 $43. $18. 
+
+16
+failure_type Char 26 $26.   
+
+21
+feedback_option_1 Char 64 $64.   
+
+22
+feedback_option_2 Char 64 $64.   
+
+23
+feedback_option_3 Char 64 $64.   
+
+24
+feedback_option_4 Char 63 $63.   
+
+25
+feedback_option_5 Char 65 $65.   
+
+18
+last_modified_date Num 8 DATETIME18.   
+
+29
+message_id Char 36 $36.   
+
+19
+mucn Char 28 $28.   
+
+4
+product_code Char 29 $29. $16. 
+
+20
+question Char 264 $264.   
+
+17
+reason Char 26 $26.   
+
+11
+routing Char 24 $24.   
+
+12
+routing_type Char 56 $56. $32. 
+
+15
+status_description Char 527 $527.   
+
+28
+unique_identifier Char 34 $34.   
+
+
+
+
+The CONTENTS Procedure
+
+
+
+
+
+
+
+
+
+
+Data Set Name
+APNS.ADOBE_DROP_OFFS_DATA 
+Observations
+. 
+
+Member Type
+VIEW 
+Variables
+7 
+
+Engine
+SQLVIEW 
+Indexes
+0 
+
+Created
+11/14/2024 09:08:32 
+Observation Length
+3042 
+
+Last Modified
+11/14/2024 09:08:32 
+Deleted Observations
+0 
+
+Protection
+  
+Compressed
+NO 
+
+Data Set Type
+  
+Sorted
+YES 
+
+Label
+  
+ 
+  
+
+Data Representation
+Default 
+ 
+  
+
+Encoding
+Default 
+ 
+  
+
+
+
+
+
+
+
+
+
+
+
+
+Alphabetic List of Variables and Attributes
+
+
+#
+
+Variable
+
+Type
+
+Len
+
+Format
+
+Informat
+
+
+
+5
+ETL_SOURCE_DATA Char 1000 $200. $1000. 
+
+4
+date_loaded Num 8 DATETIME18.   
+
+3
+daymonth Num 8     
+
+7
+drop_reason Char 18 $1000. $1000. 
+
+1
+mucn Char 1000 $1000. $1000. 
+
+2
+product_code Char 1000 $1000. $1000. 
+
+6
+ucn Num 8 BEST12.   
+
+
+
+
+
+
+
+Sort Information
+
+
+
+Sortedby
+ucn mucn daymonth product_code 
+
+Validated
+YES 
+
+Character Set
+ASCII 
+
+Sort Option
+NODUPKEY 
