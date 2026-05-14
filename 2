@@ -1,15 +1,494 @@
-/* Quick check - run this standalone */
+/* ============================================================
+   LIBNAMES
+   ============================================================ */
+
+libname Pass6    "/data/fnb/clb/archive/5_optimise/passed_phase1";
+libname APN_Pass "/data/fnb/clb/prod_data/5_optimise/passed_phase1";
+libname Drop6    "/data/fnb/clb/archive/5_optimise/dropped_phase1";
+libname APN_Drop "/data/fnb/clb/prod_data/5_optimise/dropped_phase1";
+libname APNS     "/data/fnb/clb/prod_data/7_tracking_views/Reporting_views";
+
+/* ============================================================
+   SECTION 1: DISCOVER TABLES - ARCHIVE + LIVE
+   ============================================================ */
+
+%macro discover(libref=, outds=);
+    proc sql;
+        create table &outds as
+        select memname, crdate
+        from dictionary.tables
+        where libname = upcase("&libref.")
+          and (
+              memname like 'CMA09319%' or
+              memname like 'CMA09320%' or
+              memname like 'CMA10184%' or
+              memname like 'CMA10251%' or
+              memname like 'CMA10252%' or
+              memname like 'CMA09620%'
+          )
+        order by memname;
+    quit;
+%mend;
+
+%discover(libref=Pass6,    outds=PASS_TABLES_ARCH)
+%discover(libref=APN_Pass, outds=PASS_TABLES_LIVE)
+%discover(libref=Drop6,    outds=DROP_TABLES_ARCH)
+%discover(libref=APN_Drop, outds=DROP_TABLES_LIVE)
+
+/* Combine archive + live */
+data PASS_TABLES;
+    set PASS_TABLES_ARCH (in=a)
+        PASS_TABLES_LIVE (in=b);
+    Source = ifc(a, 'Archive', 'Live');
+run;
+
+data DROP_TABLES;
+    set DROP_TABLES_ARCH (in=a)
+        DROP_TABLES_LIVE (in=b);
+    Source = ifc(a, 'Archive', 'Live');
+run;
+
+/* Remove duplicates in case same table exists in both */
+proc sort data=PASS_TABLES nodupkey;
+    by memname;
+run;
+
+proc sort data=DROP_TABLES nodupkey;
+    by memname;
+run;
+
+data _null_;
+    set PASS_TABLES;
+    call symputx(cats('pass_', _n_), memname);
+    call symputx(cats('pass_src_', _n_), Source);
+    call symputx(cats('pass_crd_', _n_), put(datepart(crdate), date9.));
+run;
+
+data _null_;
+    set DROP_TABLES;
+    call symputx(cats('drop_', _n_), memname);
+    call symputx(cats('drop_src_', _n_), Source);
+    call symputx(cats('drop_crd_', _n_), put(datepart(crdate), date9.));
+run;
+
+proc sql noprint;
+    select count(*) into :pass_count trimmed from PASS_TABLES;
+    select count(*) into :drop_count trimmed from DROP_TABLES;
+quit;
+
+%put Pass tables found: &pass_count;
+%put Drop tables found: &drop_count;
+
+
+/* ============================================================
+   SECTION 2: AGGREGATE PASSED WITH TIMESTAMPS
+   Extract date/time from table name (same logic as main job)
+   ============================================================ */
+
+%macro agg_passed;
+    %do i = 1 %to &pass_count;
+
+        %local libref;
+        %if %upcase(&&pass_src_&i) = ARCHIVE %then %let libref = Pass6;
+        %else %let libref = APN_Pass;
+
+        proc sql noprint;
+            select count(*) into :nobs trimmed
+            from &libref..&&pass_&i;
+        quit;
+
+        %if &nobs > 0 %then %do;
+            proc sql;
+                create table _pass_&i as
+                select
+                    product_code,
+                    count(*)                as LOADED,
+                    /* Date/time from table name */
+                    case
+                        when index("&&pass_&i", '_') > 0
+                            then input(scan("&&pass_&i", -2, '_'), YYMMDD8.)
+                        else input(substr("&&pass_&i", 16, 8), YYMMDD10.)
+                    end                     as Batch_Date
+                                            format = date9.
+                                            label  = "Batch Date (from table name)",
+                    case
+                        when index("&&pass_&i", '_') > 0
+                            then input(
+                                    cats(
+                                        substr(scan("&&pass_&i",-1,'_'),1,2),':',
+                                        substr(scan("&&pass_&i",-1,'_'),3,2),':00'
+                                    ), HHMMSS8.)
+                        else .
+                    end                     as Batch_Time
+                                            format = time9.
+                                            label  = "Batch Time (from table name)",
+                    "&&pass_src_&i"         as Source
+                                            length = 10
+                                            label  = "Source (Archive/Live)",
+                    "&&pass_&i"             as Table_Name
+                                            length = 50
+                                            label  = "Source Table"
+                from &libref..&&pass_&i
+                group by product_code;
+            quit;
+        %end;
+    %end;
+
+    data ALL_PASSED_AGG;
+        set _pass_:;
+    run;
+
+    proc datasets library=work nolist;
+        delete _pass_:;
+    quit;
+%mend;
+%agg_passed;
+
+
+/* ============================================================
+   SECTION 3: AGGREGATE DROPPED WITH TIMESTAMPS
+   ============================================================ */
+
+%macro agg_dropped;
+    %do i = 1 %to &drop_count;
+
+        %local libref;
+        %if %upcase(&&drop_src_&i) = ARCHIVE %then %let libref = Drop6;
+        %else %let libref = APN_Drop;
+
+        proc sql noprint;
+            select count(*) into :nobs trimmed
+            from &libref..&&drop_&i;
+        quit;
+
+        %if &nobs > 0 %then %do;
+            proc sql;
+                create table _drop_&i as
+                select
+                    product_code,
+                    Drop_Reason,
+                    count(*)                as FAILED,
+                    case
+                        when index("&&drop_&i", '_') > 0
+                            then input(scan("&&drop_&i", -2, '_'), YYMMDD8.)
+                        else input(substr("&&drop_&i", 16, 8), YYMMDD10.)
+                    end                     as Batch_Date
+                                            format = date9.
+                                            label  = "Batch Date (from table name)",
+                    case
+                        when index("&&drop_&i", '_') > 0
+                            then input(
+                                    cats(
+                                        substr(scan("&&drop_&i",-1,'_'),1,2),':',
+                                        substr(scan("&&drop_&i",-1,'_'),3,2),':00'
+                                    ), HHMMSS8.)
+                        else .
+                    end                     as Batch_Time
+                                            format = time9.
+                                            label  = "Batch Time (from table name)",
+                    "&&drop_src_&i"         as Source
+                                            length = 10
+                                            label  = "Source (Archive/Live)",
+                    "&&drop_&i"             as Table_Name
+                                            length = 50
+                                            label  = "Source Table"
+                from &libref..&&drop_&i
+                group by product_code, Drop_Reason;
+            quit;
+        %end;
+    %end;
+
+    data ALL_DROPPED_AGG;
+        set _drop_:;
+    run;
+
+    proc datasets library=work nolist;
+        delete _drop_:;
+    quit;
+%mend;
+%agg_dropped;
+
+
+/* ============================================================
+   SECTION 4: ASSIGN CAMPAIGN NAMES
+   ============================================================ */
+
+%macro assign_campaign(ds);
+    data &ds;
+        set &ds;
+        length Campaign_Label $40;
+        if      substr(product_code,1,8) = 'CMA09319' then Campaign_Label = 'Instruct APN (AIP)';
+        else if substr(product_code,1,8) = 'CMA09320' then Campaign_Label = 'Device Insurance';
+        else if substr(product_code,1,8) = 'CMA10184' then Campaign_Label = 'eBucks Flight VP';
+        else if substr(product_code,1,8) = 'CMA10251' then Campaign_Label = 'Start the Year Right - CAR';
+        else if substr(product_code,1,8) = 'CMA10252' then Campaign_Label = 'Start the Year Right - LOC';
+    run;
+%mend;
+%assign_campaign(ALL_PASSED_AGG);
+%assign_campaign(ALL_DROPPED_AGG);
+
+
+/* ============================================================
+   SECTION 5: OPTIMISE SUMMARY BY PRODUCT CODE + TIMESTAMPS
+   ============================================================ */
+
 proc sql;
-  select distinct product_code
-  from APNS.apn_sends_and_feedback
-  where datepart(Distribution_date) >= '01JAN2024'd
-  order by product_code;
+    create table OPTIMISE_SUMMARY as
+    select
+        Campaign_Label,
+        product_code,
+        sum(LOADED)             as Total_LOADED,
+        0                       as Total_FAILED,
+        min(Batch_Date)         as First_Batch_Date  format = date9.,
+        max(Batch_Date)         as Last_Batch_Date   format = date9.,
+        min(Batch_Time)         as First_Batch_Time  format = time9.,
+        max(Batch_Time)         as Last_Batch_Time   format = time9.
+    from ALL_PASSED_AGG
+    group by Campaign_Label, product_code
+
+    union all
+
+    select
+        Campaign_Label,
+        product_code,
+        0                       as Total_LOADED,
+        sum(FAILED)             as Total_FAILED,
+        min(Batch_Date)         as First_Batch_Date  format = date9.,
+        max(Batch_Date)         as Last_Batch_Date   format = date9.,
+        min(Batch_Time)         as First_Batch_Time  format = time9.,
+        max(Batch_Time)         as Last_Batch_Time   format = time9.
+    from ALL_DROPPED_AGG
+    group by Campaign_Label, product_code;
 quit;
 
 proc sql;
-  select count(*) as total_rows,
-         min(datepart(Distribution_date)) as min_date format date9.,
-         max(datepart(Distribution_date)) as max_date format date9.,
-         count(distinct product_code)     as distinct_products
-  from APNS.apn_sends_and_feedback;
+    create table OPTIMISE_SUMMARY_FINAL as
+    select
+        Campaign_Label,
+        product_code,
+        sum(Total_LOADED)                       as Total_LOADED,
+        sum(Total_FAILED)                       as Total_FAILED,
+        sum(Total_LOADED + Total_FAILED)        as Total_Through_Optimise,
+        min(First_Batch_Date)                   as First_Batch_Date
+                                                format = date9.
+                                                label  = "First Batch Date",
+        max(Last_Batch_Date)                    as Last_Batch_Date
+                                                format = date9.
+                                                label  = "Last Batch Date",
+        min(First_Batch_Time)                   as First_Batch_Time
+                                                format = time9.
+                                                label  = "First Batch Time",
+        max(Last_Batch_Time)                    as Last_Batch_Time
+                                                format = time9.
+                                                label  = "Last Batch Time"
+    from OPTIMISE_SUMMARY
+    group by Campaign_Label, product_code
+    order by Campaign_Label, product_code;
 quit;
+
+
+/* ============================================================
+   SECTION 6: FAILED BREAKDOWN BY DROP REASON
+   ============================================================ */
+
+proc sql;
+    create table FAILED_BREAKDOWN as
+    select
+        Campaign_Label,
+        product_code,
+        Drop_Reason,
+        sum(FAILED)             as Count,
+        min(Batch_Date)         as First_Seen    format = date9. label = "First Seen",
+        max(Batch_Date)         as Last_Seen     format = date9. label = "Last Seen"
+    from ALL_DROPPED_AGG
+    group by Campaign_Label, product_code, Drop_Reason
+    order by Campaign_Label, product_code, Count desc;
+quit;
+
+
+/* ============================================================
+   SECTION 7: ADOBE SENT DATA WITH TIMESTAMPS
+   ============================================================ */
+
+proc sql;
+    create table ALL_SENT as
+    select
+        product_code,
+        count(*)                                                        as Total_SENT,
+        min(datepart(Distribution_date))                                as First_Sent_Adobe
+                                                                        format = date9.
+                                                                        label  = "First Sent to Adobe",
+        max(datepart(Distribution_date))                                as Last_Sent_Adobe
+                                                                        format = date9.
+                                                                        label  = "Last Sent to Adobe",
+        min(timepart(Distribution_date))                                as First_Sent_Time
+                                                                        format = time9.
+                                                                        label  = "First Send Time",
+        max(timepart(Distribution_date))                                as Last_Sent_Time
+                                                                        format = time9.
+                                                                        label  = "Last Send Time",
+        sum(case when date_received is not missing then 1 else 0 end)   as Total_Opened,
+        min(case when date_received is not missing
+                 then datepart(date_received) else . end)               as First_Opened
+                                                                        format = date9.
+                                                                        label  = "First Opened",
+        max(case when date_received is not missing
+                 then datepart(date_received) else . end)               as Last_Opened
+                                                                        format = date9.
+                                                                        label  = "Last Opened",
+        sum(case when date_received is missing     then 1 else 0 end)   as Total_Not_Opened,
+        calculated Total_Opened / calculated Total_SENT * 100           as Open_Rate
+                                                                        format = 8.2
+                                                                        label  = "Open Rate (%)"
+    from APNS.APN_SENDS_AND_FEEDBACK
+    where product_code in (
+        'CMA09319V01M01',
+        'CMA09320V01M01',
+        'CMA10184V01M01','CMA10184V01M02','CMA10184V01M03','CMA10184V01M04',
+        'CMA10184V01M05','CMA10184V01M06','CMA10184V01M07','CMA10184V01M08',
+        'CMA10184V02M09','CMA10184V02M10','CMA10184V02M11','CMA10184V02M12',
+        'CMA10184V02M13','CMA10184V02M14','CMA10184V02M15','CMA10184V02M16',
+        'CMA10184V03M17','CMA10184V03M18','CMA10184V03M19','CMA10184V03M20',
+        'CMA10184V03M21','CMA10184V03M22','CMA10184V03M23','CMA10184V03M24',
+        'CMA10251V01M01','CMA10251V01M02',
+        'CMA10252V01M01','CMA10252V01M02'
+    )
+    group by product_code
+    order by product_code;
+quit;
+
+
+/* ============================================================
+   SECTION 8: FULL REPORT
+   ============================================================ */
+
+proc sql;
+    create table FULL_REPORT as
+    select
+        coalesce(o.Campaign_Label, s.product_code)  as Campaign              length = 40,
+        coalesce(o.product_code,   s.product_code)  as Product_Code          length = 20,
+        o.Total_Through_Optimise,
+        o.Total_LOADED                              as Loaded,
+        o.Total_FAILED                              as Failed,
+        /* Optimise timestamps */
+        o.First_Batch_Date,
+        o.First_Batch_Time,
+        o.Last_Batch_Date,
+        o.Last_Batch_Time,
+        /* Adobe timestamps */
+        s.First_Sent_Adobe,
+        s.First_Sent_Time,
+        s.Last_Sent_Adobe,
+        s.Last_Sent_Time,
+        s.First_Opened,
+        s.Last_Opened,
+        /* Volumes */
+        s.Total_SENT                                as Sent,
+        s.Total_Opened                              as Opened,
+        s.Total_Not_Opened                          as Not_Opened,
+        s.Open_Rate,
+        o.Total_LOADED - s.Total_SENT               as Loaded_Not_Yet_Sent
+    from OPTIMISE_SUMMARY_FINAL o
+    full outer join ALL_SENT s
+        on o.product_code = s.product_code
+    order by Campaign, Product_Code;
+quit;
+
+
+/* ============================================================
+   SECTION 9: CAMPAIGN SUMMARY
+   ============================================================ */
+
+proc sql;
+    create table CAMPAIGN_SUMMARY as
+    select
+        Campaign,
+        sum(Total_Through_Optimise)         as Total_Through_Optimise,
+        sum(Loaded)                         as Total_Loaded,
+        sum(Failed)                         as Total_Failed,
+        min(First_Batch_Date)               as First_Batch_Date
+                                            format = date9.
+                                            label  = "First into Optimise",
+        max(Last_Batch_Date)                as Last_Batch_Date
+                                            format = date9.
+                                            label  = "Last into Optimise",
+        min(First_Sent_Adobe)               as First_Sent_Adobe
+                                            format = date9.
+                                            label  = "First Sent to Adobe",
+        max(Last_Sent_Adobe)                as Last_Sent_Adobe
+                                            format = date9.
+                                            label  = "Last Sent to Adobe",
+        min(First_Opened)                   as First_Opened
+                                            format = date9.
+                                            label  = "First Opened",
+        max(Last_Opened)                    as Last_Opened
+                                            format = date9.
+                                            label  = "Last Opened",
+        sum(Sent)                           as Total_Sent,
+        sum(Opened)                         as Total_Opened,
+        sum(Opened) / sum(Sent) * 100       as Open_Rate         format = 8.2
+    from FULL_REPORT
+    group by Campaign
+    order by Campaign;
+quit;
+
+
+/* ============================================================
+   SECTION 10: PRINT REPORTS
+   ============================================================ */
+
+title1 "Campaign Summary Report - with Timestamps";
+proc print data=CAMPAIGN_SUMMARY noobs label;
+    label
+        Campaign                = "Campaign"
+        Total_Through_Optimise  = "Total Through Optimise"
+        Total_Loaded            = "Total Loaded"
+        Total_Failed            = "Total Failed"
+        First_Batch_Date        = "First into Optimise"
+        Last_Batch_Date         = "Last into Optimise"
+        First_Sent_Adobe        = "First Sent to Adobe"
+        Last_Sent_Adobe         = "Last Sent to Adobe"
+        First_Opened            = "First Opened"
+        Last_Opened             = "Last Opened"
+        Total_Sent              = "Total Sent"
+        Total_Opened            = "Total Opened"
+        Open_Rate               = "Open Rate (%)";
+run;
+
+title1 "Full Report - Product Code Level with Timestamps";
+proc print data=FULL_REPORT noobs label;
+    label
+        Campaign                = "Campaign"
+        Product_Code            = "Product Code"
+        Total_Through_Optimise  = "Total Through Optimise"
+        Loaded                  = "Loaded"
+        Failed                  = "Failed"
+        First_Batch_Date        = "First Batch Date"
+        First_Batch_Time        = "First Batch Time"
+        Last_Batch_Date         = "Last Batch Date"
+        Last_Batch_Time         = "Last Batch Time"
+        First_Sent_Adobe        = "First Sent to Adobe"
+        First_Sent_Time         = "First Send Time"
+        Last_Sent_Adobe         = "Last Sent to Adobe"
+        Last_Sent_Time          = "Last Send Time"
+        First_Opened            = "First Opened"
+        Last_Opened             = "Last Opened"
+        Sent                    = "Sent"
+        Opened                  = "Opened"
+        Not_Opened              = "Not Opened"
+        Open_Rate               = "Open Rate (%)"
+        Loaded_Not_Yet_Sent     = "Loaded Not Yet Sent";
+run;
+
+title1 "Failed Records - Drop Reason Breakdown with Timestamps";
+proc print data=FAILED_BREAKDOWN noobs label;
+    label
+        Campaign_Label  = "Campaign"
+        Product_Code    = "Product Code"
+        Drop_Reason     = "Drop Reason"
+        Count           = "Count"
+        First_Seen      = "First Seen"
+        Last_Seen       = "Last Seen";
+run;
+
+title;
