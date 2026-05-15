@@ -1,37 +1,7 @@
-libname WH_ENH "/data/fnbinsurance_warehouse/data/life/03 Enhanced";
+%include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
 
 proc sql;
-create table apn_lead_summary as
-select
-    a.Campaign_Name,
-    a.product_code_to_adobe,
-
-    /* ETB / NTB */
-    case 
-        when b.CustRecOpenDate >= a.date_to_adobe 
-        then "New to Bank"
-        else "Existing to Bank"
-    end as Bank_Relationship,
-
-    /* Month */
-    month(a.date_to_adobe) as Month_Num,
-    year(a.date_to_adobe)  as Year_Num,
-
-    count(*) as Leads
-
-from STI_PBI.APNS_DATA a
-left join WH_ENH.CUST b
-    on input(a.cust_no, 8.) = b.UCN   /* cust_no is char, UCN is numeric */
-where a.Optimize = "Sent"
-group by
-    a.Campaign_Name,
-    a.product_code_to_adobe,
-    calculated Bank_Relationship,
-    month(a.date_to_adobe),
-    year(a.date_to_adobe)
-order by
-    a.Campaign_Name,
-    Year_Num,
-    Month_Num,
-    calculated Bank_Relationship;
+select libname, path 
+from dictionary.libnames
+where libname = "WH_ENH";
 quit;
