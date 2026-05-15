@@ -1,58 +1,29 @@
-
-
-Obs
-
-CUST_NO
-
-
-
-1
-56519838 
-
-2
-56519888 
-
-3
-56519933 
-
-4
-56520002 
-
-5
-56520041 
-
-
-
-
-
-
-
-
-
-
-
-
-Obs
-
-Cust_No
-
-UCN
-
-CustRecOpenDate
-
-
-
-1
-118 118 . 
-
-2
-121 121 . 
-
-3
-122 122 . 
-
-4
-123 123 . 
-
-5
-131 131 01AUG1997 
+proc sql;
+create table apn_lead_summary as
+select
+    a.Campaign_Name,
+    a.product_code_to_adobe,
+    case 
+        when b.CustRecOpenDate >= a.date_to_adobe 
+        then "New to Bank"
+        else "Existing to Bank"
+    end as Bank_Relationship,
+    month(a.date_to_adobe) as Month_Num,
+    year(a.date_to_adobe)  as Year_Num,
+    count(*) as Leads
+from STI_PBI.APNS_DATA a
+left join WH_ENH.CUST b
+    on input(strip(a.cust_no), best32.) = b.UCN
+where a.Optimize = "Sent"
+group by
+    a.Campaign_Name,
+    a.product_code_to_adobe,
+    calculated Bank_Relationship,
+    month(a.date_to_adobe),
+    year(a.date_to_adobe)
+order by
+    a.Campaign_Name,
+    Year_Num,
+    Month_Num,
+    calculated Bank_Relationship;
+quit;
