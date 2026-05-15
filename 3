@@ -1,33 +1,11 @@
-proc sql;
-create table apn_lead_summary as
-select
-    a.Campaign_Name,
-    a.product_code_to_adobe,
-    case 
-        when b.CustRecOpenDate >= a.date_to_adobe 
-        then "New to Bank"
-        else "Existing to Bank"
-    end as Bank_Relationship,
-    month(a.date_to_adobe) as Month_Num,
-    year(a.date_to_adobe)  as Year_Num,
-    count(*) as Leads
+proc sql outobs=10;
+select 
+    a.cust_no,
+    input(strip(a.cust_no), best32.) as converted,
+    b.UCN,
+    b.CustRecOpenDate
 from STI_PBI.APNS_DATA a
-left join WH_ENH.CUST b
+inner join WH_ENH.CUST b
     on input(strip(a.cust_no), best32.) = b.UCN
-    and b.period = 202605
-where a.Optimize = "Sent"
-group by
-    a.Campaign_Name,
-    a.product_code_to_adobe,
-    calculated Bank_Relationship,
-    month(a.date_to_adobe),
-    year(a.date_to_adobe)
-order by
-    a.Campaign_Name,
-    Year_Num,
-    Month_Num,
-    calculated Bank_Relationship;
+where b.period = 202605;
 quit;
-
-proc print data=apn_lead_summary;
-run;
