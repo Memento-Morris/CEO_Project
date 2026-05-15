@@ -1,12 +1,7 @@
+proc print data=STI_PBI.APNS_DATA (obs=5);
+    var cust_no;
+run;
 
-Library Name
-
-Pathname
-
-
-WH_ENH /data/fnbinsurance_warehouse/data/life/03 Enhanced 
-WH_ENH /data/fnbinsurance_warehouse/data/life/03 Enhanced 
-WH_ENH /data/fnbinsurance_warehouse/data/life/03 Enhanced 
-WH_ENH /data/fnbinsurance_warehouse/data/life/03 Enhanced 
-WH_ENH /data/fnbinsurance_warehouse/data/life/03 Enhanced 
-WH_ENH /data/fnbinsurance_warehouse/data/life/03 Enhanced 
+proc print data=WH_ENH.CUST (obs=5);
+    var Cust_No UCN CustRecOpenDate;
+run;
