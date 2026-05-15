@@ -1,4 +1,9 @@
 proc sql outobs=10;
-select Campaign_Name, product_code_to_adobe, Optimize, date_to_adobe
-from STI_PBI.APNS_DATA;
+select 
+    a.cust_no,
+    b.UCN,
+    b.CustRecOpenDate
+from STI_PBI.APNS_DATA a
+left join WH_ENH.CUST b
+    on input(strip(a.cust_no), best32.) = b.UCN;
 quit;
