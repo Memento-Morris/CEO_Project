@@ -1,4 +1,8 @@
-proc sql outobs=10;
-select distinct CUST_NO
-from PASS6.CMA02369;
+libname Pass6 "/data/fnb/clb/archive/5_optimise/passed_phase1";
+
+proc sql;
+select memname, crdate
+from dictionary.tables
+where libname = "PASS6"
+order by crdate desc;
 quit;
