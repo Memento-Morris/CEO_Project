@@ -1,7 +1,8 @@
-
-min_ucn
-
-max_ucn
-
-
-118 4.1555E9 
+proc sql outobs=10;
+select 
+    cust_no,
+    length(cust_no)                    as len,
+    strip(cust_no)                     as stripped,
+    input(strip(cust_no), best32.)     as converted
+from STI_PBI.APNS_DATA;
+quit;
