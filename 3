@@ -1,13 +1,32 @@
-/* grab a few cust_no values from APNS_DATA */
-proc sql outobs=5;
-select distinct cust_no
-from STI_PBI.APNS_DATA;
-quit;
 
-/* now search for those exact values in the warehouse */
-proc sql;
-select UCN, Cust_No, CustRecOpenDate
-from WH_ENH.CUST
-where period = 202605
-  and UCN in (56519838, 56519888, 56519933, 56520002, 56520041);
-quit;
+
+CUST_NO
+
+
+3.4435E9 
+3.5315E9 
+3.5533E9 
+65365152 
+3.7304E9 
+
+
+
+
+
+
+
+
+
+
+UCN
+
+Cust_No
+
+CustRecOpenDate
+
+
+56519838 56519838 05JUN2017 
+56519888 56519888 05JUN2017 
+56519933 56519933 05JUN2017 
+56520002 56520002 05JUN2017 
+56520041 56520041 05JUN2017 
