@@ -1,11 +1,13 @@
-proc sql outobs=10;
-select 
-    a.cust_no,
-    input(strip(a.cust_no), best32.) as converted,
-    b.UCN,
-    b.CustRecOpenDate
-from STI_PBI.APNS_DATA a
-inner join WH_ENH.CUST b
-    on input(strip(a.cust_no), best32.) = b.UCN
-where b.period = 202605;
+/* grab a few cust_no values from APNS_DATA */
+proc sql outobs=5;
+select distinct cust_no
+from STI_PBI.APNS_DATA;
+quit;
+
+/* now search for those exact values in the warehouse */
+proc sql;
+select UCN, Cust_No, CustRecOpenDate
+from WH_ENH.CUST
+where period = 202605
+  and UCN in (56519838, 56519888, 56519933, 56520002, 56520041);
 quit;
