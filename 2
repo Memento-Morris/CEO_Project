@@ -1,189 +1,27 @@
-
-
-delivery_code
-
-freq
-
-
-9910.7563 133476 
-7990.10208 105576 
-8550.7549 2 
-
-
-
-
-The CONTENTS Procedure
-
-
-
-
-
-
-
-
-
-
-Data Set Name
-APNS.APN_SENDS_AND_FEEDBACK 
-Observations
-. 
-
-Member Type
-VIEW 
-Variables
-29 
-
-Engine
-SQLVIEW 
-Indexes
-0 
-
-Created
-12/09/2025 09:46:19 
-Observation Length
-2581 
-
-Last Modified
-12/09/2025 09:46:19 
-Deleted Observations
-0 
-
-Protection
-  
-Compressed
-NO 
-
-Data Set Type
-  
-Sorted
-NO 
-
-Label
-  
- 
-  
-
-Data Representation
-Default 
- 
-  
-
-Encoding
-Default 
- 
-  
-
-
-
-
-
-
-
-
-
-
-
-
-Alphabetic List of Variables and Attributes
-
-
-#
-
-Variable
-
-Type
-
-Len
-
-Format
-
-Informat
-
-
-
-7
-CREATION_DATE Num 8 DATETIME18. DATETIME18. 
-
-10
-DISTRIBUTION_CHANNEL Char 30 $30. $17. 
-
-8
-DISTRIBUTION_DATE Num 8 DATETIME18. DATETIME18. 
-
-6
-LOAD_DATE Num 8 DATETIME18. DATETIME18. 
-
-1
-MFT_File_Name Char 49 $49.   
-
-3
-PRIMARY_KEY Num 8 BEST32. BEST10. 
-
-14
-adobe_processed_status Char 46 $46. $14. 
-
-27
-answer Char 815 $815.   
-
-5
-campaign_label Char 116 $116. $52. 
-
-2
-cust_no Num 8 BEST32. BEST10. 
-
-26
-date_received Num 8 DATETIME18. DATETIME18. 
-
-13
-delivery_code Char 35 $35. $11. 
-
-9
-distribution_status Char 43 $43. $18. 
-
-16
-failure_type Char 26 $26.   
-
-21
-feedback_option_1 Char 64 $64.   
-
-22
-feedback_option_2 Char 64 $64.   
-
-23
-feedback_option_3 Char 64 $64.   
-
-24
-feedback_option_4 Char 63 $63.   
-
-25
-feedback_option_5 Char 65 $65.   
-
-18
-last_modified_date Num 8 DATETIME18.   
-
-29
-message_id Char 36 $36.   
-
-19
-mucn Char 28 $28.   
-
-4
-product_code Char 29 $29. $16. 
-
-20
-question Char 264 $264.   
-
-17
-reason Char 26 $26.   
-
-11
-routing Char 24 $24.   
-
-12
-routing_type Char 56 $56. $32. 
-
-15
-status_description Char 527 $527.   
-
-28
-unique_identifier Char 34 $34.   
+proc sql;
+    select distinct adobe_processed_status,
+           count(*) as freq
+    from APNS.apn_sends_and_feedback
+    where product_code in (&product_list.)
+    group by adobe_processed_status
+    order by freq desc;
+quit;
+
+proc sql;
+    select distinct distribution_status,
+           adobe_processed_status,
+           count(*) as freq
+    from APNS.apn_sends_and_feedback
+    where product_code in (&product_list.)
+    group by distribution_status, adobe_processed_status
+    order by freq desc;
+quit;
+
+proc sql outobs=20;
+    select distinct substr(status_description, 1, 100) as status_desc_sample,
+           count(*) as freq
+    from APNS.apn_sends_and_feedback
+    where product_code in (&product_list.)
+    group by calculated status_desc_sample
+    order by freq desc;
+quit;
