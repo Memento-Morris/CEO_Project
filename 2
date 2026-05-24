@@ -1,16 +1,27 @@
-/* Check what distinct values distribution_status actually holds */
-proc sql;
-    select distinct distribution_status,
-           count(*) as freq
-    from STI_PBI.APN_POT
-    group by distribution_status
-    order by freq desc;
-quit;
-proc sql;
-    select distinct distribution_status,
-           count(*) as freq
-    from STI_PBI.APN_POT
-    where Client = "Sent to Client"
-    group by distribution_status
-    order by freq desc;
-quit;
+
+
+distribution_status
+
+freq
+
+
+  15885801 
+Sent 162996 
+Sent to the service provider 141807 
+Pending 42823 
+Delivery canceled 200 
+
+
+
+
+
+
+
+
+
+distribution_status
+
+freq
+
+
+Sent 162996 
