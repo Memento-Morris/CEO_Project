@@ -1,27 +1,52 @@
-proc sql;
-    select distinct adobe_processed_status,
-           count(*) as freq
-    from APNS.apn_sends_and_feedback
-    where product_code in (&product_list.)
-    group by adobe_processed_status
-    order by freq desc;
-quit;
 
-proc sql;
-    select distinct distribution_status,
-           adobe_processed_status,
-           count(*) as freq
-    from APNS.apn_sends_and_feedback
-    where product_code in (&product_list.)
-    group by distribution_status, adobe_processed_status
-    order by freq desc;
-quit;
 
-proc sql outobs=20;
-    select distinct substr(status_description, 1, 100) as status_desc_sample,
-           count(*) as freq
-    from APNS.apn_sends_and_feedback
-    where product_code in (&product_list.)
-    group by calculated status_desc_sample
-    order by freq desc;
-quit;
+adobe_processed_status
+
+freq
+
+
+Pause requested 118549 
+Finished 72836 
+Ready to be delivered 47053 
+Paused 516 
+Stopped 100 
+
+
+
+
+
+
+
+
+
+
+distribution_status
+
+adobe_processed_status
+
+freq
+
+
+Sent to the service provider Pause requested 93429 
+Sent Finished 72836 
+Pending Ready to be delivered 47053 
+Pending Pause requested 25120 
+Sent Paused 516 
+Delivery canceled Stopped 100 
+
+
+
+
+
+
+
+
+
+status_desc_sample
+
+freq
+
+
+Records processed. 159699 
+Records processed successfully. 46454 
+  32901 
