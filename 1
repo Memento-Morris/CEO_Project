@@ -1,834 +1,642 @@
-/* ============================================================
-   JOB:      STI_CA_D_APNS_DATA
-   STATUS:   PROD
-   PURPOSE:  Operational - APN Campaign Data to Adobe
-   ============================================================ */
-%put TAG:JobName1=STI_CA_D_APNS_DATA;
-%put TAG:JobName2=Daily;
-%put TAG:JobCategory=Campaigns;
-%put TAG:JobPurpose=Operational;
-%put TAG:JobPriority=Medium;
-%put TAG:JobStatus=Prod;
-
-proc printto log="/data/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Logs/BGA/APN_DATA/STI_CA_D_APNS_DATA.log" new;
-run;
-
-%include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
-
-
-/* ============================================================
-   *** CAMPAIGN CONFIGURATION - ONLY SECTION YOU NEED TO EDIT ***
-   To add a new campaign:
-     1. Add prefix:   %let camp_21 = CMAxxxxx;
-     2. Increment camp_count by 1
-     3. Add product code(s) to product_codes list
-   ============================================================ */
-
-%let camp_01  = CMA02369;
-%let camp_02  = CMA01988;
-%let camp_03  = CMA01986;
-%let camp_04  = CMA04324;
-%let camp_05  = CMA02775;
-%let camp_06  = CMA06753;
-%let camp_07  = CMA02460;
-%let camp_08  = CMA04589;
-%let camp_09  = CMA03791;
-%let camp_10  = CMA04004;
-%let camp_11  = CMA08261;
-%let camp_12  = CMA08252;
-%let camp_13  = CMA08473;
-%let camp_14  = CMA09320;
-%let camp_15  = CMA09319;
-%let camp_16  = CMA09878;
-%let camp_17  = CMA10184;
-%let camp_18  = CMA03742;
-%let camp_19  = CMA10251;
-%let camp_20  = CMA10252;
-
-/* ADD NEW CAMPAIGNS ABOVE THIS LINE */
-
-%let camp_count = 20; /* <- increment when adding a campaign */
-
-%let product_codes =
-  "CMA01986V01M01","CMA01988V01M01","CMA02369V01M01","CMA03742V01M01",
-  "CMA04324V01M01","CMA02775V01M01","CMA02775V02M02","CMA06753V01M01",
-  "CMA02460V01M02","CMA02460V01M03","CMA04589V01M02","CMA03791V01M01",
-  "CMA04004V01M01","CMA08473V02M02","CMA09319V01M01","CMA09320V01M01",
-  "CMA09878V01M02","CMA08261V01M01","CMA08252V01M01","CMA10251V01M01",
-  "CMA10184V01M01","CMA10184V02M09","CMA10184V03M17","CMA10252V01M01",
-  "CMA10184V01M02","CMA10184V02M10","CMA10184V03M18",
-  "CMA10184V01M03","CMA10184V02M11","CMA10184V03M19",
-  "CMA10184V01M04","CMA10184V02M12","CMA10184V03M20",
-  "CMA10184V01M05","CMA10184V02M13","CMA10184V03M21",
-  "CMA10184V01M06","CMA10184V02M14","CMA10184V03M22",
-  "CMA10184V01M07","CMA10184V02M15","CMA10184V03M23",
-  "CMA10184V01M08","CMA10184V02M16","CMA10184V03M24"
-;
-
-/* ============================================================
-   END OF CAMPAIGN CONFIGURATION
-   ============================================================ */
-
-
-/* ============================================================
-   SECTION 1: CAPTURE PRE-RUN STATE
-   ============================================================ */
-
-proc sql outobs=1;
-create table datetime_old as
-select  date_to_adobe as Date format date9.,
-        time_created_to_adobe as time format time9.
-from    STI_PBI.APNS_DATA
-where   time_created_to_adobe
-            in (select max(time_created_to_adobe)
-                from STI_PBI.APNS_DATA
-                where date_to_adobe in
-                    (select max(date_to_adobe)
-                     from STI_PBI.APNS_DATA));
-run;
-
-proc sql;
-select count(CUST_NO) as Number_of_old_records
-into   :Old_records trimmed
-from   STI_PBI.APNS_DATA;
-quit;
-
-%put &Old_records;
-
-proc sql;
-select  date as max_old_records_date format date9.,
-        time as old_olds_records_time format time9.
-into    :Old_date trimmed, :Old_time trimmed
-from    datetime_old;
-quit;
-
-%put &Old_date &Old_time;
-
-
-/* ============================================================
-   SECTION 2: ASSIGN LIBNAMES
-   ============================================================ */
-
-libname Pass6    "/data/fnb/clb/archive/5_optimise/passed_phase1";
-libname APN_Pass "/data/fnb/clb/prod_data/5_optimise/passed_phase1";
-libname Drop6    "/data/fnb/clb/archive/5_optimise/dropped_phase1";
-libname APN_Drop "/data/fnb/clb/prod_data/5_optimise/dropped_phase1";
-
-
-/* ============================================================
-   SECTION 3: CAMPAIGN TABLE DISCOVERY
-   FIX: Replaced ranged into :table1 - trimmed which was silently
-        failing on this SAS version. Tables names are now stored
-        in lookup datasets and read row by row inside macros.
-   ============================================================ */
-
-%macro build_campaign_filter(libref, outds);
-  proc sql;
-    create table &outds as
-    select *
-    from dictionary.tables
-    where libname = "&libref"
-      and (
-        %do i = 1 %to &camp_count.;
-          %if &i > 1 %then or;
-          memname like "&&camp_&i..%"
-        %end;
-      );
-  quit;
-%mend;
-
-%build_campaign_filter(PASS6,    uppend_months_campaigns)
-%build_campaign_filter(APN_PASS, uppend_weeek_campaigns)
-
-/* Build lookup tables instead of ranged macro variables */
-proc sql noprint;
-  create table monthly_table_list as
-  select distinct memname, crdate
-  from uppend_months_campaigns
-  order by memname;
-
-  select count(*) into :monthly_count trimmed
-  from monthly_table_list;
-quit;
-
-proc sql noprint;
-  create table weekly_table_list as
-  select distinct memname, crdate
-  from uppend_weeek_campaigns
-  order by memname;
-
-  select count(*) into :weekly_count trimmed
-  from weekly_table_list;
-quit;
-
-%put Monthly tables found: &monthly_count;
-%put Weekly tables found:  &weekly_count;
-
-
-/* ============================================================
-   SECTION 4: ITERATION MACROS
-   FIX: All macros now read table names from lookup datasets
-        instead of relying on ranged macro variables.
-   FIX: 3-digit time padding applied in all 4 macros.
-   ============================================================ */
-
-%macro iterate_week_drop;
-  proc datasets library=work nolist;
-    delete TABLESdropweek_:;
-  quit;
-
-  %local i tname tdate;
-  %do i = 1 %to &weekly_count;
-    proc sql noprint;
-      select memname, crdate
-      into   :tname trimmed, :tdate trimmed
-      from   weekly_table_list
-      where  monotonic() = &i;
-    quit;
-
-    %put Processing week_drop &i of &weekly_count: &tname;
-
-    data TABLESdropweek_&i;
-      set APN_DROP.&tname
-          (keep=CUST_NO Product_Code Drop_Reason sub_segment
-                Campaign_Name Brand MUCN);
-      length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
-      _memname_ = "&tname";
-      if index(_memname_,'_') > 0 then do;
-        _date_raw_ = scan(_memname_, -2, '_');
-        _time_raw_ = scan(_memname_, -1, '_');
-        if length(strip(_time_raw_)) = 3 then
-          _time_raw_ = cats('0', strip(_time_raw_));
-        Date_to_adobe = input(_date_raw_, YYMMDD8.);
-        Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
-                                           substr(_time_raw_,3,2),':00'),
-                                      HHMMSS8.);
-      end;
-      else do;
-        _date_raw_ = substr(_memname_, 16, 8);
-        Date_to_adobe = input(_date_raw_, YYMMDD10.);
-        Time_created_to_adobe = input(substr("&tdate",9,8), HHMMSS.);
-      end;
-      format Date_to_adobe date9.;
-      format Time_created_to_adobe time9.;
-      rename CUST_NO = cust_no
-             MUCN    = mucn
-             Brand   = brand;
-      drop _memname_ _date_raw_ _time_raw_;
-    run;
-  %end;
-%mend;
-%iterate_week_drop
-
-
-%macro iterate_week_pass;
-  proc datasets library=work nolist;
-    delete TABLESpassweek_:;
-  quit;
-
-  %local i tname tdate;
-  %do i = 1 %to &weekly_count;
-    proc sql noprint;
-      select memname, crdate
-      into   :tname trimmed, :tdate trimmed
-      from   weekly_table_list
-      where  monotonic() = &i;
-    quit;
-
-    %put Processing week_pass &i of &weekly_count: &tname;
-
-    data TABLESpassweek_&i;
-      set APN_PASS.&tname
-          (keep=CUST_NO Product_Code Drop_Reason sub_segment
-                Campaign_Name Brand MUCN);
-      length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
-      _memname_ = "&tname";
-      if index(_memname_,'_') > 0 then do;
-        _date_raw_ = scan(_memname_, -2, '_');
-        _time_raw_ = scan(_memname_, -1, '_');
-        if length(strip(_time_raw_)) = 3 then
-          _time_raw_ = cats('0', strip(_time_raw_));
-        Date_to_adobe = input(_date_raw_, YYMMDD8.);
-        Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
-                                           substr(_time_raw_,3,2),':00'),
-                                      HHMMSS8.);
-      end;
-      else do;
-        _date_raw_ = substr(_memname_, 16, 8);
-        Date_to_adobe = input(_date_raw_, YYMMDD10.);
-        Time_created_to_adobe = input(substr("&tdate",9,8), HHMMSS.);
-      end;
-      format Date_to_adobe date9.;
-      format Time_created_to_adobe time9.;
-      rename CUST_NO = cust_no
-             MUCN    = mucn
-             Brand   = brand;
-      drop _memname_ _date_raw_ _time_raw_;
-    run;
-  %end;
-%mend;
-%iterate_week_pass
-
-data Weekly;
-  set TABLESpassweek_:;
-run;
-
-
-%macro iterate_monthly_pass;
-  proc datasets library=work nolist;
-    delete TABLESpass6_:;
-  quit;
-
-  %local i tname tdate;
-  %do i = 1 %to &monthly_count;
-    proc sql noprint;
-      select memname, crdate
-      into   :tname trimmed, :tdate trimmed
-      from   monthly_table_list
-      where  monotonic() = &i;
-    quit;
-
-    %put Processing monthly_pass &i of &monthly_count: &tname;
-
-    data TABLESpass6_&i;
-      set PASS6.&tname
-          (keep=CUST_NO Product_Code Drop_Reason sub_segment
-                Campaign_Name Brand MUCN);
-      length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
-      _memname_ = "&tname";
-      if index(_memname_,'_') > 0 then do;
-        _date_raw_ = scan(_memname_, -2, '_');
-        _time_raw_ = scan(_memname_, -1, '_');
-        if length(strip(_time_raw_)) = 3 then
-          _time_raw_ = cats('0', strip(_time_raw_));
-        Date_to_adobe = input(_date_raw_, YYMMDD8.);
-        Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
-                                           substr(_time_raw_,3,2),':00'),
-                                      HHMMSS8.);
-      end;
-      else do;
-        _date_raw_ = substr(_memname_, 16, 8);
-        Date_to_adobe = input(_date_raw_, YYMMDD10.);
-        Time_created_to_adobe = input(substr("&tdate",9,8), HHMMSS.);
-      end;
-      format Date_to_adobe date9.;
-      format Time_created_to_adobe time9.;
-      rename CUST_NO = cust_no
-             MUCN    = mucn
-             Brand   = brand;
-      drop _memname_ _date_raw_ _time_raw_;
-    run;
-  %end;
-%mend;
-%iterate_monthly_pass
-
-
-%macro iterate_monthly_drop;
-  proc datasets library=work nolist;
-    delete TABLESdrop6_:;
-  quit;
-
-  %local i tname tdate;
-  %do i = 1 %to &monthly_count;
-    proc sql noprint;
-      select memname, crdate
-      into   :tname trimmed, :tdate trimmed
-      from   monthly_table_list
-      where  monotonic() = &i;
-    quit;
-
-    %put Processing monthly_drop &i of &monthly_count: &tname;
-
-    data TABLESdrop6_&i;
-      set DROP6.&tname
-          (keep=CUST_NO Product_Code Drop_Reason sub_segment
-                Campaign_Name Brand MUCN);
-      length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
-      _memname_ = "&tname";
-      if index(_memname_,'_') > 0 then do;
-        _date_raw_ = scan(_memname_, -2, '_');
-        _time_raw_ = scan(_memname_, -1, '_');
-        if length(strip(_time_raw_)) = 3 then
-          _time_raw_ = cats('0', strip(_time_raw_));
-        Date_to_adobe = input(_date_raw_, YYMMDD8.);
-        Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
-                                           substr(_time_raw_,3,2),':00'),
-                                      HHMMSS8.);
-      end;
-      else do;
-        _date_raw_ = substr(_memname_, 16, 8);
-        Date_to_adobe = input(_date_raw_, YYMMDD10.);
-        Time_created_to_adobe = input(substr("&tdate",9,8), HHMMSS.);
-      end;
-      format Date_to_adobe date9.;
-      format Time_created_to_adobe time9.;
-      rename CUST_NO = cust_no
-             MUCN    = mucn
-             Brand   = brand;
-      drop _memname_ _date_raw_ _time_raw_;
-    run;
-  %end;
-%mend;
-%iterate_monthly_drop
-
-
-/* ============================================================
-   SECTION 5: COMBINE ALL CAMPAIGN DATA
-   ============================================================ */
-
-data CAMPAIGNS_TO_ADOBE;
-  set TABLESpass6_:
-      TABLESdrop6_:
-      TABLESdropweek_:
-      Weekly;
-run;
-
-proc sql;
-  select count(*) as CAMPAIGNS_TO_ADOBE_rows
-  from CAMPAIGNS_TO_ADOBE;
-quit;
-
-
-/* ============================================================
-   SECTION 6: OPTIMISE AGGREGATION
-   ============================================================ */
-
-proc sql;
-create table Optimize_Aggregiated as
-select count(*) as Optimize_Leads,
-       drop_reason, product_code, sub_segment, campaign_name, date_to_adobe
-from CAMPAIGNS_TO_ADOBE
-group by drop_reason, product_code, sub_segment, campaign_name, date_to_adobe;
-quit;
-
-
-/* ============================================================
-   SECTION 7: ADOBE SENDS
-   FIX: Removed UCN from keep list - does not exist in source view.
-   ============================================================ */
-
-libname REP  "/data/fnb/clb/prod_data/7_tracking/Reporting";
-libname abcd "/data/fnb/d2_deepdata/reporting_data";
-libname APNS "/data/fnb/clb/prod_data/7_tracking_views/Reporting_views";
-
-proc sql;
-select min(Date_to_adobe) as Date_to_adobe_min format date9.
-into   :min_date trimmed
-from CAMPAIGNS_TO_ADOBE;
-quit;
-
-%put &min_date.;
-
-data APNS_sends_campaigns (keep=cust_no mucn product_code Date_loaded
-                                Time Drop_reason brand Delivery_code);
-  set APNS.apn_sends_and_feedback;
-  where product_code in (&product_codes.)
-    and datepart(Distribution_date) >= "&min_date."d;
-  Brand         = substr(mucn, 1, 3);
-  Drop_reason   = "";
-  Date_loaded   = datepart(Distribution_date);
-  format Date_loaded date9.;
-  Time          = timepart(Distribution_date);
-  format Time time9.;
-  Delivery_code = UPCASE(Delivery_code);
-run;
-
-
-/* ============================================================
-   SECTION 8: ADOBE DROP-OFFS
-   ============================================================ */
-
-data Adobe_recent_drops;
-  set APNS.adobe_drop_offs_data;
-  where product_code in (&product_codes.)
-    and datepart(Date_loaded) >= "&min_date."d;
-  Date_loaded   = datepart(Date_loaded);
-  format Date_loaded date9.;
-  Time          = timepart(Date_loaded);
-  format Time time9.;
-  Brand         = substr(mucn, 1, 3);
-  Delivery_code = "                    ";
-run;
-
-
-/* ============================================================
-   SECTION 9: COMBINE ADOBE DATA
-   ============================================================ */
-
-data adobe_to_clients_step;
-  set Adobe_recent_drops
-      APNS_sends_campaigns;
-run;
-
-data adobe_to_clients_final (drop=etl_source_data etl_date daymonth);
-  set adobe_to_clients_step;
-  if drop_reason  = "" then success = 1; else success = 0;
-  if drop_reason ne "" then drop    = 1; else drop    = 0;
-run;
-
-
-/* ============================================================
-   SECTION 10: OPTIMISE TABLE PREP FOR JOIN
-   ============================================================ */
-
-data campaigns_to_adobe_step (keep=Optimize sub_segment Drop_reason product_code
-                                   cust_no Date_to_adobe Time_created_to_adobe
-                                   Campaign_name mucn success_to_adobe drop_to_adobe);
-  set campaigns_to_adobe;
-  if drop_reason ne "" then optimize = drop_reason; else optimize = "Sent";
-  if drop_reason  = "" then success_to_adobe = 1;   else success_to_adobe = 0;
-  if drop_reason ne "" then drop_to_adobe = 1;      else drop_to_adobe = 0;
-run;
-
-proc sql;
-create table adobe_leads as
-select count(*) as adobe_leads,
-       product_code, sub_segment, campaign_name, date_to_adobe, optimize
-from campaigns_to_adobe_step
-group by product_code, sub_segment, campaign_name, date_to_adobe, optimize
-order by date_to_adobe;
-quit;
-
-proc sql;
-create table leads_summary as
-select sum(adobe_leads) as Leads_Total,
-       product_code, campaign_name, date_to_adobe, optimize
-from adobe_leads
-group by product_code, campaign_name, date_to_adobe, optimize;
-quit;
-
-proc sql;
-create table adobe_summary_client as
-select count(product_code) as Client_Sent,
-       product_code, date_loaded, drop_reason
-from adobe_to_clients_final
-group by product_code, date_loaded, drop_reason;
-quit;
-
-proc sql;
-create table optimize_adobe_sum as
-select *
-from leads_summary a
-left join adobe_summary_client b
-  on a.product_code = b.product_code
-where a.date_to_adobe <= b.date_loaded
-order by date_to_adobe, date_loaded desc;
-quit;
-
-data optimize_adobe_sum_2;
-  set optimize_adobe_sum;
-  day_diff = intck('day', date_to_adobe, date_loaded);
-run;
-
-proc sql;
-create table optimize_adobe_sum_3 as
-select *
-from optimize_adobe_sum_2
-group by product_code, date_to_adobe
-having min(intck('day', date_to_adobe, date_loaded));
-quit;
-
-
-/* ============================================================
-   SECTION 11: RENAME COLUMNS FOR FINAL JOIN
-   FIX: Removed UCN fallback - column does not exist in source.
-   ============================================================ */
-
-data campaigns_to_adobe_renamed;
-  set campaigns_to_adobe_step;
-  rename Drop_Reason  = Drop_reason_to_adobe;
-  rename mucn         = mucn_to_adobe;
-  rename product_code = product_code_to_adobe;
-run;
-
-data adobe_to_clients_step (drop=success drop);
-  set adobe_to_clients_final;
-  if upcase(delivery_code) = "TEST"  then Adobe  = "TEST";
-  else if delivery_code ne ""        then Adobe  = "      Loaded                                    ";
-  else Adobe = drop_reason;
-
-  if upcase(delivery_code) = "TEST"  then Client = "TEST";
-  else if delivery_code ne ""        then Client = "      Sent                                              ";
-  else Client = drop_reason;
-run;
-
-proc sql;
-create table adobe_delivery_tes as
-select distinct Cust_no, date_loaded, product_code, "TEST" as testindicator
-from adobe_to_clients_step
-where delivery_code = "TEST";
-quit;
-
-proc sql;
-create table adobe_final as
-select a.*, b.testindicator
-from adobe_to_clients_step a
-left join adobe_delivery_tes b
-  on  a.cust_no      = b.Cust_no
-  and a.date_loaded  = b.date_loaded
-  and a.product_code = b.product_code;
-quit;
-
-data adobe_final_table_clients;
-  set adobe_final;
-  if strip(testindicator) = "TEST" then do;
-    testindicator = "TEST";
-    Adobe  = "TEST";
-    Client = "TEST";
-  end;
-  else testindicator = "Actual";
-  rename cust_no = cust_no2;
-run;
-
-
-/* ============================================================
-   SECTION 12: FINAL JOIN - OPTIMISE + ADOBE
-   FIX 1: BETWEEN condition corrected.
-   FIX 2: missing() used for numeric cust_no2 and date_loaded.
-   FIX 3: nodupkey sort replaces broken inner join dedup.
-   ============================================================ */
-
-proc sql;
-create table joining as
-select *
-from campaigns_to_adobe_renamed a
-left join adobe_final_table_clients b
-  on  a.cust_no              = b.cust_no2
-  and a.product_code_to_adobe = b.product_code
-  and (b.date_loaded between a.date_to_adobe and a.date_to_adobe + 5);
-quit;
-
-data APNS_DATA (drop=Time product_code mucn mucn_to_adobe
-                     success_to_adobe drop_to_adobe);
-  set joining;
-  if missing(Cust_no2) and Optimize = "Sent"
-    then Adobe = "Not loaded into Adobe within 5 days";
-  if missing(cust_no2) and Optimize = "Sent"
-    and intck('day', date_to_adobe, today()) <= 5
-    and missing(Date_loaded)
-    then Adobe = "Sending to Adobe";
-  date_Diff = intck('day', date_to_adobe, date_loaded);
-run;
-
-proc sort data=APNS_DATA;
-  by cust_no product_code_to_adobe date_to_adobe descending date_loaded;
-run;
-
-proc sort data=APNS_DATA nodupkey
-  out=APNS_Data_Final;
-  by cust_no product_code_to_adobe date_to_adobe;
-run;
-
-data APNS_DATA;
-  set APNS_Data_Final;
-run;
-
-
-/* ============================================================
-   SECTION 13: LOAD TO PRODUCTION - WITH ZERO-ROW SAFETY GATE
-   ============================================================ */
-
-%macro Loadtable(Table);
-  %if %sysfunc(exist(&table.)) %then %do;
-
-    proc sql noprint;
-      select count(*) into :new_row_count trimmed
-      from &Table.;
-    quit;
-
-    %if &new_row_count = 0 %then %do;
-      %put ERROR: =====================================================;
-      %put ERROR: &Table. has ZERO rows - aborting production load.;
-      %put ERROR: STI_PBI.&Table. has NOT been updated.;
-      %put ERROR: Check campaign config, date extraction and joins.;
-      %put ERROR: =====================================================;
-      %abort cancel;
-    %end;
-    %else %do;
-      %put NOTE: &Table. has &new_row_count rows - loading to production.;
-      proc sql;
-        drop table STI_PBI.&Table.;
-        create table STI_PBI.&Table. as
-        select * from &Table.;
-      quit;
-    %end;
-
-  %end;
-  %else %do;
-    %put ERROR: Work table &Table. does not exist - cannot load to production.;
-    %abort cancel;
-  %end;
-%mend;
-
-%Loadtable(APNS_DATA);
-
-
-/* ============================================================
-   SECTION 14: CAPTURE POST-RUN STATE
-   ============================================================ */
-
-proc sql outobs=1;
-create table datetime_new as
-select  date_to_adobe as Date format date9.,
-        time_created_to_adobe as time format time9.
-from    APNS_DATA
-where   time_created_to_adobe
-            in (select max(time_created_to_adobe)
-                from APNS_DATA
-                where date_to_adobe in
-                    (select max(date_to_adobe)
-                     from APNS_DATA));
-run;
-
-proc sql;
-select count(cust_no) as Number_of_new_records
-into   :New_records trimmed
-from   APNS_DATA;
-quit;
-
-proc sql;
-select  date as max_new_records_date format date9.,
-        time as max_new_records_time format time9.
-into    :New_date trimmed, :New_time trimmed
-from    datetime_new;
-quit;
-
-%put &New_date &New_time;
-
-%let Diff_Records = %sysevalf(&New_records - &Old_records);
-%put &Diff_Records;
-
-
-/* ============================================================
-   SECTION 15: EMAIL NOTIFICATION
-   ============================================================ */
-
-%macro EMAIL;
-
-  %if &Old_date = &New_date and &Old_time = &New_time %then %do;
-
-    FILENAME EML EMAIL
-      to   = "Morris.Nkomo@fnb.co.za"
-      cc   = "dlfnbstioperationalanalytics@fnb.co.za"
-      from = 'dlfnbstioperationalanalytics@fnb.co.za';
-    DATA _NULL_;
-      FILE EML;
-      PUT "Hi,";
-      PUT "                                          ";
-      PUT "The APNS script ran with no table update,";
-      PUT "please check log for any possible failure(s)";
-      PUT "                                          ";
-      PUT "Max Date in table before run: &Old_date";
-      PUT "Max Time in table before run: &Old_time";
-      PUT "Max Date in table after run:  &New_date";
-      PUT "Max Time in table after run:  &New_time";
-      PUT "                                                                                   ";
-      PUT "The APN Dashboard does not require refreshing";
-      PUT "                                                                                   ";
-      PUT "Kind Regards";
-      PUT "Morris";
-    RUN;
-
-    FILENAME EML EMAIL
-      from = 'Morris.Nkomo@fnb.co.za';
-    DATA _NULL_;
-      FILE EML;
-      PUT "Hi,";
-      PUT "                                          ";
-      PUT "The APNS script ran with no table update,";
-      PUT "please check log for any possible failure(s)";
-      PUT "                                          ";
-      PUT "Max Date in table before run: &Old_date";
-      PUT "Max Time in table before run: &Old_time";
-      PUT "Max Date in table after run:  &New_date";
-      PUT "Max Time in table after run:  &New_time";
-      PUT "                                                                                   ";
-      PUT "The APN Dashboard does not require refreshing";
-      PUT "                                                                                   ";
-      PUT "Kind Regards";
-      PUT "Morris";
-    RUN;
-
-  %end;
-
-  %else %if &Old_date ne &New_date or &Old_time ne &New_time %then %do;
-
-    FILENAME EML EMAIL
-      to   = "Morris.Nkomo@fnb.co.za"
-      cc   = "dlfnbstioperationalanalytics@fnb.co.za"
-      from = 'dlfnbstioperationalanalytics@fnb.co.za';
-    DATA _NULL_;
-      FILE EML;
-      PUT "Hi,";
-      PUT "APNS script ran with a table update.";
-      PUT "Max Date in table before run: &Old_date";
-      PUT "Max Time in table before run: &Old_time";
-      PUT "Max Date in table after run:  &New_date";
-      PUT "Max Time in table after run:  &New_time";
-      PUT "Records added this run:       &Diff_Records";
-      PUT "                                                                                                 ";
-      PUT "The APN Dashboard can be refreshed";
-      PUT "                                                                                                 ";
-      PUT "Kind Regards";
-      PUT "Morris";
-    RUN;
-
-    FILENAME EML EMAIL
-      from = "Morris.Nkomo@fnb.co.za";
-    DATA _NULL_;
-      FILE EML;
-      PUT "Hi,";
-      PUT "APNS script ran with a table update.";
-      PUT "Max Date in table before run: &Old_date";
-      PUT "Max Time in table before run: &Old_time";
-      PUT "Max Date in table after run:  &New_date";
-      PUT "Max Time in table after run:  &New_time";
-      PUT "Records added this run:       &Diff_Records";
-      PUT "                                                                                                 ";
-      PUT "The APN Dashboard can be refreshed";
-      PUT "                                                                                                 ";
-      PUT "Kind Regards";
-      PUT "Morris";
-    RUN;
-
-  %end;
-
-  %else %if %sysfunc(exist(STI_PBI.APNS_DATA)) = 0 %then %do;
-
-    FILENAME EML EMAIL
-      to      = "Morris.Nkomo@fnb.co.za"
-      cc      = "dlfnbstioperationalanalytics@fnb.co.za"
-      from    = 'dlfnbstioperationalanalytics@fnb.co.za'
-      subject = "Table Missing";
-    DATA _NULL_;
-      FILE EML;
-      PUT "Good Day,";
-      PUT ;
-      PUT "Kindly note that the APN_DATA table is missing, currently investigating the problem.";
-      PUT ;
-      PUT "Kind Regards,";
-      PUT "Morris";
-    RUN;
-
-    FILENAME EML EMAIL
-      from    = "Morris.Nkomo@fnb.co.za"
-      subject = "Table Missing";
-    DATA _NULL_;
-      FILE EML;
-      PUT "Good Day,";
-      PUT ;
-      PUT "Kindly note that the APN_DATA table is missing, currently investigating the problem.";
-      PUT ;
-      PUT "Kind Regards,";
-      PUT "Morris";
-    RUN;
-
-  %end;
-
-%mend email;
-
-options mprint mlogic symbolgen;
-%email;
-
-proc printto;
-run;
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
+from reportlab.lib import colors
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    HRFlowable, PageBreak, KeepTogether
+)
+from reportlab.lib.enums import TA_LEFT, TA_CENTER
+
+OUTPUT = "/mnt/user-data/outputs/FNB_CLC_PowerBI_Spec.pdf"
+
+DARK = colors.HexColor("#1a1a2e")
+BLUE = colors.HexColor("#185FA5")
+LIGHT_BLUE = colors.HexColor("#E6F1FB")
+TEAL = colors.HexColor("#0F6E56")
+LIGHT_TEAL = colors.HexColor("#E1F5EE")
+AMBER = colors.HexColor("#854F0B")
+LIGHT_AMBER = colors.HexColor("#FAEEDA")
+RED = colors.HexColor("#A32D2D")
+LIGHT_RED = colors.HexColor("#FCEBEB")
+MID_GRAY = colors.HexColor("#888780")
+LIGHT_GRAY = colors.HexColor("#F1EFE8")
+BORDER = colors.HexColor("#D3D1C7")
+WHITE = colors.white
+CODE_BG = colors.HexColor("#F4F3EF")
+
+doc = SimpleDocTemplate(
+    OUTPUT, pagesize=A4,
+    leftMargin=2*cm, rightMargin=2*cm,
+    topMargin=2*cm, bottomMargin=2*cm
+)
+
+styles = getSampleStyleSheet()
+
+def S(name, **kw):
+    return ParagraphStyle(name, **kw)
+
+style_title = S("Title2", fontName="Helvetica-Bold", fontSize=22, textColor=WHITE,
+                alignment=TA_CENTER, spaceAfter=4)
+style_subtitle = S("Sub", fontName="Helvetica", fontSize=11, textColor=colors.HexColor("#B5D4F4"),
+                   alignment=TA_CENTER, spaceAfter=0)
+style_h1 = S("H1", fontName="Helvetica-Bold", fontSize=14, textColor=BLUE,
+             spaceBefore=18, spaceAfter=6)
+style_h2 = S("H2", fontName="Helvetica-Bold", fontSize=11, textColor=DARK,
+             spaceBefore=10, spaceAfter=4)
+style_h3 = S("H3", fontName="Helvetica-Bold", fontSize=10, textColor=TEAL,
+             spaceBefore=8, spaceAfter=3)
+style_body = S("Body2", fontName="Helvetica", fontSize=9, textColor=DARK,
+               leading=14, spaceAfter=4)
+style_code = S("Code2", fontName="Courier", fontSize=8, textColor=colors.HexColor("#2C2C2A"),
+               backColor=CODE_BG, leading=13, leftIndent=8, rightIndent=8,
+               borderPadding=(4,6,4,6))
+style_note = S("Note", fontName="Helvetica-Oblique", fontSize=8.5,
+               textColor=AMBER, spaceAfter=4)
+style_label = S("Label", fontName="Helvetica-Bold", fontSize=8,
+                textColor=BLUE, spaceAfter=2)
+
+def cover_block():
+    data = [[Paragraph("FNB CLC Vendor", style_title)],
+            [Paragraph("Power BI Dashboard — Full Specification", style_subtitle)],
+            [Paragraph("Field mapping · DAX measures · Axis placement · Relationships", style_subtitle)]]
+    t = Table(data, colWidths=[17*cm])
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,-1), BLUE),
+        ("ROWBACKGROUNDS", (0,0), (-1,-1), [BLUE]),
+        ("TOPPADDING", (0,0), (-1,0), 24),
+        ("BOTTOMPADDING", (0,-1), (-1,-1), 24),
+        ("TOPPADDING", (0,1), (-1,-1), 4),
+        ("BOTTOMPADDING", (0,0), (-1,-2), 4),
+        ("ROUNDEDCORNERS", [8]),
+    ]))
+    return t
+
+def section_header(text, color=BLUE):
+    bar = Table([[Paragraph(text, S("sh", fontName="Helvetica-Bold", fontSize=13,
+                                   textColor=WHITE))]], colWidths=[17*cm])
+    bar.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,-1), color),
+        ("TOPPADDING", (0,0), (-1,-1), 7),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 7),
+        ("LEFTPADDING", (0,0), (-1,-1), 10),
+    ]))
+    return bar
+
+def sub_header(text):
+    return Paragraph(text, style_h2)
+
+def body(text):
+    return Paragraph(text, style_body)
+
+def note(text):
+    return Paragraph(f"<i>Note: {text}</i>", style_note)
+
+def code_block(text):
+    lines = text.strip().split("\n")
+    rows = [[Paragraph(l.replace("&","&amp;").replace("<","&lt;"), style_code)] for l in lines]
+    t = Table(rows, colWidths=[17*cm])
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,-1), CODE_BG),
+        ("TOPPADDING", (0,0), (-1,-1), 1),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 1),
+        ("LEFTPADDING", (0,0), (-1,-1), 8),
+        ("RIGHTPADDING", (0,0), (-1,-1), 8),
+        ("LINEABOVE", (0,0), (-1,0), 0.5, BORDER),
+        ("LINEBELOW", (0,-1), (-1,-1), 0.5, BORDER),
+        ("LINEBEFORE", (0,0), (0,-1), 3, BLUE),
+    ]))
+    return t
+
+def spec_table(headers, rows, col_widths=None):
+    if col_widths is None:
+        col_widths = [17*cm/len(headers)] * len(headers)
+    head_style = S("TH", fontName="Helvetica-Bold", fontSize=8, textColor=WHITE)
+    cell_style = S("TD", fontName="Helvetica", fontSize=8, textColor=DARK, leading=12)
+    mono_style = S("TM", fontName="Courier", fontSize=7.5, textColor=BLUE, leading=12)
+
+    def fmt(v, is_code=False):
+        s = mono_style if is_code else cell_style
+        return Paragraph(str(v).replace("&","&amp;").replace("<","&lt;"), s)
+
+    tdata = [[Paragraph(h, head_style) for h in headers]]
+    for row in rows:
+        tdata.append([fmt(c, i > 0) for i, c in enumerate(row)])
+
+    t = Table(tdata, colWidths=col_widths, repeatRows=1)
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), BLUE),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [WHITE, LIGHT_GRAY]),
+        ("GRID", (0,0), (-1,-1), 0.4, BORDER),
+        ("TOPPADDING", (0,0), (-1,-1), 5),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+        ("LEFTPADDING", (0,0), (-1,-1), 6),
+        ("RIGHTPADDING", (0,0), (-1,-1), 6),
+        ("VALIGN", (0,0), (-1,-1), "TOP"),
+    ]))
+    return t
+
+def visual_card(tab_color, title, rows):
+    header_style = S("VH", fontName="Helvetica-Bold", fontSize=9, textColor=WHITE)
+    label_style = S("VL", fontName="Helvetica-Bold", fontSize=8, textColor=DARK)
+    val_style = S("VV", fontName="Courier", fontSize=8, textColor=BLUE, leading=12)
+
+    data = [[Paragraph(title, header_style), ""]]
+    for label, val in rows:
+        data.append([Paragraph(label, label_style), Paragraph(val.replace("<","&lt;"), val_style)])
+
+    t = Table(data, colWidths=[5*cm, 12*cm])
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), tab_color),
+        ("SPAN", (0,0), (-1,0)),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [WHITE, LIGHT_GRAY]),
+        ("GRID", (0,0), (-1,-1), 0.4, BORDER),
+        ("TOPPADDING", (0,0), (-1,-1), 5),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+        ("LEFTPADDING", (0,0), (-1,-1), 6),
+        ("RIGHTPADDING", (0,0), (-1,-1), 6),
+        ("VALIGN", (0,0), (-1,-1), "TOP"),
+    ]))
+    return t
+
+story = []
+
+# Cover
+story.append(cover_block())
+story.append(Spacer(1, 0.6*cm))
+story.append(body("This document contains the complete Power BI build specification for the FNB CLC vendor tracking dashboard, "
+                  "derived from the March 2026 monthly reporting pack. It covers data relationships, all required DAX measures, "
+                  "calculated columns, and exact field placement for every visual across all five dashboard tabs."))
+story.append(Spacer(1, 0.3*cm))
+
+# TOC
+toc_rows = [
+    ["1", "Data Model — Relationships"],
+    ["2", "DAX Measures"],
+    ["3", "Calculated Columns"],
+    ["4", "Overview Tab"],
+    ["5", "Payments Tab"],
+    ["6", "Performance Tab"],
+    ["7", "Geysers & Variants Tab"],
+    ["8", "Satisfaction Tab"],
+    ["9", "Tips & Best Practices"],
+]
+toc_style = S("TOC", fontName="Helvetica", fontSize=9, textColor=DARK)
+toc_num = S("TOCN", fontName="Helvetica-Bold", fontSize=9, textColor=BLUE)
+toc_data = [[Paragraph("Contents", S("TCH", fontName="Helvetica-Bold", fontSize=11, textColor=WHITE)),""] ]
+for num, item in toc_rows:
+    toc_data.append([Paragraph(num, toc_num), Paragraph(item, toc_style)])
+toc_t = Table(toc_data, colWidths=[1*cm, 16*cm])
+toc_t.setStyle(TableStyle([
+    ("BACKGROUND",(0,0),(-1,0), DARK),
+    ("SPAN",(0,0),(-1,0)),
+    ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE, LIGHT_GRAY]),
+    ("GRID",(0,0),(-1,-1),0.4,BORDER),
+    ("TOPPADDING",(0,0),(-1,-1),5),
+    ("BOTTOMPADDING",(0,0),(-1,-1),5),
+    ("LEFTPADDING",(0,0),(-1,-1),6),
+]))
+story.append(toc_t)
+story.append(PageBreak())
+
+# ── SECTION 1: RELATIONSHIPS ──────────────────────────────────────────────────
+story.append(section_header("1 · Data Model — Relationships"))
+story.append(Spacer(1, 0.3*cm))
+story.append(body("Set these up first in Power BI Model view before building any visuals. "
+                  "All cross-tab slicers depend on these relationships being active."))
+story.append(Spacer(1, 0.2*cm))
+story.append(spec_table(
+    ["From Table", "From Field", "To Table", "To Field", "Cardinality"],
+    [
+        ["Payment Data", "claim_number", "Claims Data", "CLC Claim Number", "Many-to-One"],
+        ["Complaint Data", "iclaims_ref_no", "Claims Data", "CLC Claim Number", "Many-to-One"],
+        ["Geyser Specific Data", "call_reference_id2", "Claims Data", "CLC Claim Number", "Many-to-One"],
+        ["CSAT Data", "Ref No", "Complaint Data", "Complaint Reference No", "Many-to-One"],
+    ],
+    [4.5*cm, 4*cm, 3.5*cm, 3.5*cm, 2.5*cm]
+))
+story.append(Spacer(1, 0.3*cm))
+story.append(note("Create a dedicated _Measures table (Enter Data → blank table) to keep all DAX measures organised and separate from raw data tables."))
+story.append(PageBreak())
+
+# ── SECTION 2: DAX MEASURES ───────────────────────────────────────────────────
+story.append(section_header("2 · DAX Measures"))
+story.append(Spacer(1, 0.3*cm))
+story.append(body("Create all measures below in your _Measures table. Measures are referenced by name in the visual specs throughout this document."))
+story.append(Spacer(1, 0.2*cm))
+
+dax_blocks = [
+    ("Basic counts & sums", """Total Invoiced Value = SUM('Payment Data'[value])
+
+Avg Payment TAT = AVERAGE('Payment Data'[TAT From Invoice Date Payment Date (Work Days)])
+
+Total Claims = DISTINCTCOUNT('Claims Data'[CLC Claim Number])
+
+Total Estimated = SUM('Claims Data'[Estimate])
+
+Total Paid = SUM('Claims Data'[Paid])
+
+Outstanding Estimate = SUM('Claims Data'[Outstanding Estimate])
+
+Total Complaints = COUNT('Complaint Data'[Complaint Reference No])
+
+Payment Count = COUNT('Payment Data'[id])
+
+Geyser Claim Count = COUNT('Geyser Specific Data'[call_reference_id])
+
+Estimate vs Paid Gap = [Total Estimated] - [Total Paid]"""),
+
+    ("Satisfaction & NPS", """NPS Promoters % =
+DIVIDE(
+    COUNTROWS(FILTER('CSAT Data', 'CSAT Data'[NPS] = "Yes")),
+    COUNTROWS('CSAT Data')
+) * 100
+
+Very Satisfied % =
+DIVIDE(
+    COUNTROWS(FILTER('CSAT Data', 'CSAT Data'[Overall Satisfaction] = "Very Satisfied")),
+    COUNTROWS('CSAT Data')
+) * 100
+
+Not Satisfied % =
+DIVIDE(
+    COUNTROWS(FILTER('CSAT Data', 'CSAT Data'[Overall Satisfaction] = "Not Satisfied")),
+    COUNTROWS('CSAT Data')
+) * 100
+
+SP Complaint % =
+DIVIDE(
+    COUNTROWS(FILTER('Complaint Data', 'Complaint Data'[Complaint Type] = "SP Complaint")),
+    COUNTROWS('Complaint Data')
+) * 100"""),
+
+    ("Payment status filters", """Awaiting Payment Count =
+COUNTROWS(FILTER('Payment Data', 'Payment Data'[status] = "Awaiting Payment"))
+
+Payment Rejected Count =
+COUNTROWS(FILTER('Payment Data', 'Payment Data'[status] = "Payment Rejected"))
+
+Awaiting Invoice Count =
+COUNTROWS(FILTER('Payment Data', 'Payment Data'[status] = "Awaiting Invoice"))"""),
+
+    ("Performance / TAT", """TAT Breach Count =
+COUNTROWS(FILTER('Claims Data',
+    'Claims Data'[Claim Turn Around Time (Working Days)] > 5))
+
+Avg Time To First Action =
+AVERAGE('Claims Data'[Time To First Action (Work Hours)])"""),
+
+    ("Geyser top-N cards", """Top Geyser Brand =
+FIRSTNONBLANK(
+    TOPN(1,
+        SUMMARIZE('Geyser Specific Data',
+            'Geyser Specific Data'[geyser_brand],
+            "Cnt", COUNT('Geyser Specific Data'[call_reference_id])),
+        [Cnt], DESC
+    ), TRUE()
+)
+
+Top Geyser Size =
+FIRSTNONBLANK(
+    TOPN(1,
+        SUMMARIZE('Geyser Specific Data',
+            'Geyser Specific Data'[geyser_size],
+            "Cnt", COUNT('Geyser Specific Data'[call_reference_id])),
+        [Cnt], DESC
+    ), TRUE()
+)"""),
+]
+
+for title, dax in dax_blocks:
+    story.append(sub_header(title))
+    story.append(code_block(dax))
+    story.append(Spacer(1, 0.2*cm))
+
+story.append(PageBreak())
+
+# ── SECTION 3: CALCULATED COLUMNS ─────────────────────────────────────────────
+story.append(section_header("3 · Calculated Columns"))
+story.append(Spacer(1, 0.3*cm))
+story.append(body("Add these as calculated columns directly to the source tables in Power BI Data view."))
+story.append(Spacer(1, 0.2*cm))
+
+story.append(sub_header("Payment Data — TAT Bucket (for TAT distribution chart)"))
+story.append(code_block("""TAT Bucket =
+SWITCH(
+    TRUE(),
+    'Payment Data'[TAT From Invoice Date Payment Date (Work Days)] <= 7,  "1. <=7 days",
+    'Payment Data'[TAT From Invoice Date Payment Date (Work Days)] <= 10, "2. 8-10 days",
+    'Payment Data'[TAT From Invoice Date Payment Date (Work Days)] <= 14, "3. 11-14 days",
+    'Payment Data'[TAT From Invoice Date Payment Date (Work Days)] <= 20, "4. 15-20 days",
+    'Payment Data'[TAT From Invoice Date Payment Date (Work Days)] <= 30, "5. 21-30 days",
+    "6. 31+ days"
+)"""))
+story.append(Spacer(1, 0.25*cm))
+
+story.append(sub_header("Payment Data — Payment Day Sort (fixes Mon-Fri axis order)"))
+story.append(code_block("""Payment Day Sort =
+SWITCH(
+    'Payment Data'[Payment Day],
+    "Monday",    1,
+    "Tuesday",   2,
+    "Wednesday", 3,
+    "Thursday",  4,
+    "Friday",    5,
+    6
+)"""))
+story.append(body("After adding: go to Data view → select Payment Day column → Column Tools → Sort by Column → choose Payment Day Sort."))
+story.append(PageBreak())
+
+# ── SECTION 4: OVERVIEW TAB ───────────────────────────────────────────────────
+story.append(section_header("4 · Overview Tab", BLUE))
+story.append(Spacer(1, 0.3*cm))
+
+overview_cards = [
+    ("KPI Card — Total invoiced value",
+     [("Fields", "[Total Invoiced Value]"),
+      ("Format", "Currency, 2 decimal places"),
+      ("Visual filter", "None")]),
+    ("KPI Card — Avg payment TAT",
+     [("Fields", "[Avg Payment TAT]"),
+      ("Format", "Decimal number, 1 decimal, suffix ' days'"),
+      ("Visual filter", "None")]),
+    ("KPI Card — Active claims",
+     [("Fields", "[Total Claims]"),
+      ("Format", "Whole number"),
+      ("Visual filter", "None")]),
+    ("KPI Card — Total estimated",
+     [("Fields", "[Total Estimated]"),
+      ("Format", "Currency, 0 decimals"),
+      ("Visual filter", "None")]),
+    ("KPI Card — Complaints",
+     [("Fields", "[Total Complaints]"),
+      ("Format", "Whole number"),
+      ("Visual filter", "None")]),
+    ("KPI Card — NPS promoters",
+     [("Fields", "[NPS Promoters %]"),
+      ("Format", "Percentage, 1 decimal"),
+      ("Visual filter", "None")]),
+]
+
+for title, rows in overview_cards:
+    story.append(KeepTogether([visual_card(LIGHT_BLUE, title, rows), Spacer(1,0.18*cm)]))
+
+story.append(Spacer(1, 0.15*cm))
+story.append(visual_card(LIGHT_BLUE, "Donut — Claim state breakdown",
+    [("Legend", "Claims Data[Claim State]"),
+     ("Values", "[Total Claims]"),
+     ("Sort", "Descending by [Total Claims]"),
+     ("Visual filter", "None")]))
+story.append(Spacer(1, 0.18*cm))
+
+story.append(visual_card(LIGHT_BLUE, "Clustered bar — Top peril types",
+    [("Y-axis", "Claims Data[Peril]"),
+     ("X-axis", "[Total Claims]"),
+     ("Sort", "Descending by [Total Claims]"),
+     ("Visual-level filter", "Top N — Top 10 by [Total Claims]")]))
+story.append(Spacer(1, 0.18*cm))
+
+story.append(visual_card(LIGHT_BLUE, "Clustered bar — Province distribution",
+    [("X-axis", "Claims Data[Province]"),
+     ("Y-axis", "[Total Claims]"),
+     ("Sort", "Descending by [Total Claims]"),
+     ("Visual filter", "None")]))
+story.append(PageBreak())
+
+# ── SECTION 5: PAYMENTS TAB ───────────────────────────────────────────────────
+story.append(section_header("5 · Payments Tab", TEAL))
+story.append(Spacer(1, 0.3*cm))
+
+pay_cards = [
+    ("KPI Card — Closed / settled",
+     [("Fields", "[Payment Count]"),
+      ("Visual-level filter", "Payment Data[status] is 'Closed - Settled'")]),
+    ("KPI Card — Awaiting payment",
+     [("Fields", "[Awaiting Payment Count]"),
+      ("Visual-level filter", "None (measure already filters)")]),
+    ("KPI Card — Awaiting invoice",
+     [("Fields", "[Awaiting Invoice Count]"),
+      ("Visual-level filter", "None")]),
+    ("KPI Card — Payment rejected",
+     [("Fields", "[Payment Rejected Count]"),
+      ("Visual-level filter", "None")]),
+]
+for title, rows in pay_cards:
+    story.append(KeepTogether([visual_card(LIGHT_TEAL, title, rows), Spacer(1,0.18*cm)]))
+
+story.append(visual_card(LIGHT_TEAL, "Clustered bar — Payment status distribution",
+    [("Y-axis", "Payment Data[status]"),
+     ("X-axis", "[Payment Count]"),
+     ("Sort", "Descending by [Payment Count]"),
+     ("Visual filter", "None")]))
+story.append(Spacer(1, 0.18*cm))
+
+story.append(visual_card(LIGHT_TEAL, "Clustered bar — Value by peril code",
+    [("Y-axis", "Payment Data[peril_code]"),
+     ("X-axis", "[Total Invoiced Value]"),
+     ("Sort", "Descending by [Total Invoiced Value]"),
+     ("Visual-level filter", "Top N — Top 10 by [Total Invoiced Value]")]))
+story.append(Spacer(1, 0.18*cm))
+
+story.append(visual_card(LIGHT_TEAL, "Clustered bar — TAT distribution",
+    [("X-axis", "Payment Data[TAT Bucket]  <- calculated column from Section 3"),
+     ("Y-axis", "[Payment Count]"),
+     ("Sort", "Ascending by TAT Bucket (number prefix ensures correct order)"),
+     ("Visual filter", "None")]))
+story.append(Spacer(1, 0.18*cm))
+
+story.append(visual_card(LIGHT_TEAL, "Clustered bar — Payment day of week",
+    [("X-axis", "Payment Data[Payment Day]"),
+     ("Y-axis", "[Payment Count]"),
+     ("Sort", "Sort by Payment Day Sort column (see Section 3)"),
+     ("Visual filter", "None")]))
+story.append(PageBreak())
+
+# ── SECTION 6: PERFORMANCE TAB ────────────────────────────────────────────────
+story.append(section_header("6 · Performance Tab", colors.HexColor("#534AB7")))
+story.append(Spacer(1, 0.3*cm))
+
+perf_cards = [
+    ("KPI Card — TAT 0-2 days",
+     [("Fields", "[Total Claims]"),
+      ("Visual-level filter", "Claims Data[Claim TAT Groups] is '1. 0-2'")]),
+    ("KPI Card — TAT 2-5 days",
+     [("Fields", "[Total Claims]"),
+      ("Visual-level filter", "Claims Data[Claim TAT Groups] is '2. 2-5'")]),
+    ("KPI Card — TAT >5 days (breaches)",
+     [("Fields", "[TAT Breach Count]"),
+      ("Visual-level filter", "None (measure already filters)")]),
+    ("KPI Card — Avg time to first action",
+     [("Fields", "[Avg Time To First Action]"),
+      ("Format", "Decimal number, 1 decimal, suffix ' hrs'"),
+      ("Visual-level filter", "None")]),
+]
+for title, rows in perf_cards:
+    story.append(KeepTogether([visual_card(colors.HexColor("#EEEDFE"), title, rows), Spacer(1,0.18*cm)]))
+
+story.append(visual_card(colors.HexColor("#EEEDFE"), "Donut — Claim TAT groups",
+    [("Legend", "Claims Data[Claim TAT Groups]"),
+     ("Values", "[Total Claims]"),
+     ("Colour suggestion", "Green=0-2, Amber=2-5, Red=>5"),
+     ("Visual filter", "None")]))
+story.append(Spacer(1, 0.18*cm))
+
+story.append(visual_card(colors.HexColor("#EEEDFE"), "Donut — In-hours vs out-of-hours",
+    [("Legend", "Claims Data[In Working Hours]"),
+     ("Values", "[Total Claims]"),
+     ("Visual filter", "None")]))
+story.append(Spacer(1, 0.18*cm))
+
+story.append(visual_card(colors.HexColor("#EEEDFE"), "Grouped bar — Estimate vs paid by claim state",
+    [("X-axis", "Claims Data[Claim State]"),
+     ("Y-axis (series 1)", "[Total Estimated]  — label: Estimated"),
+     ("Y-axis (series 2)", "[Total Paid]  — label: Paid"),
+     ("Note", "Adding both measures to Y-axis automatically creates grouped bars"),
+     ("Format Y-axis", "Currency, abbreviated (R0M)")]))
+story.append(PageBreak())
+
+# ── SECTION 7: GEYSERS TAB ────────────────────────────────────────────────────
+story.append(section_header("7 · Geysers & Variants Tab", colors.HexColor("#0F6E56")))
+story.append(Spacer(1, 0.3*cm))
+
+gey_cards = [
+    ("KPI Card — Total geyser claims",
+     [("Fields", "[Geyser Claim Count]"),
+      ("Visual-level filter", "None")]),
+    ("KPI Card — Electric geysers",
+     [("Fields", "[Geyser Claim Count]"),
+      ("Visual-level filter", "Geyser Specific Data[geyser_type] is 'Electric'")]),
+    ("KPI Card — Gas geysers",
+     [("Fields", "[Geyser Claim Count]"),
+      ("Visual-level filter", "Geyser Specific Data[geyser_type] is 'Gas'")]),
+    ("KPI Card — Solar geysers",
+     [("Fields", "[Geyser Claim Count]"),
+      ("Visual-level filter", "Geyser Specific Data[geyser_type] is 'Solar Geyser'")]),
+    ("KPI Card — Top brand (text card)",
+     [("Fields", "[Top Geyser Brand]"),
+      ("Visual type", "Card visual — displays text value of top brand")]),
+    ("KPI Card — Most common size (text card)",
+     [("Fields", "[Top Geyser Size]"),
+      ("Visual type", "Card visual — displays text value of top size")]),
+]
+for title, rows in gey_cards:
+    story.append(KeepTogether([visual_card(LIGHT_TEAL, title, rows), Spacer(1,0.18*cm)]))
+
+story.append(visual_card(LIGHT_TEAL, "Clustered bar — Geyser brand breakdown",
+    [("Y-axis", "Geyser Specific Data[geyser_brand]"),
+     ("X-axis", "[Geyser Claim Count]"),
+     ("Sort", "Descending by [Geyser Claim Count]"),
+     ("Visual filter", "None")]))
+story.append(Spacer(1, 0.18*cm))
+
+story.append(visual_card(LIGHT_TEAL, "Donut — Geyser size distribution",
+    [("Legend", "Geyser Specific Data[geyser_size]"),
+     ("Values", "[Geyser Claim Count]"),
+     ("Visual filter", "None")]))
+story.append(Spacer(1, 0.18*cm))
+
+story.append(visual_card(LIGHT_TEAL, "Clustered bar — Geyser type split",
+    [("X-axis", "Geyser Specific Data[geyser_type]"),
+     ("Y-axis", "[Geyser Claim Count]"),
+     ("Visual filter", "None")]))
+story.append(Spacer(1, 0.18*cm))
+
+story.append(visual_card(LIGHT_TEAL, "Clustered bar — Geyser peril variants",
+    [("X-axis", "Geyser Specific Data[Peril]"),
+     ("Y-axis", "[Geyser Claim Count]"),
+     ("Sort", "Descending by [Geyser Claim Count]"),
+     ("X-axis label rotation", "Set to 30-45 degrees — labels are long")]))
+story.append(PageBreak())
+
+# ── SECTION 8: SATISFACTION TAB ──────────────────────────────────────────────
+story.append(section_header("8 · Satisfaction Tab", colors.HexColor("#993C1D")))
+story.append(Spacer(1, 0.3*cm))
+
+sat_cards = [
+    ("KPI Card — NPS promoters %",
+     [("Fields", "[NPS Promoters %]"),
+      ("Format", "Percentage, 1 decimal")]),
+    ("KPI Card — Very satisfied %",
+     [("Fields", "[Very Satisfied %]"),
+      ("Format", "Percentage, 1 decimal")]),
+    ("KPI Card — Not satisfied %",
+     [("Fields", "[Not Satisfied %]"),
+      ("Format", "Percentage, 1 decimal")]),
+    ("KPI Card — Complaints logged",
+     [("Fields", "[Total Complaints]"),
+      ("Visual-level filter", "None")]),
+]
+for title, rows in sat_cards:
+    story.append(KeepTogether([visual_card(LIGHT_RED, title, rows), Spacer(1,0.18*cm)]))
+
+story.append(visual_card(LIGHT_RED, "Donut — Overall satisfaction",
+    [("Legend", "CSAT Data[Overall Satisfaction]"),
+     ("Values", "COUNT of CSAT Data[Ref No]"),
+     ("Colour suggestion", "Green=Very Satisfied, Amber=Satisfied, Red=Not Satisfied"),
+     ("Visual filter", "None")]))
+story.append(Spacer(1, 0.18*cm))
+
+story.append(visual_card(LIGHT_RED, "Clustered bar — Claims dept satisfaction",
+    [("Y-axis", "CSAT Data[Claims Department Satisfaction]"),
+     ("X-axis", "COUNT of CSAT Data[Ref No]"),
+     ("Sort", "Descending by count"),
+     ("Note", "Column has a leading space in raw data — trim in Power Query: = Text.Trim([Claims Department Satisfaction])")]))
+story.append(Spacer(1, 0.18*cm))
+
+story.append(visual_card(LIGHT_RED, "Table — Complaint type breakdown",
+    [("Rows", "Complaint Data[Complaint Type]"),
+     ("Value col 1", "[Total Complaints]  — rename to 'Count'"),
+     ("Value col 2", "[SP Complaint %]  — rename to '% of total'"),
+     ("Visual filter", "None")]))
+story.append(Spacer(1, 0.18*cm))
+
+story.append(visual_card(LIGHT_RED, "Clustered bar — Complaint resolution status",
+    [("Y-axis", "Complaint Data[status_desc]"),
+     ("X-axis", "[Total Complaints]"),
+     ("Sort", "Descending by [Total Complaints]"),
+     ("Visual filter", "None")]))
+story.append(PageBreak())
+
+# ── SECTION 9: TIPS ───────────────────────────────────────────────────────────
+story.append(section_header("9 · Tips & Best Practices", DARK))
+story.append(Spacer(1, 0.3*cm))
+
+tips = [
+    ("Slicer setup",
+     "Add a slicer on Claims Data[Province] and Claims Data[Peril] at the top of the report. "
+     "Because the relationships are set, these will cross-filter all tabs including Payments and Geysers."),
+    ("Data types to check in Power Query",
+     "invoice_date, payment_date, date_of_loss, date_of_registration — confirm these load as Date (not Text). "
+     "If they appear as numbers (Excel serial dates), convert: = Date.FromOADate([invoice_date])."),
+    ("Claims Department Satisfaction leading space",
+     "The raw column contains ' Average' (with a leading space). In Power Query add a Trim step: "
+     "Transform > Format > Trim on that column, otherwise it groups separately from 'Average'."),
+    ("TAT Bucket sort order",
+     "The number prefix (1., 2., 3...) in the TAT Bucket calculated column ensures Power BI sorts "
+     "it correctly without needing an extra sort column."),
+    ("Estimate vs Paid gap interpretation",
+     "The R4.21M estimated vs R596K paid gap is expected — most claims are still in Finance Process "
+     "or Pre-Authorisation state. Filter the grouped bar by Claim State = Closed to see settled ratios only."),
+    ("Complaint volume is small (n=20)",
+     "Percentages on complaint visuals will be sensitive. Consider displaying counts alongside "
+     "percentages, or adding a data label callout for context."),
+    ("Kwikot brand dominance",
+     "65% of geyser claims involve Kwikot units. Consider adding a brand x peril cross-tab matrix "
+     "to track whether specific brands are associated with higher replacement (vs repair) rates."),
+]
+
+for tip_title, tip_body in tips:
+    story.append(KeepTogether([
+        Paragraph(tip_title, style_h3),
+        Paragraph(tip_body, style_body),
+        Spacer(1, 0.15*cm)
+    ]))
+
+story.append(Spacer(1, 0.5*cm))
+story.append(HRFlowable(width="100%", thickness=0.5, color=BORDER))
+story.append(Spacer(1, 0.2*cm))
+story.append(Paragraph("FNB CLC Vendor Dashboard · Power BI Specification · March 2026",
+    S("Footer", fontName="Helvetica", fontSize=8, textColor=MID_GRAY, alignment=TA_CENTER)))
+
+doc.build(story)
+print("Done")
