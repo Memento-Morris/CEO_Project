@@ -1,27 +1,10 @@
+proc sql;
+    select distinct delivery_code,
+           count(*) as freq
+    from APNS.apn_sends_and_feedback
+    where product_code in (&product_list.)
+    group by delivery_code
+    order by freq desc;
+quit;
 
-
-distribution_status
-
-freq
-
-
-  15885801 
-Sent 162996 
-Sent to the service provider 141807 
-Pending 42823 
-Delivery canceled 200 
-
-
-
-
-
-
-
-
-
-distribution_status
-
-freq
-
-
-Sent 162996 
+proc contents data=APNS.apn_sends_and_feedback; run;
