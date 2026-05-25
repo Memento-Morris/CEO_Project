@@ -1,156 +1,83 @@
-OTE: The data set WORK.CAMPAIGN_CONFIG has 22 observations and 10 variables.
-NOTE: Compressing data set WORK.CAMPAIGN_CONFIG increased size by 100.00 percent. 
-      Compressed is 2 pages; un-compressed would require 1 pages.
-NOTE: DATA statement used (Total process time):
-      real time           0.00 seconds
-      cpu time            0.01 seconds
-      
-
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.00 seconds
-      cpu time            0.00 seconds
-      
-
-SYMBOLGEN:  Macro variable CONFIG_COUNT resolves to 22
-SYMBOLGEN:  Macro variable CONFIG_COUNT resolves to 22
-NOTE: 22 active product codes loaded from config.
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.00 seconds
-      cpu time            0.00 seconds
-      
-
-SYMBOLGEN:  Macro variable MISSING_INPUT_COUNT resolves to 22
-SYMBOLGEN:  Macro variable MISSING_INPUT_COUNT resolves to 22
-ERROR: 22 active campaign(s) are missing Input_File_Name or Input_File_Path.
-ERROR: The following campaigns need to be updated in the Excel config:
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.02 seconds
-      cpu time            0.03 seconds
-      
-
-ERROR: The %ABORT statement is not valid in open code.
-
-NOTE: There were 22 observations read from the data set WORK.CAMPAIGN_CONFIG.
-NOTE: PROCEDURE PRINT used (Total process time):
-      real time           0.04 seconds
-      cpu time            0.04 seconds
-      
-
-NOTE: Compressing data set WORK.PRODUCT_CAMPAIGN_MAP increased size by 100.00 percent. 
-      Compressed is 2 pages; un-compressed would require 1 pages.
-NOTE: Table WORK.PRODUCT_CAMPAIGN_MAP created, with 22 rows and 2 columns.
-
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.00 seconds
-      cpu time            0.00 seconds
-      
-MLOGIC(READ_FULL_OPPORTUNITY):  %IF condition &file_type = EXCEL is FALSE
-SYMBOLGEN:  Macro variable FILE_TYPE resolves to 
-MLOGIC(READ_FULL_OPPORTUNITY):  %IF condition &file_type = CSV is FALSE
-SYMBOLGEN:  Macro variable FILE_TYPE resolves to 
-MLOGIC(READ_FULL_OPPORTUNITY):  %IF condition &file_type = SAS is FALSE
-MLOGIC(READ_FULL_OPPORTUNITY):  %PUT WARNING: Unknown file type [&file_type] for &camp_code. Skipping.
-SYMBOLGEN:  Macro variable FILE_TYPE resolves to 
-SYMBOLGEN:  Macro variable CAMP_CODE resolves to CMA10479
-WARNING: Unknown file type [] for CMA10479 Skipping.
-MLOGIC(READ_FULL_OPPORTUNITY):  %GOTO NEXT_CAMPAIGN (label resolves to NEXT_CAMPAIGN).
-MLOGIC(READ_FULL_OPPORTUNITY):  %DO loop index variable I is now 23; loop will not iterate again.
-MLOGIC(READ_FULL_OPPORTUNITY):  Ending execution.
-ERROR: The data set list (WORK.full_opp_raw_:) does not contain any members.
-
-NOTE: Numeric values have been converted to character values at the places given by: (Line):(Column).
-      696:33   
-NOTE: Character values have been converted to numeric values at the places given by: (Line):(Column).
-      696:20   
-NOTE: Compression was disabled for data set WORK.FULL_OPPORTUNITY because compression overhead would increase the size of the data set.
-NOTE: The SAS System stopped processing this step because of errors.
-WARNING: The data set WORK.FULL_OPPORTUNITY may be incomplete.  When this step was stopped there were 0 observations and 2 variables.
-NOTE: DATA statement used (Total process time):
-      real time           0.00 seconds
-      cpu time            0.01 seconds
-      
-
-ERROR: The following columns were not found in the contributing tables: Campaign_Code.
-NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
-NOTE: The SAS System stopped processing this step because of errors.
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.00 seconds
-      cpu time            0.00 seconds
-      
-SYMBOLGEN:  Macro variable FULL_OPP_COUNT resolves to 0
-WARNING: Apparent symbolic reference FULL_OPP_CAMPAIGNS not resolved.
-NOTE: FULL_OPPORTUNITY contains 0 records across &full_opp_campaigns campaigns.
 
 
-ERROR: The SUM summary function requires a numeric argument.
-ERROR: The following columns were not found in the contributing tables: Campaign_Code, flag_missing_product_code, Import_Status, Input_File.
-NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
-NOTE: The SAS System stopped processing this step because of errors.
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.00 seconds
-      cpu time            0.00 seconds
-      
+%put TAG:JobName1=STI_CA_D_APNS_DATA_REBUILD;
+%put TAG:JobName2=Daily;
+%put TAG:JobCategory=Campaigns;
+%put TAG:JobPurpose=Operational;
+%put TAG:JobPriority=Medium;
+%put TAG:JobStatus=Prod;
+
+options mprint mlogic symbolgen source notes;
+
+%include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
 
 
-ERROR: Function STRIP requires a character expression as argument 1.
-ERROR: Function STRIP requires a character expression as argument 1.
-NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
-NOTE: The SAS System stopped processing this step because of errors.
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.00 seconds
-      cpu time            0.00 seconds
-      
+%let adobe_load_window        = 30;   /* Days after Optimise batch to look for Adobe load  */
+%let dropped_loaded_threshold = 0;    /* Abort if dropped records reach Adobe (0 = strict) */
 
 
-ERROR: File WORK.DIAG_PRODUCT_CODE_FORMATS.DATA does not exist.
+%macro logging(libname,database,schema);
+LIBNAME &libname odbc noprompt="Driver=MSSQL;AnsiNPW=1;
+AuthenticationMethod=10;ApplicationUsingThreads=1;
+BulkLoadOptions=2;Database=&database;
+FetchTWFSasTime=1;HostName=LFE-RBPREATLDB1;
+PortNumber=1433;UID=&User.;PWD=&FNB_Login." 
+Schema=&schema;
+%MEND; 
+%logging(STI_META,FNB_STI_Analytics_Ops,METADATA);
 
-NOTE: The SAS System stopped processing this step because of errors.
-NOTE: PROCEDURE PRINT used (Total process time):
-      real time           0.00 seconds
-      cpu time            0.00 seconds
-      
-
-
-ERROR: File WORK.DIAG_PRODUCT_CODE_FORMATS.DATA does not exist.
-NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
-NOTE: The SAS System stopped processing this step because of errors.
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.00 seconds
-      cpu time            0.00 seconds
-      
-WARNING: Apparent symbolic reference PRODUCT_CODE_STRATEGY not resolved.
-WARNING: Apparent symbolic reference PRODUCT_CODE_STRATEGY not resolved.
-WARNING: Apparent symbolic reference PRODUCT_CODE_STRATEGY not resolved.
-ERROR: A character operand was found in the %EVAL function or %IF condition where a numeric operand is required. The condition was: &PRODUCT_CODE_STRATEGY ne FULL 
-ERROR: Skipping to next %END statement.
-NOTE: Fix 17 — Input file uses FULL codes (13 chars). Joins will match exactly.
+/* SECTION 1: READ CAMPAIGN CONFIG FROM EXCEL */
 
 
-WARNING: Apparent symbolic reference PRODUCT_CODE_STRATEGY not resolved.
-WARNING: Apparent symbolic reference PRODUCT_CODE_STRATEGY not resolved.
-ERROR: A character operand was found in the %EVAL function or %IF condition where a numeric operand is required. The condition was: &product_code_strategy = BASE 
-ERROR: Skipping to next %END statement.
-ERROR: File WORK.CAMPAIGNS_TO_ADOBE.DATA does not exist.
-NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
-NOTE: The SAS System stopped processing this step because of errors.
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.00 seconds
-      cpu time            0.01 seconds
-      
+proc import
+    datafile = "\\INS-RBFS01\Share\FNB_Insure\Campaign Profiles\APN_Campaign_Config.xlsx"
+    out      = Campaign_Config_Raw
+    DBMS=excelcs 
+    REPLACE;
+    server= 'lfe-rbgfs01';
+    PORT=9621;
+run;
 
 
-ERROR: File WORK.FULL_OPPORTUNITY_ORPHANS.DATA does not exist.
-NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
-NOTE: The SAS System stopped processing this step because of errors.
-NOTE: PROCEDURE SQL used (Total process time):
-      real time           0.00 seconds
-      cpu time            0.00 seconds
-      
-WARNING: Apparent symbolic reference ORPHAN_COUNT not resolved.
-NOTE: FULL_OPPORTUNITY_ORPHANS (never reached Optimise): &orphan_count records.
-WARNING: Apparent symbolic reference ORPHAN_COUNT not resolved.
-WARNING: Apparent symbolic reference ORPHAN_COUNT not resolved.
-ERROR: A character operand was found in the %EVAL function or %IF condition where a numeric operand is required. The condition was: &orphan_count > 0 
-ERROR: Skipping to next %END statement.
-MLOGIC(ITERATE_PASS):  Beginning execution.
+proc sql noprint;
+    select count(*) into :config_raw_count trimmed
+    from Campaign_Config_Raw;
+quit;
 
+%if &config_raw_count = 0 %then %do;
+    %put ERROR: Fix 21 — Campaign_Config_Raw imported successfully but contains 0 rows.;
+    %put ERROR: Check that the "Config" sheet exists and has data rows below the header.;
+    %abort cancel;
+%end;
+
+%put NOTE: Fix 21 — Campaign_Config_Raw imported with &config_raw_count rows. Proceeding.;
+
+/* Fix 6: add row_num here so all downstream loops use it instead of monotonic() */
+data Campaign_Config;
+    set Campaign_Config_Raw;
+    where upcase(strip(Active)) = "Y"
+      and strip(Campaign_Code)  ne ""
+      and strip(Product_Code)   ne "";
+    Campaign_Code = upcase(strip(Campaign_Code));
+    Product_Code  = upcase(strip(Product_Code));
+
+    /* Fix 7: clean up new input-file columns */
+    length Input_File_Path  $500
+           Input_File_Name  $200
+           Input_File_Sheet $100
+           Input_File_Type  $10
+           Full_Input_Path  $500;
+    Input_File_Path  = strip(Input_File_Path);
+    Input_File_Name  = strip(Input_File_Name);
+    Input_File_Sheet = strip(Input_File_Sheet);
+    Input_File_Type  = upcase(strip(Input_File_Type));
+    Full_Input_Path  = cats(Input_File_Path, Input_File_Name);
+
+    /* Explicit row number — used in all macro loops (Fix 6) */
+    row_num = _n_;
+run;
+
+proc sql noprint;
+    select count(*) into :config_count trimmed
+    from Campaign_Config;
+quit;
