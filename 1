@@ -1,1761 +1,855 @@
-
-%put TAG:JobName1=STI_CA_D_APNS_DATA_REBUILD;
-%put TAG:JobName2=Daily;
-%put TAG:JobCategory=Campaigns;
-%put TAG:JobPurpose=Operational;
-%put TAG:JobPriority=Medium;
-%put TAG:JobStatus=Prod;
-
-options mprint mlogic symbolgen source notes;
-
-%include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
-
-
-%let adobe_load_window        = 60;   /* Days after Optimise batch to look for Adobe load  */
-%let dropped_loaded_threshold = 0;    /* Abort if dropped records reach Adobe (0 = strict) */
-
-
-
-filename APN_CFG "\\INS-RBFS01\Share\FNB_Insure\Campaign Profiles\APN_Campaign_Config.xlsx";
-
-proc import
-    datafile = APN_CFG
-    out      = Campaign_Config_Raw
-    dbms     = xlsx
-    replace;
-    sheet    = "Config";
-    getnames = yes;
-run;
-
-filename APN_CFG clear;
-
-/* Fix 6: add row_num here so all downstream loops use it instead of monotonic() */
-data Campaign_Config;
-    set Campaign_Config_Raw;
-    where upcase(strip(Active)) = "Y"
-      and strip(Campaign_Code)  ne ""
-      and strip(Product_Code)   ne "";
-    Campaign_Code = upcase(strip(Campaign_Code));
-    Product_Code  = upcase(strip(Product_Code));
-
-    /* Fix 7: clean up new input-file columns */
-    length Input_File_Path  $500
-           Input_File_Name  $200
-           Input_File_Sheet $100
-           Input_File_Type  $10
-           Full_Input_Path  $500;
-    Input_File_Path  = strip(Input_File_Path);
-    Input_File_Name  = strip(Input_File_Name);
-    Input_File_Sheet = strip(Input_File_Sheet);
-    Input_File_Type  = upcase(strip(Input_File_Type));
-    Full_Input_Path  = cats(Input_File_Path, Input_File_Name);
-
-    /* Explicit row number — used in all macro loops (Fix 6) */
-    row_num = _n_;
-run;
-
-proc sql noprint;
-    select count(*) into :config_count trimmed
-    from Campaign_Config;
-quit;
-
-%if &config_count = 0 %then %do;
-    %put ERROR: Config has no active rows. Check Excel file.;
-    %abort cancel;
-%end;
-
-%put NOTE: &config_count active product codes loaded from config.;
-
-/* Fix 11: log which campaigns are missing input file config before aborting */
-proc sql noprint;
-    select count(*) into :missing_input_count trimmed
-    from Campaign_Config
-    where missing(Input_File_Name) or missing(Input_File_Path);
-quit;
-
-%if &missing_input_count > 0 %then %do;
-    %put ERROR: &missing_input_count active campaign(s) are missing Input_File_Name or Input_File_Path.;
-    %put ERROR: The following campaigns need to be updated in the Excel config:;
-    proc sql;
-        select Campaign_Code, Product_Code, Input_File_Path, Input_File_Name
-        from Campaign_Config
-        where missing(Input_File_Name) or missing(Input_File_Path);
-    quit;
-    %abort cancel;
-%end;
-
-title "CONFIG - Active Campaigns Loaded from Excel";
-proc print data=Campaign_Config noobs; run;
-title;
-
-/* Fix 15: Build product-to-campaign mapping from config.
-   Used in COMPLETE_FUNNEL so the join is anchored on Product_Code
-   (the most reliable key) rather than free-text Campaign_Code/Name. */
-proc sql;
-    create table product_campaign_map as
-    select distinct
-        upcase(strip(Product_Code))  as Product_Code  length = 30,
-        upcase(strip(Campaign_Code)) as Campaign_Code length = 50
-    from Campaign_Config
-    order by Product_Code;
-quit;
-
-
-/* ============================================================
-   SECTION 2 : BUILD DYNAMIC MACRO VARIABLES FROM CONFIG
-   ============================================================ */
-
-proc sql noprint;
-    select count(distinct Campaign_Code)
-    into   :camp_count trimmed
-    from   Campaign_Config;
-
-    select distinct Campaign_Code
-    into   :camp_1 -
-    from   Campaign_Config
-    order  by Campaign_Code;
-
-    select distinct cats("'", Product_Code, "'")
-    into   :product_list separated by ","
-    from   Campaign_Config;
-quit;
-
-%put NOTE: &camp_count distinct campaign codes found.;
-%put NOTE: Product list: &product_list;
-
-
-/* ============================================================
-   SECTION 3 : CAPTURE PRE-RUN STATE
-   ============================================================ */
-
-proc sql noprint;
-    select max(date_to_adobe) format date9.
-    into   :Old_date trimmed
-    from   STI_PBI.APN_POT;
-
-    select max(time_created_to_adobe) format time9.
-    into   :Old_time trimmed
-    from   STI_PBI.APN_POT
-    where  date_to_adobe = max(date_to_adobe);
-
-    select count(CUST_NO)
-    into   :Old_records trimmed
-    from   STI_PBI.APN_POT;
-quit;
-
-%put Pre-run state: &Old_date &Old_time  Records: &Old_records;
-
-
-/* ============================================================
-   SECTION 4 : LIBNAMES
-   ============================================================ */
-
-libname Pass6    "/data/fnb/clb/archive/5_optimise/passed_phase1";
-libname APN_Pass "/data/fnb/clb/prod_data/5_optimise/passed_phase1";
-libname Drop6    "/data/fnb/clb/archive/5_optimise/dropped_phase1";
-libname APN_Drop "/data/fnb/clb/prod_data/5_optimise/dropped_phase1";
-libname APNS     "/data/fnb/clb/prod_data/7_tracking_views/Reporting_views";
-
-
-/* ============================================================
-   SECTION 5 : CLEAR STALE WORK TABLES
-   Fix 12: full_opp_raw_: and full_opportunity added to list
-   ============================================================ */
-
-proc datasets library=work nolist;
-    delete _tabpass_:      _tabdrop_:
-           full_opp_raw_:  full_opportunity
-           full_opportunity_orphans
-           product_campaign_map
-           diag_product_code_formats          /* Fix 17 */
-           orphan_counts                      /* Fix 18 */
-           pass_tables_arch     pass_tables_live
-           drop_tables_arch     drop_tables_live
-           pass_tables_combined drop_tables_combined
-           monthly_pass_list    monthly_drop_list
-           adobe_final_new      adobe_final_table_clients
-           adobe_to_clients_step  adobe_to_clients_step2
-           adobe_to_clients_final adobe_delivery_test
-           adobe_recent_drops     apns_sends_campaigns
-           apns_sends_matched
-           campaigns_to_adobe     campaigns_to_adobe_step
-           campaigns_to_adobe_renamed joining
-           apn_pot_step1
-           cust_adobe_flag      cust_loaded_summary
-           apn_pot_summary_final
-           diag_dropped_loaded  diag_join_duplicates
-           complete_funnel;
-quit;
-
-
-/* ============================================================
-   SECTION 6 : CAMPAIGN TABLE DISCOVERY
-   ============================================================ */
-
-%macro build_campaign_filter(libref=, outds=);
-    proc sql;
-        create table &outds as
-        select *
-        from dictionary.tables
-        where libname = "%upcase(&libref)"
-          and (
-            %do i = 1 %to &camp_count;
-                %if &i > 1 %then or;
-                memname like "&&camp_&i..%"
-            %end;
-          );
-    quit;
-%mend;
-
-%build_campaign_filter(libref=PASS6,    outds=pass_tables_arch)
-%build_campaign_filter(libref=APN_PASS, outds=pass_tables_live)
-%build_campaign_filter(libref=DROP6,    outds=drop_tables_arch)
-%build_campaign_filter(libref=APN_DROP, outds=drop_tables_live)
-
-data pass_tables_combined;
-    set pass_tables_arch (in=a)
-        pass_tables_live (in=b);
-    Source = ifc(b, 'Live', 'Archive');
-run;
-
-proc sort data=pass_tables_combined; by memname descending Source; run;
-proc sort data=pass_tables_combined nodupkey; by memname; run;
-
-data drop_tables_combined;
-    set drop_tables_arch (in=a)
-        drop_tables_live (in=b);
-    Source = ifc(b, 'Live', 'Archive');
-run;
-
-proc sort data=drop_tables_combined; by memname descending Source; run;
-proc sort data=drop_tables_combined nodupkey; by memname; run;
-
-/* Fix 6: add explicit row_num so loop index reliably matches dataset row */
-data monthly_pass_list;
-    set pass_tables_combined;
-    row_num = _n_;
-run;
-
-proc sql noprint;
-    select count(*) into :monthly_pass_count trimmed
-    from monthly_pass_list;
-quit;
-
-data monthly_drop_list;
-    set drop_tables_combined;
-    row_num = _n_;
-run;
-
-proc sql noprint;
-    select count(*) into :monthly_drop_count trimmed
-    from monthly_drop_list;
-quit;
-
-%put Pass tables found: &monthly_pass_count;
-%put Drop tables found: &monthly_drop_count;
-
-title "DEBUG 1 - Pass Tables Discovered";
-proc print data=monthly_pass_list noobs; run;
-title "DEBUG 1 - Drop Tables Discovered";
-proc print data=monthly_drop_list noobs; run;
-title;
-
-
-/* ============================================================
-   SECTION 6B : READ FULL OPPORTUNITY FROM CONFIG INPUT FILES
-   -------------------------------------------------------
-   Fix 13: %find_input_file searches four locations in priority
-   order so the job never reads from the live incoming/ folder
-   (where Optimise may hold a lock or have already moved the file).
-
-   Priority order:
-     1. passed_import  — file was imported successfully by Optimise
-     2. dropped_import — file failed import (still worth tracking)
-     3. archive        — older batches moved to archive
-     4. incoming/in/   — last resort; only if file hasn't been moved
-                          yet (e.g. job runs before Optimise does)
-
-   The resolved path and status (PASSED/FAILED/ARCHIVED/INCOMING)
-   are written to macro variables &resolved_path_&i and
-   &import_status_&i for use in diagnostics.
-
-   Fix 8 : CUST_NO rename handled post-import via PROC CONTENTS
-            to accommodate any column-name casing from the source.
-   Fix 9 : unique_id includes loop index to avoid _n_ collisions.
-   ============================================================ */
-
-/* Base paths — change here if the environment moves */
-%let path_passed_import  = /data/fnb/clb/prod_data/4_import_validation/passed_import/;
-%let path_dropped_import = /data/fnb/clb/prod_data/4_import_validation/dropped_import/;
-%let path_archive        = /data/fnb/clb/archive/4_import_validation/passed_import/;
-%let path_incoming       = /data/fnb/clb/incoming_files/4_import_validation/in/;
-
-/* Fix 13: macro that resolves the correct file location */
-%macro find_input_file(file_name=, idx=);
-    /* Reset output macro variables */
-    %global resolved_path_&idx import_status_&idx;
-    %let resolved_path_&idx  = ;
-    %let import_status_&idx  = NOT_FOUND;
-
-    %if %sysfunc(fileexist(&path_passed_import.&file_name)) %then %do;
-        %let resolved_path_&idx  = &path_passed_import.&file_name;
-        %let import_status_&idx  = PASSED;
-    %end;
-    %else %if %sysfunc(fileexist(&path_dropped_import.&file_name)) %then %do;
-        %let resolved_path_&idx  = &path_dropped_import.&file_name;
-        %let import_status_&idx  = FAILED;
-        %put WARNING: Input file for campaign at index &idx found in dropped_import.;
-        %put WARNING: This means Optimise rejected the file. Full opportunity counts may be unreliable.;
-    %end;
-    %else %if %sysfunc(fileexist(&path_archive.&file_name)) %then %do;
-        %let resolved_path_&idx  = &path_archive.&file_name;
-        %let import_status_&idx  = ARCHIVED_PASSED;
-    %end;
-    %else %if %sysfunc(fileexist(&path_incoming.&file_name)) %then %do;
-        %let resolved_path_&idx  = &path_incoming.&file_name;
-        %let import_status_&idx  = INCOMING;
-        %put WARNING: Input file for campaign at index &idx is still in the incoming folder.;
-        %put WARNING: Optimise may not have processed it yet or may move it during this read.;
-    %end;
-    %else %do;
-        %put ERROR: Input file [&file_name] not found in any of the four expected locations:;
-        %put ERROR:   1. &path_passed_import;
-        %put ERROR:   2. &path_dropped_import;
-        %put ERROR:   3. &path_archive;
-        %put ERROR:   4. &path_incoming;
-    %end;
-%mend find_input_file;
-
-
-%macro read_full_opportunity;
-
-    proc datasets library=work nolist;
-        delete full_opp_raw_:;
-    quit;
-
-    %put NOTE: Reading full opportunity from &config_count input files.;
-
-    %local i camp_code prod_code file_name file_type file_sheet full_path;
-
-    %do i = 1 %to &config_count;
-
-        /* Fix 6: select by row_num (explicit), not monotonic() */
-        proc sql noprint;
-            select Campaign_Code, Product_Code,
-                   Input_File_Name, Input_File_Type, Input_File_Sheet
-            into   :camp_code  trimmed, :prod_code   trimmed,
-                   :file_name  trimmed, :file_type   trimmed,
-                   :file_sheet trimmed
-            from   Campaign_Config
-            where  row_num = &i;
-        quit;
-
-        %put NOTE: Processing input file &i of &config_count: &camp_code -> &file_name;
-
-        /* Fix 13: resolve the correct file path across four locations */
-        %find_input_file(file_name=&file_name, idx=&i)
-
-        %if %length(&&resolved_path_&i) > 0 %then %do;
-
-            %let full_path = &&resolved_path_&i;
-            %put NOTE: File resolved at [&&import_status_&i]: &full_path;
-
-            /* ---- Import based on file type ---- */
-            %if &file_type = EXCEL %then %do;
-                proc import
-                    datafile = "&full_path"
-                    out      = _full_opp_import_&i
-                    dbms     = xlsx
-                    replace;
-                    sheet    = "&file_sheet";
-                    getnames = yes;
-                run;
-            %end;
-
-            %else %if &file_type = CSV %then %do;
-                proc import
-                    datafile = "&full_path"
-                    out      = _full_opp_import_&i
-                    dbms     = csv
-                    replace;
-                    getnames = yes;
-                run;
-            %end;
-
-            %else %if &file_type = SAS %then %do;
-                data _full_opp_import_&i;
-                    set "&full_path";
-                run;
-            %end;
-
-            %else %do;
-                %put WARNING: Unknown file type [&file_type] for &camp_code. Skipping.;
-                %goto next_campaign;
-            %end;
-
-            /* Fix 8: post-import rename — handles any column-name casing */
-            proc contents data=_full_opp_import_&i
-                          out=_colcheck_&i (keep=name) noprint; run;
-
-            proc sql noprint;
-                select count(*) into :has_cust_no trimmed
-                from _colcheck_&i
-                where upcase(name) = "CUST_NO";
-            quit;
-
-            %if &has_cust_no > 0 %then %do;
-                proc sql noprint;
-                    select name into :cust_col trimmed
-                    from _colcheck_&i
-                    where upcase(name) = "CUST_NO";
-                quit;
-
-                data _full_opp_import_&i;
-                    set _full_opp_import_&i
-                        (rename=(&cust_col = cust_no));
-                run;
-            %end;
-            %else %do;
-                %put ERROR: Input file for &camp_code does not contain a CUST_NO column.;
-                %put ERROR: Please check &full_path and ensure the customer number column is named CUST_NO.;
-                %goto next_campaign;
-            %end;
-
-            /* Fix 9: unique_id includes loop index to prevent _n_ collision */
-            data full_opp_raw_&i;
-                set _full_opp_import_&i;
-                length Campaign_Code  $50
-                       Product_Code   $30
-                       Input_File     $200
-                       Import_Status  $20
-                       unique_id      $100;
-                Campaign_Code = "&camp_code";
-                Product_Code  = "&prod_code";
-                Input_File    = "&file_name";
-                Import_Status = "&&import_status_&i";   /* Fix 13: location status */
-                row_id        = _n_;
-                unique_id     = cats("&camp_code", "_", "&prod_code", "_", &i, "_", row_id);
-
-                flag_missing_product_code = (missing(Product_Code) or strip(Product_Code) = "");
-                flag_missing_cust_no      = (missing(cust_no) or cust_no <= 0);
-            run;
-
-            proc datasets library=work nolist;
-                delete _full_opp_import_&i _colcheck_&i;
-            quit;
-
-        %end;
-        /* else: %find_input_file already issued ERROR message — skip this campaign */
-
-        %next_campaign:
-
-    %end; /* end do i */
-
-%mend read_full_opportunity;
-
-%read_full_opportunity;
-
-
-/* ============================================================
-   SECTION 6C : COMBINE FULL OPPORTUNITY RECORDS
-   ============================================================ */
-
-data FULL_OPPORTUNITY;
-    set full_opp_raw_:;
-    /* Ensure Product_Code is clean for joining */
-    Product_Code = upcase(strip(Product_Code));
-    /* Exclude records with no customer number — they cannot be tracked */
-    if flag_missing_cust_no then delete;
-run;
-
-proc sql noprint;
-    select count(*) into :full_opp_count trimmed
-    from FULL_OPPORTUNITY;
-
-    select count(distinct Campaign_Code) into :full_opp_campaigns trimmed
-    from FULL_OPPORTUNITY;
-quit;
-
-%put NOTE: FULL_OPPORTUNITY contains &full_opp_count records across &full_opp_campaigns campaigns.;
-
-title "FULL OPPORTUNITY — Records, Import Quality and File Status per Campaign";
-proc sql;
-    select Campaign_Code,
-           Product_Code,
-           Import_Status,
-           Input_File,
-           count(*)                        as Record_Count,
-           sum(flag_missing_product_code)  as Missing_Product_Code
-    from FULL_OPPORTUNITY
-    group by Campaign_Code, Product_Code, Import_Status, Input_File
-    order by Campaign_Code;
-quit;
-title;
-
-/* ============================================================
-   FIX 17 : PRODUCT CODE FORMAT DIAGNOSTIC + JOIN STRATEGY
-   -------------------------------------------------------
-   The Optimise tables store the FULL product code including
-   Variation and Message suffixes (e.g. CMA03787V01M01 = 13
-   chars). The stakeholder input file may contain only the
-   BASE code (e.g. CMA03787 = 8 chars) or the full code.
-
-   If the two sides use different lengths every cust_no match
-   will fail silently — no error, just missing funnel rows.
-
-   This block:
-     1. Classifies each distinct Product_Code in FULL_OPPORTUNITY
-        as BASE_ONLY, FULL, or UNKNOWN_FORMAT.
-     2. Derives the dominant format (most records) and writes it
-        to &product_code_strategy (FULL | BASE).
-     3. All downstream joins (orphan check, COMPLETE_FUNNEL)
-        use a CASE expression to normalise the Optimise code to
-        match whatever format the input file uses.
-   ============================================================ */
-
-proc sql;
-    create table diag_product_code_formats as
-    select distinct
-        Product_Code,
-        case
-            when length(strip(Product_Code)) <= 8  then "BASE_ONLY"
-            when length(strip(Product_Code)) = 13  then "FULL"
-            else                                        "UNKNOWN_FORMAT"
-        end as Code_Type    length = 20,
-        count(*) as Occurrences
-    from FULL_OPPORTUNITY
-    group by Product_Code;
-quit;
-
-title "DIAGNOSTIC FIX 17 — Product Code Formats in Input File";
-proc print data=diag_product_code_formats noobs; run;
-title;
-
-/* Derive the dominant format: whichever type has the most records */
-proc sql noprint;
-    select Code_Type
-    into   :product_code_strategy trimmed
-    from (
-        select Code_Type, sum(Occurrences) as Total_Occurrences
-        from diag_product_code_formats
-        group by Code_Type
-    )
-    order by Total_Occurrences desc;   /* first row = dominant type */
-quit;
-
-/* Collapse BASE_ONLY and UNKNOWN_FORMAT to the same join approach */
-%if %upcase(&product_code_strategy) ne FULL %then
-    %let product_code_strategy = BASE;
-
-%put NOTE: Fix 17 — Product code join strategy: &product_code_strategy;
-%if &product_code_strategy = BASE %then %do;
-    %put NOTE: Fix 17 — Input file uses BASE codes (<=8 chars). Optimise product codes;
-    %put NOTE:           will be truncated to substr(product_code,1,8) in all joins.;
-%end;
-%else %do;
-    %put NOTE: Fix 17 — Input file uses FULL codes (13 chars). Joins will match exactly.;
-%end;
-
-/* Fix 16: Identify FULL_OPPORTUNITY records that never reached Optimise at all.
-   These are records in the stakeholder input file that did not appear in either
-   the Optimise passed or dropped tables. Possible causes:
-     - The file failed import validation before Optimise saw it
-     - SharePoint or pre-Optimise screening rejected them
-     - Timing: this job ran before Optimise processed the batch
-   The Import_Status column (from Fix 13) helps distinguish these cases.
-
-   Fix 17: The Optimise product code is normalised to match the join strategy
-   derived from the input file's format (FULL = exact match; BASE = truncate
-   the Optimise code to 8 chars so it aligns with base-only input codes).    */
-
-proc sql;
-    create table FULL_OPPORTUNITY_ORPHANS as
-    select
-        a.Campaign_Code,
-        a.Product_Code,
-        a.cust_no,
-        a.unique_id,
-        a.Input_File,
-        a.Import_Status,
-        a.flag_missing_product_code
-    from FULL_OPPORTUNITY a
-    left join (
-        select distinct cust_no,
-            /* Fix 17: normalise Optimise code to the input file's format */
-            %if &product_code_strategy = BASE %then %do;
-                upcase(strip(substr(product_code, 1, 8))) as product_code
-            %end;
-            %else %do;
-                upcase(strip(product_code)) as product_code
-            %end;
-        from CAMPAIGNS_TO_ADOBE
-    ) b
-        on  a.cust_no      = b.cust_no
-        and a.Product_Code = b.product_code
-    where b.cust_no is missing;
-quit;
-
-proc sql noprint;
-    select coalesce(count(*), 0) into :orphan_count trimmed
-    from FULL_OPPORTUNITY_ORPHANS;
-quit;
-
-%put NOTE: FULL_OPPORTUNITY_ORPHANS (never reached Optimise): &orphan_count records.;
-
-%if &orphan_count > 0 %then %do;
-    title "DIAGNOSTIC FIX 16 — Full Opportunity Records That Never Reached Optimise";
-    proc sql;
-        select Campaign_Code,
-               Product_Code,
-               Import_Status,
-               count(*) as Orphan_Count
-        from FULL_OPPORTUNITY_ORPHANS
-        group by Campaign_Code, Product_Code, Import_Status
-        order by Campaign_Code;
-    quit;
-    title;
-%end;
-
-
-/* ============================================================
-   SECTION 7 : READ ALL PASSED RECORDS
-   Fix 6: uses row_num instead of monotonic()
-   ============================================================ */
-
-%macro iterate_pass;
-    proc datasets library=work nolist;
-        delete _tabpass_:;
-    quit;
-
-    %local i tname tdate tsource libref;
-    %do i = 1 %to &monthly_pass_count;
-
-        /* Fix 6: select by explicit row_num */
-        proc sql noprint;
-            select memname, crdate, Source
-            into   :tname trimmed, :tdate trimmed, :tsource trimmed
-            from   monthly_pass_list
-            where  row_num = &i;
-        quit;
-
-        %put Processing pass &i of &monthly_pass_count: &tname (&tsource);
-
-        %if %upcase(&tsource) = LIVE %then %let libref = APN_Pass;
-        %else                              %let libref = Pass6;
-
-        data _tabpass_&i;
-            set &libref..&tname
-                (keep=CUST_NO Product_Code Drop_Reason sub_segment
-                      Campaign_Name Brand MUCN);
-            length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
-            _memname_ = "&tname";
-            if index(_memname_,'_') > 0 then do;
-                _date_raw_ = scan(_memname_, -2, '_');
-                _time_raw_ = scan(_memname_, -1, '_');
-                if length(strip(_time_raw_)) = 3 then
-                    _time_raw_ = cats('0', strip(_time_raw_));
-                Date_to_adobe         = input(_date_raw_, YYMMDD8.);
-                Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
-                                                   substr(_time_raw_,3,2),':00'),
-                                              HHMMSS8.);
-            end;
-            else do;
-                _date_raw_            = substr(_memname_, 16, 8);
-                Date_to_adobe         = input(_date_raw_, YYMMDD10.);
-                Time_created_to_adobe = input(substr("&tdate",9,8), HHMMSS.);
-            end;
-            format Date_to_adobe date9.;
-            format Time_created_to_adobe time9.;
-            rename CUST_NO = cust_no
-                   MUCN    = mucn
-                   Brand   = brand;
-            drop _memname_ _date_raw_ _time_raw_;
-        run;
-    %end;
-%mend;
-%iterate_pass;
-
-
-/* ============================================================
-   SECTION 8 : READ ALL DROPPED RECORDS
-   Fix 6: uses row_num instead of monotonic()
-   ============================================================ */
-
-%macro iterate_drop;
-    proc datasets library=work nolist;
-        delete _tabdrop_:;
-    quit;
-
-    %local i tname tdate tsource libref;
-    %do i = 1 %to &monthly_drop_count;
-
-        /* Fix 6: select by explicit row_num */
-        proc sql noprint;
-            select memname, crdate, Source
-            into   :tname trimmed, :tdate trimmed, :tsource trimmed
-            from   monthly_drop_list
-            where  row_num = &i;
-        quit;
-
-        %put Processing drop &i of &monthly_drop_count: &tname (&tsource);
-
-        %if %upcase(&tsource) = LIVE %then %let libref = APN_Drop;
-        %else                              %let libref = Drop6;
-
-        data _tabdrop_&i;
-            set &libref..&tname
-                (keep=CUST_NO Product_Code Drop_Reason sub_segment
-                      Campaign_Name Brand MUCN);
-            length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
-            _memname_ = "&tname";
-            if index(_memname_,'_') > 0 then do;
-                _date_raw_ = scan(_memname_, -2, '_');
-                _time_raw_ = scan(_memname_, -1, '_');
-                if length(strip(_time_raw_)) = 3 then
-                    _time_raw_ = cats('0', strip(_time_raw_));
-                Date_to_adobe         = input(_date_raw_, YYMMDD8.);
-                Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
-                                                   substr(_time_raw_,3,2),':00'),
-                                              HHMMSS8.);
-            end;
-            else do;
-                _date_raw_            = substr(_memname_, 16, 8);
-                Date_to_adobe         = input(_date_raw_, YYMMDD10.);
-                Time_created_to_adobe = input(substr("&tdate",9,8), HHMMSS.);
-            end;
-            format Date_to_adobe date9.;
-            format Time_created_to_adobe time9.;
-            rename CUST_NO = cust_no
-                   MUCN    = mucn
-                   Brand   = brand;
-            drop _memname_ _date_raw_ _time_raw_;
-        run;
-    %end;
-%mend;
-%iterate_drop;
-
-
-/* ============================================================
-   SECTION 9 : COMBINE ALL CAMPAIGN DATA
-   ============================================================ */
-
-data CAMPAIGNS_TO_ADOBE;
-    set _tabpass_:
-        _tabdrop_:;
-run;
-
-proc sql noprint;
-    select count(*) into :camp_rows trimmed
-    from CAMPAIGNS_TO_ADOBE;
-quit;
-
-%put CAMPAIGNS_TO_ADOBE rows: &camp_rows;
-
-title "DEBUG 2 - CAMPAIGNS_TO_ADOBE: Rows by Campaign and Product Code";
-proc sql;
-    select Campaign_Name,
-           product_code,
-           count(*)                         as Row_Count,
-           sum(case when drop_reason = ''
-                    then 1 else 0 end)      as Passed,
-           sum(case when drop_reason ne ''
-                    then 1 else 0 end)      as Dropped,
-           min(Date_to_adobe) format=date9. as First_Batch,
-           max(Date_to_adobe) format=date9. as Last_Batch
-    from CAMPAIGNS_TO_ADOBE
-    group by Campaign_Name, product_code
-    order by Campaign_Name, product_code;
-quit;
-title;
-
-/* Capture the date range from Optimise files for use in Adobe filters */
-proc sql noprint;
-    select min(Date_to_adobe) format date9.
-    into   :min_date trimmed
-    from   CAMPAIGNS_TO_ADOBE;
-
-    select max(Date_to_adobe) format date9.
-    into   :max_date trimmed
-    from   CAMPAIGNS_TO_ADOBE;
-quit;
-
-%put Min Optimise date: &min_date;
-%put Max Optimise date: &max_date;
-
-
-/* ============================================================
-   SECTION 10 : ADOBE SENDS
-   Filtered to product list AND Optimise date range + window.
-   The Campaign_Name join in Section 10B (below) ensures sends
-   are never shared across campaigns with identical product codes.
-   ============================================================ */
-
-data APNS_sends_campaigns
-    (keep=cust_no mucn product_code Date_loaded Time
-          Drop_reason brand Delivery_code distribution_status answer);
-    set APNS.apn_sends_and_feedback;
-    where product_code in (&product_list.)
-      and datepart(Distribution_date) >= "&min_date."d;
-    Brand         = substr(mucn, 1, 3);
-    Drop_reason   = "";
-    Date_loaded   = datepart(Distribution_date);
-    format Date_loaded date9.;
-    Time          = timepart(Distribution_date);
-    format Time time9.;
-    Delivery_code = UPCASE(Delivery_code);
-run;
-
-proc sort data=APNS_sends_campaigns nodupkey;
-    by cust_no product_code date_loaded;
-run;
-
-proc sql noprint;
-    select count(*) into :sends_rows trimmed
-    from APNS_sends_campaigns;
-quit;
-
-%put Adobe sends after dedup: &sends_rows;
-
-title "DEBUG 3 - Adobe Sends by Product Code";
-proc sql;
-    select product_code,
-           count(*)                         as Row_Count,
-           min(Date_loaded) format=date9.   as First_Send,
-           max(Date_loaded) format=date9.   as Last_Send
-    from APNS_sends_campaigns
-    group by product_code
-    order by product_code;
-quit;
-title;
-
-
-/* ============================================================
-   SECTION 10B : FIX 1 — MATCH ADOBE SENDS TO OPTIMISE
-                  USING CAMPAIGN_NAME + PRODUCT_CODE + DATE
-   -------------------------------------------------------
-   WHY: When two campaigns share the same product code
-   (e.g. "Ebucks" and "Personal Ebucks" both using V02M07),
-   a product-code-only join gives every Optimise row ALL
-   Adobe sends for that code, inflating counts.
-
-   HOW: We inner-join from the Optimise master (passed
-   records only — Optimize = "Sent") so Adobe sends are
-   attributed to exactly one campaign per batch.
-
-   Fix 14: Validate that Campaign_Name exists in the Adobe
-   sends table before relying on it for the join. If it is
-   absent, issue a clear WARNING so the inflation risk is
-   visible in the log — the job continues but counts may be
-   overstated for campaigns that share a product code.
-   ============================================================ */
-
-/* Fix 14: check Campaign_Name column exists in adobe sends table */
-proc sql noprint;
-    select count(*) into :has_campaign_name trimmed
-    from dictionary.columns
-    where libname = "APNS"
-      and memname = upcase("apn_sends_and_feedback")
-      and upcase(name) = "CAMPAIGN_NAME";
-quit;
-
-%if &has_campaign_name = 0 %then %do;
-    %put WARNING: Fix 14 — APNS.apn_sends_and_feedback does not contain a Campaign_Name column.;
-    %put WARNING: Fix 1 (campaign-scoped Adobe send attribution) will not work correctly.;
-    %put WARNING: Adobe sends will be joined on Product_Code only, which may inflate counts;
-    %put WARNING: for any campaigns that share the same product code.;
-    %put WARNING: Contact the Adobe data team to confirm whether Campaign_Name is available.;
-%end;
-
-proc sql;
-    create table APNS_sends_matched as
-    select
-        b.*,
-        a.Campaign_Name                    as Campaign_Name_match,
-        a.date_to_adobe                    as opt_batch_date
-    from
-        /* Optimise master: unique campaign + product + batch combinations */
-        (select distinct
-             cust_no,
-             product_code,
-             Campaign_Name,
-             date_to_adobe
-         from CAMPAIGNS_TO_ADOBE
-         where drop_reason = ''           /* Passed records only */
-        ) a
-    inner join APNS_sends_campaigns b
-        on  a.cust_no      = b.cust_no
-        and a.product_code = b.product_code
-        and (b.date_loaded between a.date_to_adobe
-                               and a.date_to_adobe + &adobe_load_window.);
-quit;
-
-proc sql noprint;
-    select count(*) into :matched_sends trimmed
-    from APNS_sends_matched;
-quit;
-
-%put Adobe sends after Campaign_Name match: &matched_sends;
-
-/* ============================================================
-   FIX 5 — MANY-TO-MANY JOIN GUARD
-   If one Optimise record matched more than one Adobe send
-   inside the window, log how many such cases exist.
-   This does not abort — it informs; dedup downstream handles it.
-   ============================================================ */
-
-proc sql noprint;
-    create table diag_join_duplicates as
-    select cust_no, product_code, opt_batch_date,
-           count(*) as join_count
-    from APNS_sends_matched
-    group by cust_no, product_code, opt_batch_date
-    having count(*) > 1;
-
-    select count(*) into :dup_join_count trimmed
-    from diag_join_duplicates;
-quit;
-
-%put NOTE: Customers with multiple Adobe sends in the &adobe_load_window.-day window: &dup_join_count;
-
-%if &dup_join_count > 0 %then %do;
-    title "DIAGNOSTIC - Customers with Multiple Adobe Sends in Window (sample 50)";
-    proc print data=diag_join_duplicates (obs=50) noobs; run;
-    title;
-%end;
-
-
-/* ============================================================
-   SECTION 11 : ADOBE DROP-OFFS
-   Fix 19: Validate that the customer-number column in
-   APNS.adobe_drop_offs_data exists and resolve its name before
-   reading the table. The column may be named ucn, cust_no, UCN,
-   or CustomerNumber depending on environment. The resolved name
-   is stored in &ucn_col; if no recognised name is found the job
-   aborts with a clear diagnostic rather than producing a table
-   with all-missing cust_no values.
-   ============================================================ */
-
-%macro validate_ucn_col;
-    %global ucn_col;
-    %let ucn_col = ;
-
-    proc sql noprint;
-        select name into :ucn_col trimmed
-        from dictionary.columns
-        where libname = "APNS"
-          and memname = upcase("adobe_drop_offs_data")
-          and upcase(name) in ("UCN", "CUST_NO", "CUSTOMERNUMBER")
-        order by
-            case upcase(name)
-                when "UCN"            then 1
-                when "CUST_NO"        then 2
-                when "CUSTOMERNUMBER" then 3
-                else                       4
-            end;
-    quit;
-
-    %if %length(&ucn_col) = 0 %then %do;
-        %put ERROR: Fix 19 — APNS.adobe_drop_offs_data does not contain a recognisable;
-        %put ERROR:           customer-number column (checked: ucn, cust_no, CustomerNumber).;
-        %put ERROR:           Run: proc contents data=APNS.adobe_drop_offs_data; run;;
-        %put ERROR:           Update %validate_ucn_col with the correct column name.;
-        %abort cancel;
-    %end;
-    %else %do;
-        %put NOTE: Fix 19 — Customer-number column in adobe_drop_offs_data resolved as: &ucn_col;
-    %end;
-%mend validate_ucn_col;
-%validate_ucn_col;
-
-
-data Adobe_recent_drops;
-    set APNS.adobe_drop_offs_data;
-    where product_code in (&product_list.)
-      and datepart(Date_loaded) >= "&min_date."d;
-    cust_no       = &ucn_col;   /* Fix 19: resolved column name, not hard-coded ucn */
-    Date_loaded   = datepart(Date_loaded);
-    format Date_loaded date9.;
-    Time          = timepart(Date_loaded);
-    format Time time9.;
-    Brand         = substr(mucn, 1, 3);
-    Delivery_code = "";
-run;
-
-proc sql noprint;
-    select count(*) into :drops_rows trimmed
-    from Adobe_recent_drops;
-quit;
-
-%put Adobe drop-offs: &drops_rows;
-
-title "DEBUG 4 - Adobe Drop-offs by Product Code";
-proc sql;
-    select product_code,
-           count(*)                         as Row_Count,
-           min(Date_loaded) format=date9.   as First_Drop,
-           max(Date_loaded) format=date9.   as Last_Drop
-    from Adobe_recent_drops
-    group by product_code
-    order by product_code;
-quit;
-title;
-
-
-/* ============================================================
-   SECTION 12 : COMBINE ADOBE DATA
-   Uses APNS_sends_matched (campaign-scoped) instead of the
-   original APNS_sends_campaigns to prevent cross-campaign bleed.
-   ============================================================ */
-
-data adobe_to_clients_step;
-    length mucn                $28
-           product_code        $29
-           drop_reason         $50
-           distribution_status $43
-           answer              $815;
-    set Adobe_recent_drops
-        APNS_sends_matched;     /* FIX 1: matched sends, not raw sends */
-run;
-
-data adobe_to_clients_final (drop=etl_source_data etl_date daymonth);
-    set adobe_to_clients_step;
-    if drop_reason  = "" then success = 1; else success = 0;
-    if drop_reason ne "" then drop    = 1; else drop    = 0;
-run;
-
-
-/* ============================================================
-   SECTION 13 : OPTIMISE STEP
-   ============================================================ */
-
-data campaigns_to_adobe_step
-    (keep=Optimize sub_segment Drop_reason product_code
-          cust_no Date_to_adobe Time_created_to_adobe
-          Campaign_Name mucn success_to_adobe drop_to_adobe);
-    set CAMPAIGNS_TO_ADOBE;
-    if drop_reason ne "" then optimize = drop_reason; else optimize = "Sent";
-    if drop_reason  = "" then success_to_adobe = 1;   else success_to_adobe = 0;
-    if drop_reason ne "" then drop_to_adobe    = 1;   else drop_to_adobe    = 0;
-run;
-
-data campaigns_to_adobe_renamed;
-    set campaigns_to_adobe_step;
-    rename Drop_Reason   = Drop_reason_to_adobe;
-    rename mucn          = mucn_to_adobe;
-    rename product_code  = product_code_to_adobe;
-    rename Campaign_Name = Campaign_Name_to_adobe;
-run;
-
-
-/* ============================================================
-   SECTION 14 : ADOBE CLASSIFICATION
-   ============================================================ */
-
-data adobe_to_clients_step2 (drop=success drop);
-    length Adobe         $50
-           Client        $50
-           testindicator $6;
-    set adobe_to_clients_final;
-    if upcase(delivery_code) = "TEST"
-        then Adobe = "TEST";
-    else if delivery_code ne ""
-        then Adobe = "Loaded";
-    else
-        Adobe = drop_reason;
-
-    if upcase(delivery_code) = "TEST"
-        then Client = "TEST";
-    else if upcase(distribution_status) = "SENT"
-        then Client = "Sent to Client";
-    else if upcase(distribution_status) = "SENT TO THE SERVICE PROVIDER"
-        then Client = "Sent to Provider";
-    else if upcase(distribution_status) = "PENDING"
-        then Client = "Pending";
-    else if upcase(distribution_status) = "DELIVERY CANCELED"
-        then Client = "Delivery Canceled";
-    else
-        Client = drop_reason;
-run;
-
-proc sql;
-    create table adobe_delivery_test as
-    select distinct cust_no, date_loaded, product_code,
-                    "TEST" as testindicator
-    from adobe_to_clients_step2
-    where upcase(delivery_code) = "TEST";
-quit;
-
-proc sql;
-    create table adobe_final_new as
-    select a.*, b.testindicator
-    from adobe_to_clients_step2 a
-    left join adobe_delivery_test b
-        on  a.cust_no      = b.cust_no
-        and a.date_loaded  = b.date_loaded
-        and a.product_code = b.product_code;
-quit;
-
-data adobe_final_table_clients;
-    length testindicator $6;
-    set adobe_final_new;
-    if strip(testindicator) = "TEST" then do;
-        testindicator = "TEST";
-        Adobe         = "TEST";
-        Client        = "TEST";
-    end;
-    else testindicator = "Actual";
-    rename cust_no = cust_no2;
-run;
-
-proc sql noprint;
-    select count(*) into :final_rows trimmed
-    from adobe_final_table_clients;
-quit;
-
-%put Adobe final table rows: &final_rows;
-
-
-/* ============================================================
-   SECTION 15 : FINAL JOIN — OPTIMISE + ADOBE
-   Optimise is the LEFT (master) table.
-   Adobe enriches; it never adds rows.
-   ============================================================ */
-
-proc sql;
-    create table joining as
-    select *
-    from campaigns_to_adobe_renamed a
-    left join adobe_final_table_clients b
-        on  a.cust_no               = b.cust_no2
-        and a.product_code_to_adobe  = b.product_code
-        and (b.date_loaded between a.date_to_adobe
-                               and a.date_to_adobe + &adobe_load_window.);
-quit;
-
-data APN_POT_Step1
-    (drop=Time product_code mucn mucn_to_adobe
-          success_to_adobe drop_to_adobe);
-    length Adobe  $50
-           Client $50;
-    set joining;
-
-    if missing(cust_no2) and Optimize = "Sent"
-        then Adobe = "Not loaded into Adobe within &adobe_load_window. days";
-    if missing(cust_no2) and Optimize = "Sent"
-        and intck('day', date_to_adobe, today()) <= &adobe_load_window.
-        and missing(Date_loaded)
-        then Adobe = "Sending to Adobe";
-
-    date_Diff = intck('day', date_to_adobe, date_loaded);
-run;
-
-proc sort data=APN_POT_Step1;
-    by cust_no product_code_to_adobe date_to_adobe descending date_loaded;
-run;
-
-proc sort data=APN_POT_Step1 nodupkey
-    out=APN_POT_Final;
-    by cust_no product_code_to_adobe date_to_adobe;
-run;
-
-data APN_POT;
-    set APN_POT_Final;
-run;
-
-proc sql noprint;
-    select count(*) into :pot_rows trimmed
-    from APN_POT;
-quit;
-
-%put APN_POT rows: &pot_rows;
-
-title "DEBUG 5 - APN_POT: Distribution by Campaign and Status";
-proc sql;
-    select Campaign_Name_to_adobe   as Campaign,
-           Optimize,
-           Adobe,
-           Client,
-           count(*) as Row_Count
-    from APN_POT
-    group by Campaign_Name_to_adobe, Optimize, Adobe, Client
-    order by Campaign_Name_to_adobe, Optimize, Row_Count desc;
-quit;
-title;
-
-
-/* ============================================================
-   FIX 3 — DROPPED-BUT-LOADED DIAGNOSTIC
-   -------------------------------------------------------
-   Customers who were dropped by Optimise but still reached
-   Adobe (Loaded) represent a process exception. This block
-   quantifies them and — if they exceed the configured
-   threshold — aborts the load.
-
-   Set %let dropped_loaded_threshold = 0; for strict mode
-   (any dropped-but-loaded record aborts).
-   Set a positive number to allow a tolerance before aborting.
-   ============================================================ */
-
-proc sql noprint;
-    create table diag_dropped_loaded as
-    select
-        Campaign_Name_to_adobe,
-        product_code_to_adobe,
-        Optimize                           as Optimise_Drop_Reason,
-        Adobe,
-        Client,
-        count(*)                           as Record_Count
-    from APN_POT
-    where Optimize not in ("Sent")         /* Dropped by Optimise */
-      and Adobe     in ("Loaded")          /* But still in Adobe  */
-    group by 1, 2, 3, 4, 5
-    order by Record_Count desc;
-
-    select coalesce(sum(Record_Count), 0)
-    into   :dropped_loaded_count trimmed
-    from   diag_dropped_loaded;
-quit;
-
-%put NOTE: Dropped-but-Loaded records detected: &dropped_loaded_count;
-
-%if &dropped_loaded_count > 0 %then %do;
-    title "DIAGNOSTIC FIX 3 - Dropped by Optimise but Loaded into Adobe";
-    proc print data=diag_dropped_loaded noobs; run;
-    title;
-%end;
-
-%if &dropped_loaded_count > &dropped_loaded_threshold %then %do;
-    %put ERROR: &dropped_loaded_count dropped-but-loaded records exceed threshold (&dropped_loaded_threshold).;
-    %put ERROR: Review diag_dropped_loaded before proceeding.;
-    %put ERROR: If these are expected (e.g. Adobe loaded before Optimise flagged), increase dropped_loaded_threshold.;
-    %abort cancel;
-%end;
-
-
-/* ============================================================
-   SECTION 15B : DISTINCT CUSTOMERS LOADED INTO ADOBE
-   Scoped to Adobe="Loaded" rows only (Fix 2).
-   This prevents the count bleeding onto dropped rows in
-   the summary table.
-   ============================================================ */
-
-proc sql;
-    create table cust_loaded_summary as
-    select
-        Campaign_Name_to_adobe,
-        product_code_to_adobe,
-        date_to_adobe                                       as Batch_Date,
-        Optimize,
-        Adobe,
-        Client,
-        count(distinct cust_no) as Loaded_Adobe
-                                label = "Distinct Customers Loaded into Adobe"
-    from APN_POT_Final
-    where Adobe = "Loaded"                   /* FIX 2: only "Loaded" rows */
-    group by Campaign_Name_to_adobe, product_code_to_adobe,
-             date_to_adobe, Optimize, Adobe, Client;
-quit;
-
-
-/* ============================================================
-   SECTION 15C : COMPLETE FUNNEL — FULL OPPORTUNITY TO OPEN
-   -------------------------------------------------------
-   Fix 15: The join from FULL_OPPORTUNITY to Optimise uses
-   Product_Code as the primary anchor (most reliable), with
-   Campaign_Code as a secondary filter applied via the
-   product_campaign_map lookup built from config. Free-text
-   Campaign_Name from SharePoint is too fragile to join on
-   directly; product codes are controlled and unique per batch.
-
-   Fix 10: All percentage calculations guarded against
-   division-by-zero.
-
-   Fix 16: Pre-Optimise orphan count (records in the input
-   file that never reached Optimise) is included as a funnel
-   stage so stakeholders can see the full drop-off picture.
-
-   Fix 17: The Optimise product code in the left join subquery
-   is normalised to match &product_code_strategy. If the input
-   file uses BASE codes (<=8 chars) the Optimise code is
-   truncated to 8 chars so both sides compare at the same
-   level. This prevents silent join failures when stakeholders
-   supply base codes rather than full variation+message codes.
-
-   Fix 18: The Pre_Optimise_Orphans column previously used a
-   correlated subquery that re-executed for every GROUP BY
-   combination, stamping the same product-level count on every
-   row and potentially double-counting. Replaced with a
-   pre-aggregated table (orphan_counts) joined once on
-   Product_Code — faster and logically correct.
-   ============================================================ */
-
-/* Fix 18: pre-aggregate orphan counts once before the funnel query */
-proc sql;
-    create table orphan_counts as
-    select Product_Code,
-           count(*) as Orphan_Count
-    from FULL_OPPORTUNITY_ORPHANS
-    group by Product_Code;
-quit;
-
-proc sql;
-    create table COMPLETE_FUNNEL as
-    select
-        /* Use config-controlled Campaign_Code as the funnel label.
-           Fall back to whatever Optimise recorded if no config match. */
-        coalesce(m.Campaign_Code, b.Campaign_Name_to_adobe) as Campaign
-                 length = 100 label = "Campaign",
-        coalesce(a.Product_Code,  b.product_code_to_adobe)  as Product_Code
-                 length = 29  label = "Product Code",
-
-        /* Stage 0: Full upstream opportunity (stakeholder input file) */
-        count(distinct a.unique_id)                          as Full_Opportunity
-                 label = "Full Opportunity (Input File)",
-
-        /* Pre-Optimise drop-off: Fix 18 — joined from pre-aggregated table,
-           not a correlated subquery, to avoid per-row re-execution and
-           incorrect repeated counts in a grouped result set.              */
-        coalesce(o.Orphan_Count, 0)                          as Pre_Optimise_Orphans
-                 label = "Pre-Optimise Drop-Off",
-
-        /* Stage 1: Passed Optimise */
-        count(distinct b.cust_no)                            as Passed_Optimise
-                 label = "Passed Optimise",
-
-        /* Stage 2: Loaded to Adobe */
-        count(distinct c.cust_no2)                           as Loaded_to_Adobe
-                 label = "Loaded to Adobe",
-
-        /* Stage 3: Sent to Client */
-        count(distinct
-            case when d.Client = "Sent to Client"
-                 then d.cust_no2 end)                        as Sent_to_Client
-                 label = "Sent to Client",
-
-        /* Stage 4: Opened */
-        count(distinct
-            case when d.answer is not null
-                  and strip(d.answer) ne ""
-                 then d.cust_no2 end)                        as Opened
-                 label = "Opened",
-
-        /* Import quality */
-        sum(case when a.flag_missing_product_code = 1
-                 then 1 else 0 end)                          as Import_Missing_Product
-                 label = "Import: Missing Product Code",
-
-        /* Fix 10: Division-by-zero-safe percentages */
-        case when count(distinct a.unique_id) > 0
-             then (count(distinct b.cust_no) /
-                   count(distinct a.unique_id)) * 100
-             else . end                                      as Pct_Passed_Optimise
-                 format = 5.1 label = "% Passed Optimise",
-
-        case when count(distinct b.cust_no) > 0
-             then (count(distinct c.cust_no2) /
-                   count(distinct b.cust_no)) * 100
-             else . end                                      as Pct_Loaded_to_Adobe
-                 format = 5.1 label = "% Loaded to Adobe",
-
-        case when count(distinct c.cust_no2) > 0
-             then (count(distinct
-                       case when d.Client = "Sent to Client"
-                            then d.cust_no2 end) /
-                   count(distinct c.cust_no2)) * 100
-             else . end                                      as Pct_Sent_to_Client
-                 format = 5.1 label = "% Sent to Client",
-
-        case when count(distinct
-                        case when d.Client = "Sent to Client"
-                             then d.cust_no2 end) > 0
-             then (count(distinct
-                       case when d.answer is not null
-                             and strip(d.answer) ne ""
-                            then d.cust_no2 end) /
-                   count(distinct
-                       case when d.Client = "Sent to Client"
-                            then d.cust_no2 end)) * 100
-             else . end                                      as Pct_Opened
-                 format = 5.1 label = "% Opened"
-
-    from FULL_OPPORTUNITY a
-
-    /* Fix 15: join config map on Product_Code for a reliable Campaign_Code lookup */
-    left join product_campaign_map m
-        on  a.Product_Code = m.Product_Code
-
-    /* Fix 18: join pre-aggregated orphan counts — one row per Product_Code */
-    left join orphan_counts o
-        on  coalesce(a.Product_Code, "") = coalesce(o.Product_Code, "")
-
-    /* Left join to Optimise passed records.
-       Fix 17: Optimise product code normalised to &product_code_strategy level
-       so base-code input files match full-code Optimise records correctly.   */
-    left join (
-        select distinct cust_no,
-            %if &product_code_strategy = BASE %then %do;
-                upcase(strip(substr(product_code_to_adobe, 1, 8))) as product_code,
-            %end;
-            %else %do;
-                upcase(strip(product_code_to_adobe))               as product_code,
-            %end;
-                        upcase(strip(Campaign_Name_to_adobe)) as Campaign_Name_to_adobe
-        from campaigns_to_adobe_renamed
-        where optimize = "Sent"
-    ) b
-        on  a.cust_no      = b.cust_no
-        and a.Product_Code = b.product_code
-
-    /* Left join to Adobe loaded records */
-    left join (
-        select distinct cust_no2,
-                        upcase(strip(product_code)) as product_code
-        from adobe_final_table_clients
-        where Adobe = "Loaded"
-    ) c
-        on  coalesce(a.cust_no, b.cust_no) = c.cust_no2
-        and coalesce(a.Product_Code, b.product_code) = c.product_code
-
-    /* Left join to full client status */
-    left join adobe_final_table_clients d
-        on  coalesce(a.cust_no, b.cust_no) = d.cust_no2
-        and coalesce(a.Product_Code, b.product_code) = d.product_code
-
-    group by coalesce(m.Campaign_Code, b.Campaign_Name_to_adobe),
-             coalesce(a.Product_Code,  b.product_code_to_adobe),
-             coalesce(o.Orphan_Count, 0);
-quit;
-
-/* Human-readable funnel summary */
-data COMPLETE_FUNNEL;
-    set COMPLETE_FUNNEL;
-    length Funnel_Summary $600;
-
-    Drop_Off_Pre_Optimise    = Full_Opportunity - Passed_Optimise;
-    Drop_Off_Before_Send     = Passed_Optimise  - Sent_to_Client;
-
-    Funnel_Summary = cats(
-        "Of ", Full_Opportunity, " leads: ",
-        Pre_Optimise_Orphans, " never reached Optimise; ",
-        Passed_Optimise, " (", put(Pct_Passed_Optimise, 5.1), "%) passed Optimise; ",
-        Loaded_to_Adobe, " (", put(Pct_Loaded_to_Adobe, 5.1), "%) loaded to Adobe; ",
-        Sent_to_Client, " (", put(Pct_Sent_to_Client, 5.1), "%) sent to client; ",
-        Opened, " (", put(Pct_Opened, 5.1), "%) opened."
-    );
-run;
-
-title "COMPLETE FUNNEL — Full Opportunity to Open";
-proc print data=COMPLETE_FUNNEL noobs;
-    var Campaign Product_Code
-        Full_Opportunity Pre_Optimise_Orphans
-        Passed_Optimise Loaded_to_Adobe Sent_to_Client Opened
-        Pct_Passed_Optimise Pct_Loaded_to_Adobe Pct_Sent_to_Client Pct_Opened
-        Funnel_Summary;
-    format Pct_Passed_Optimise Pct_Loaded_to_Adobe Pct_Sent_to_Client Pct_Opened 5.1;
-run;
-title;
-
-
-/* ============================================================
-   SECTION 16 : SUMMARY TABLE FOR POWER BI
-   ============================================================ */
-
-proc sql;
-    create table APN_POT_SUMMARY as
-    select
-        Campaign_Name_to_adobe                              as Campaign_Name
-                                                            length = 100
-                                                            label  = "Campaign Name",
-        product_code_to_adobe                               as Product_Code
-                                                            length = 29
-                                                            label  = "Product Code",
-        date_to_adobe                                       as Batch_Date
-                                                            format = date9.
-                                                            label  = "Batch Date",
-        Optimize,
-        Adobe,
-        Client,
-        testindicator,
-
-        count(*)                                            as Record_Count
-                                                            label = "Record Count",
-
-        sum(case when Optimize  = "Sent"
-                 then 1 else 0 end)                         as Passed_Optimise
-                                                            label = "Passed Optimise",
-        sum(case when Optimize ne "Sent"
-                 then 1 else 0 end)                         as Dropped_Optimise
-                                                            label = "Dropped Optimise",
-
-        sum(case when Adobe in ("ADB_NoConsent","ADB_NoChannel",
-                                "ADB_NotInSegment","ADB_NoBrand",
-                                "NO CHANNEL","INCORRECT SEGMENT",
-                                "NO CONSENT","GLOBAL OPTOUT")
-                 then 1 else 0 end)                         as Dropped_Adobe
-                                                            label = "Dropped by Adobe",
-        sum(case when Adobe = "Sending to Adobe"
-                 then 1 else 0 end)                         as Sending_to_Adobe
-                                                            label = "Sending to Adobe",
-        sum(case when Adobe contains "Not loaded"
-                 then 1 else 0 end)                         as Not_Loaded
-                                                            label = "Not Loaded (&adobe_load_window.d)",
-
-        sum(case when Client = "Sent to Client"
-                 then 1 else 0 end)                         as Sent_to_Client
-                                                            label = "Sent to Client",
-        sum(case when Client = "Sent to Provider"
-                 then 1 else 0 end)                         as Sent_to_Provider
-                                                            label = "Sent to Provider",
-        sum(case when Client = "Pending"
-                 then 1 else 0 end)                         as Pending_Client
-                                                            label = "Pending",
-        sum(case when Client = "Delivery Canceled"
-                 then 1 else 0 end)                         as Delivery_Canceled
-                                                            label = "Delivery Canceled",
-
-        sum(case when Client = "Sent to Client"
-                 and answer is not null
-                 and strip(answer) ne ""
-                 then 1 else 0 end)                         as Total_Opened
-                                                            label = "Opened",
-
-        sum(case when Client = "Sent to Client"
-                 then 1 else 0 end)                         as Sent_to_Client_Count
-                                                            label = "Sent to Client Count",
-
-        min(date_loaded)                                    as First_Date_Loaded
-                                                            format = date9.
-                                                            label  = "First Date Loaded",
-        max(date_loaded)                                    as Last_Date_Loaded
-                                                            format = date9.
-                                                            label  = "Last Date Loaded",
-        min(date_Diff)                                      as Min_Days_to_Adobe
-                                                            label  = "Min Days to Adobe",
-        max(date_Diff)                                      as Max_Days_to_Adobe
-                                                            label  = "Max Days to Adobe",
-        mean(date_Diff)                                     as Avg_Days_to_Adobe
-                                                            format = 8.1
-                                                            label  = "Avg Days to Adobe"
-
-    from APN_POT
-    group by
-        Campaign_Name_to_adobe,
-        product_code_to_adobe,
-        date_to_adobe,
-        Optimize,
-        Adobe,
-        Client,
-        testindicator
-    order by
-        Campaign_Name_to_adobe,
-        product_code_to_adobe,
-        date_to_adobe;
-quit;
-
-/* Calculate Open Rate */
-data APN_POT_SUMMARY;
-    set APN_POT_SUMMARY;
-    if Sent_to_Client_Count > 0
-        then Open_Rate = (Total_Opened / Sent_to_Client_Count) * 100;
-    else Open_Rate = .;
-    format Open_Rate 8.2;
-    label  Open_Rate = "Open Rate (%)";
-run;
-
-/* ============================================================
-   FIX 2 — JOIN LOADED_ADOBE ON MATCHING DIMENSIONS ONLY
-   -------------------------------------------------------
-   Old approach joined only on Campaign + Product + Batch_Date,
-   which stamped the distinct-customer count on every row in
-   that batch — including dropped rows.
-
-   New approach joins on all six grouping dimensions so
-   Loaded_Adobe only appears on the exact "Loaded" rows it
-   was derived from. All other rows correctly receive 0.
-   ============================================================ */
-
-proc sql;
-    create table APN_POT_SUMMARY_FINAL as
-    select
-        a.*,
-        coalesce(b.Loaded_Adobe, 0)         as Loaded_Adobe
-                 label = "Distinct Customers Loaded into Adobe"
-    from APN_POT_SUMMARY a
-    left join cust_loaded_summary b
-        on  a.Campaign_Name = b.Campaign_Name_to_adobe
-        and a.Product_Code  = b.product_code_to_adobe
-        and a.Batch_Date    = b.Batch_Date
-        and a.Optimize      = b.Optimize     /* FIX 2: match all dimensions */
-        and a.Adobe         = b.Adobe
-        and a.Client        = b.Client;
-quit;
-
-proc sql noprint;
-    select count(*) into :summary_rows trimmed
-    from APN_POT_SUMMARY_FINAL;
-quit;
-
-%put APN_POT_SUMMARY_FINAL rows: &summary_rows;
-
-
-/* ============================================================
-   SECTION 17 : LOAD TO PRODUCTION
-   ============================================================ */
-
-%macro LoadTable(Table=, Target=);
-    %if %sysfunc(exist(&Table.)) %then %do;
-
-        proc sql noprint;
-            select count(*) into :row_count trimmed
-            from &Table.;
-        quit;
-
-        %if &row_count = 0 %then %do;
-            %put ERROR: &Table. has ZERO rows. Load ABORTED.;
-            %abort cancel;
-        %end;
-        %else %do;
-            %put NOTE: &Table. has &row_count rows. Loading to STI_PBI.&Target.;
-            proc sql;
-                drop table STI_PBI.&Target.;
-                create table STI_PBI.&Target. as
-                select * from &Table.;
-            quit;
-            %put NOTE: STI_PBI.&Target. loaded successfully.;
-        %end;
-
-    %end;
-    %else %do;
-        %put ERROR: Work table &Table. does not exist. Cannot load.;
-        %abort cancel;
-    %end;
-%mend;
-
-%LoadTable(Table=APN_POT,               Target=APN_POT);
-%LoadTable(Table=APN_POT_SUMMARY_FINAL, Target=APN_POT_SUMMARY);
-
-
-/* ============================================================
-   SECTION 18 : CAPTURE POST-RUN STATE
-   ============================================================ */
-
-proc sql noprint;
-    select max(date_to_adobe) format date9.
-    into   :New_date trimmed
-    from   APN_POT;
-quit;
-
-proc sql noprint;
-    select max(time_created_to_adobe) format time9.
-    into   :New_time trimmed
-    from   APN_POT
-    where  date_to_adobe = "&New_date."d;
-quit;
-
-proc sql noprint;
-    select count(cust_no)
-    into   :New_records trimmed
-    from   APN_POT;
-quit;
-
-%put Post-run state: &New_date &New_time  Records: &New_records;
-
-%let Diff_Records = %sysevalf(&New_records - &Old_records);
-%put Records added this run: &Diff_Records;
-
-
-/* ============================================================
-   SECTION 19 : EMAIL NOTIFICATION
-   Fix 12: full_opp_count added to diagnostics block in both
-           the "no update" and "updated" email variants.
-   ============================================================ */
-
-%macro EMAIL;
-
-    %if &Old_date = &New_date and &Old_time = &New_time %then %do;
-
-        FILENAME EML EMAIL
-            to   = "Morris.Nkomo@fnb.co.za"
-            cc   = "dlfnbstioperationalanalytics@fnb.co.za"
-            from = 'dlfnbstioperationalanalytics@fnb.co.za';
-        DATA _NULL_;
-            FILE EML;
-            PUT "Hi,";
-            PUT " ";
-            PUT "The APN POT script ran with no table update,";
-            PUT "please check log for any possible failure(s).";
-            PUT " ";
-            PUT "Max Date in table before run: &Old_date";
-            PUT "Max Time in table before run: &Old_time";
-            PUT "Max Date in table after run:  &New_date";
-            PUT "Max Time in table after run:  &New_time";
-            PUT " ";
-            PUT "--- Run Diagnostics ---";
-            PUT "Full opportunity records read:          &full_opp_count";
-            PUT "Pre-Optimise orphan records:            &orphan_count";
-            PUT "Adobe sends after Campaign_Name match:  &matched_sends";
-            PUT "Customers with multiple Adobe sends:    &dup_join_count";
-            PUT "Dropped-but-Loaded records:             &dropped_loaded_count";
-            PUT " ";
-            PUT "The APN Dashboard does not require refreshing.";
-            PUT " ";
-            PUT "Kind Regards";
-            PUT "Morris";
-        RUN;
-
-    %end;
-
-    %else %if &Old_date ne &New_date or &Old_time ne &New_time %then %do;
-
-        FILENAME EML EMAIL
-            to   = "Morris.Nkomo@fnb.co.za"
-            cc   = "dlfnbstioperationalanalytics@fnb.co.za"
-            from = 'dlfnbstioperationalanalytics@fnb.co.za';
-        DATA _NULL_;
-            FILE EML;
-            PUT "Hi,";
-            PUT "APN POT script ran with a table update.";
-            PUT " ";
-            PUT "Max Date in table before run: &Old_date";
-            PUT "Max Time in table before run: &Old_time";
-            PUT "Max Date in table after run:  &New_date";
-            PUT "Max Time in table after run:  &New_time";
-            PUT "Records added this run:       &Diff_Records";
-            PUT " ";
-            PUT "--- Run Diagnostics ---";
-            PUT "Adobe load window (days):               &adobe_load_window";
-            PUT "Full opportunity records read:          &full_opp_count";
-            PUT "Pre-Optimise orphan records:            &orphan_count";
-            PUT "Adobe sends after Campaign_Name match:  &matched_sends";
-            PUT "Customers with multiple Adobe sends:    &dup_join_count";
-            PUT "Dropped-but-Loaded records:             &dropped_loaded_count";
-            PUT " ";
-            PUT "The APN Dashboard can be refreshed.";
-            PUT " ";
-            PUT "Kind Regards";
-            PUT "Morris";
-        RUN;
-
-    %end;
-
-    %else %if %sysfunc(exist(STI_PBI.APN_POT)) = 0 %then %do;
-
-        FILENAME EML EMAIL
-            to      = "Morris.Nkomo@fnb.co.za"
-            cc      = "dlfnbstioperationalanalytics@fnb.co.za"
-            from    = 'dlfnbstioperationalanalytics@fnb.co.za'
-            subject = "Table Missing";
-        DATA _NULL_;
-            FILE EML;
-            PUT "Good Day,";
-            PUT " ";
-            PUT "Kindly note that the APN_POT table is missing, currently investigating.";
-            PUT " ";
-            PUT "Kind Regards,";
-            PUT "Morris";
-        RUN;
-
-    %end;
-
-%mend email;
-%email;
+                                                                                             The SAS System
+
+MLOGIC(HTML5ACCESSIBLEGRAPHSUPPORTED):  Beginning execution.
+MLOGIC(_SAS_VERCOMP_FV):  Beginning execution.
+MLOGIC(_SAS_VERCOMP_FV):  Parameter FMAJOR has value 9
+MLOGIC(_SAS_VERCOMP_FV):  Parameter FMINOR has value 4
+MLOGIC(_SAS_VERCOMP_FV):  Parameter FMAINT has value 4
+MLOGIC(_SAS_VERCOMP_FV):  Parameter VMAJOR has value 0
+MLOGIC(_SAS_VERCOMP_FV):  Parameter VMINOR has value 0
+MLOGIC(_SAS_VERCOMP_FV):  Parameter VMAINT has value 0
+MLOGIC(_SAS_VERCOMP_FV):  %LOCAL  MAJOR
+MLOGIC(_SAS_VERCOMP_FV):  %LOCAL  MINOR
+MLOGIC(_SAS_VERCOMP_FV):  %LOCAL  MAINT
+MLOGIC(_SAS_VERCOMP_FV):  %LOCAL  CURMAJ
+MLOGIC(_SAS_VERCOMP_FV):  %LOCAL  CURMIN
+MLOGIC(_SAS_VERCOMP_FV):  %LOCAL  CURMNT
+MLOGIC(_SAS_VERCOMP_FV):  %LET (variable name is CURMAJ)
+SYMBOLGEN:  Macro variable SYSVLONG resolves to 9.04.01M8P022223
+SYMBOLGEN:  Macro variable CURMAJ resolves to 9
+MLOGIC(_SAS_VERCOMP_FV):  %IF condition %eval(&CurMaj EQ V) is FALSE
+MLOGIC(_SAS_VERCOMP_FV):  %LET (variable name is MAJOR)
+SYMBOLGEN:  Macro variable FMAJOR resolves to 9
+MLOGIC(_SAS_VERCOMP_FV):  %LET (variable name is MINOR)
+SYMBOLGEN:  Macro variable FMINOR resolves to 4
+MLOGIC(_SAS_VERCOMP_FV):  %LET (variable name is MAINT)
+SYMBOLGEN:  Macro variable FMAINT resolves to 4
+MLOGIC(_SAS_VERCOMP_FV):  %LET (variable name is CURMIN)
+SYMBOLGEN:  Macro variable SYSVLONG resolves to 9.04.01M8P022223
+MLOGIC(_SAS_VERCOMP_FV):  %LET (variable name is CURMNT)
+SYMBOLGEN:  Macro variable SYSVLONG resolves to 9.04.01M8P022223
+SYMBOLGEN:  Macro variable MAJOR resolves to 9
+SYMBOLGEN:  Macro variable CURMAJ resolves to 9
+MLOGIC(_SAS_VERCOMP_FV):  %IF condition %eval(&major NE &CurMaj) is FALSE
+SYMBOLGEN:  Macro variable MINOR resolves to 4
+SYMBOLGEN:  Macro variable CURMIN resolves to 04
+MLOGIC(_SAS_VERCOMP_FV):  %IF condition %eval(&minor NE &CurMin) is FALSE
+SYMBOLGEN:  Macro variable MAINT resolves to 4
+MLOGIC(_SAS_VERCOMP_FV):  %IF condition "&maint" = "" is FALSE
+SYMBOLGEN:  Macro variable CURMNT resolves to 8
+SYMBOLGEN:  Macro variable MAINT resolves to 4
+MLOGIC(_SAS_VERCOMP_FV):  Ending execution.
+MLOGIC(HTML5ACCESSIBLEGRAPHSUPPORTED):  %IF condition %_SAS_VERCOMP_FV(9,4,4, 0,0,0) >= 0 is TRUE
+MPRINT(HTML5ACCESSIBLEGRAPHSUPPORTED):   ACCESSIBLE_GRAPH
+MLOGIC(HTML5ACCESSIBLEGRAPHSUPPORTED):  Ending execution.
+SYMBOLGEN:  Macro variable SASWORKLOCATION resolves to "/work5/SAS_workD2A40012BE11_dna-r1saspwrk06/SAS_work80760012BE11_dna-r1saspwrk06/"
+NOTE: Writing HTML5(EGHTML) Body file: EGHTML
+TAG:JobName1=STI_CA_D_APNS_DATA_REBUILD
+TAG:JobName2=Daily
+TAG:JobCategory=Campaigns
+TAG:JobPurpose=Operational
+TAG:JobPriority=Medium
+TAG:JobStatus=Prod
+37         
+38         %include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
+SYMBOLGEN:  Macro variable SYSUSERID resolves to f8884560
+f8884560
+SYMBOLGEN:  Macro variable SYSHOSTNAME resolves to dna-r1saspwrk06
+dna-r1saspwrk06
+NOTE: Libref WH_MINT was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw MINT
+NOTE: Libref WH_CRL was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/CL/InForce_Stacks/Daily/Product
+NOTE: Libref WH_COM was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/02 Common
+NOTE: Libref WH_ENH was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/03 Enhanced
+NOTE: Libref WH_REP refers to the same physical library as W_REPORT.
+NOTE: Libref WH_REP was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/04 Reporting Summaries
+NOTE: Libref WH_SS refers to the same physical library as W_IDIT.
+NOTE: Libref WH_SS was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/IDIT
+NOTE: Libref WH_FLOW was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/03 Enhanced/MINT/FLOW
+NOTE: Libref WH_PRFT was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance/Profitability/Saved Results/Overall
+NOTE: Libref WH_DO was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance/Debit Order & Customer Analysis/Saved Extracts
+NOTE: Libref WH_TEST was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/05 Testing
+NOTE: Libref WH_IIPRD was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/06 Production Datasets
+NOTE: Libref WH_COVID was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/07 Covid Data
+NOTE: Libref WH_KPI was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/03 Enhanced/KPIs
+NOTE: Libref WH_F_ADV was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/02 Advisory
+NOTE: Libref WH_ADHOC was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/08 Adhoc
+NOTE: Libref WH_IFRS was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/10 IFRS17
+NOTE: Libref W_POL was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/01 Policy
+NOTE: Libref W_ROLE was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/02 Role
+NOTE: Libref W_COVER was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/03 Cover
+NOTE: Libref W_PERS was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/04 Personal
+NOTE: Libref W_CONT was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/05 Contact
+NOTE: Libref W_COL was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/06 Collections
+NOTE: Libref W_CLM was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/07 Claims
+NOTE: Libref W_PRD was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/08 Product
+NOTE: Libref W_LOOKUP was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/09 Lookups
+NOTE: Libref W_TRANS was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/02 Common/99 Transactional
+NOTE: Libref W_RAWUVW was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw UserVW
+NOTE: Libref W_RAWUVL was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw UserVW/LOGS
+NOTE: Libref W_RUNMET was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/00 Metadata
+NOTE: Libref W_R_METD refers to the same physical library as W_RUNMD1.
+NOTE: Libref W_R_METD was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/Run Meta/Daily Logs
+NOTE: Libref W_REP_L was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/04 Reporting Summaries/Lookups
+NOTE: Libref W_REP_R was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/04 Reporting Summaries/Raw
+NOTE: Libref W_REP_M was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/04 Reporting Summaries/Logs
+NOTE: Libref W_ENHRAW was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/03 Enhanced/Underlying Data
+NOTE: Libref W_WORKF was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Workflow
+NOTE: Libref W_WF_CLM was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Workflow/Claims
+NOTE: Libref W_REPORT refers to the same physical library as WH_REP.
+NOTE: Libref W_REPORT was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/04 Reporting Summaries
+NOTE: Libref W_RUNMD1 refers to the same physical library as W_R_METD.
+NOTE: Libref W_RUNMD1 was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Atlas/Run Meta/Daily Logs
+NOTE: Libref W_RUNMD2 was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw ALIS/Run Meta/Daily Logs
+NOTE: Libref W_RUNMD3 was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw MINT/Daily Logs
+NOTE: Libref W_RUNMD4 was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw DWS-Sybase/Daily Logs
+NOTE: Libref W_RUNMD4 was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw DWS-Sybase/Daily Logs
+NOTE: Libref W_RAW_CL was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Credit Life Product table
+NOTE: Libref W_RAW_CL was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Credit Life Product table
+NOTE: Libref W_RAW_ST was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/01 Raw Data/99 Raw Short Term Product table
+NOTE: Libref W_ALIS was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/CL/InForce_Stacks/Daily/Common Tables
+NOTE: Libref W_IDIT refers to the same physical library as WH_SS.
+NOTE: Libref W_IDIT was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/IDIT
+NOTE: Libref W_MTV was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/MTV
+NOTE: Libref W_IDIT_T was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/IDIT_TEST
+NOTE: Libref W_FICA was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance/Business Intelligence/AD_HOC/New folder
+NOTE: Libref W_NAM refers to the same physical library as WH_SS_NM.
+NOTE: Libref W_NAM was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/IDIT_NAMIBIA
+NOTE: Libref WH_SS_NM refers to the same physical library as W_NAM.
+NOTE: Libref WH_SS_NM was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnbinsurance_warehouse/data/life/IDIT_NAMIBIA
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value STI_PBI
+MLOGIC(LOGGING):  Parameter DATABASE has value FSR_STI_Power_BI
+MLOGIC(LOGGING):  Parameter SCHEMA has value dbo
+MLOGIC(LOGGING):  Parameter SERVER has value LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable LIBNAME resolves to STI_PBI
+SYMBOLGEN:  Macro variable DATABASE resolves to FSR_STI_Power_BI
+SYMBOLGEN:  Macro variable SERVER resolves to LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to dbo
+MPRINT(LOGGING):   LIBNAME STI_PBI odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FSR_STI_Power_BI;FetchTWFSasTime=1;HostName=LFE-RBPREATLDB1;PortNumber=1433;UID=fnbjnb01\S
+VC_ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=dbo;
+NOTE: Libref STI_PBI was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value STI_LOC
+MLOGIC(LOGGING):  Parameter DATABASE has value FNB_STI_Analytics_Ops
+MLOGIC(LOGGING):  Parameter SCHEMA has value CLAIMS
+MLOGIC(LOGGING):  Parameter SERVER has value LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable LIBNAME resolves to STI_LOC
+SYMBOLGEN:  Macro variable DATABASE resolves to FNB_STI_Analytics_Ops
+SYMBOLGEN:  Macro variable SERVER resolves to LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to CLAIMS
+MPRINT(LOGGING):   LIBNAME STI_LOC odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FNB_STI_Analytics_Ops;FetchTWFSasTime=1;HostName=LFE-RBPREATLDB1;PortNumber=1433;UID=fnbjn
+b01\SVC_ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=CLAIMS;
+NOTE: Libref STI_LOC was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value STI_OPS
+MLOGIC(LOGGING):  Parameter DATABASE has value FNB_STI_Analytics_Ops
+MLOGIC(LOGGING):  Parameter SCHEMA has value SERVICING
+MLOGIC(LOGGING):  Parameter SERVER has value LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable LIBNAME resolves to STI_OPS
+SYMBOLGEN:  Macro variable DATABASE resolves to FNB_STI_Analytics_Ops
+SYMBOLGEN:  Macro variable SERVER resolves to LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to SERVICING
+MPRINT(LOGGING):   LIBNAME STI_OPS odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FNB_STI_Analytics_Ops;FetchTWFSasTime=1;HostName=LFE-RBPREATLDB1;PortNumber=1433;UID=fnbjn
+b01\SVC_ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=SERVICING;
+NOTE: Libref STI_OPS was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value STI_META
+MLOGIC(LOGGING):  Parameter DATABASE has value FNB_STI_Analytics_Ops
+MLOGIC(LOGGING):  Parameter SCHEMA has value METADATA
+MLOGIC(LOGGING):  Parameter SERVER has value LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable LIBNAME resolves to STI_META
+SYMBOLGEN:  Macro variable DATABASE resolves to FNB_STI_Analytics_Ops
+SYMBOLGEN:  Macro variable SERVER resolves to LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to METADATA
+MPRINT(LOGGING):   LIBNAME STI_META odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FNB_STI_Analytics_Ops;FetchTWFSasTime=1;HostName=LFE-RBPREATLDB1;PortNumber=1433;UID=fnbjn
+b01\SVC_ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=METADATA;
+NOTE: Libref STI_META was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value STI_SC
+MLOGIC(LOGGING):  Parameter DATABASE has value FNB_STI_Analytics_Ops
+MLOGIC(LOGGING):  Parameter SCHEMA has value SCORECARD
+MLOGIC(LOGGING):  Parameter SERVER has value LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable LIBNAME resolves to STI_SC
+SYMBOLGEN:  Macro variable DATABASE resolves to FNB_STI_Analytics_Ops
+SYMBOLGEN:  Macro variable SERVER resolves to LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to SCORECARD
+MPRINT(LOGGING):   LIBNAME STI_SC odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FNB_STI_Analytics_Ops;FetchTWFSasTime=1;HostName=LFE-RBPREATLDB1;PortNumber=1433;UID=fnbjn
+b01\SVC_ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=SCORECARD;
+NOTE: Libref STI_SC was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value AN_OPS
+MLOGIC(LOGGING):  Parameter DATABASE has value FNB_STI_Analytics_Ops
+MLOGIC(LOGGING):  Parameter SCHEMA has value STAGING
+MLOGIC(LOGGING):  Parameter SERVER has value LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable LIBNAME resolves to AN_OPS
+SYMBOLGEN:  Macro variable DATABASE resolves to FNB_STI_Analytics_Ops
+SYMBOLGEN:  Macro variable SERVER resolves to LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to STAGING
+MPRINT(LOGGING):   LIBNAME AN_OPS odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FNB_STI_Analytics_Ops;FetchTWFSasTime=1;HostName=LFE-RBPREATLDB1;PortNumber=1433;UID=fnbjn
+b01\SVC_ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=STAGING;
+NOTE: Libref AN_OPS was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value STI_STAG
+MLOGIC(LOGGING):  Parameter DATABASE has value FNB_STI_Analytics_Ops
+MLOGIC(LOGGING):  Parameter SCHEMA has value STAGING
+MLOGIC(LOGGING):  Parameter SERVER has value LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable LIBNAME resolves to STI_STAG
+SYMBOLGEN:  Macro variable DATABASE resolves to FNB_STI_Analytics_Ops
+SYMBOLGEN:  Macro variable SERVER resolves to LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to STAGING
+MPRINT(LOGGING):   LIBNAME STI_STAG odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FNB_STI_Analytics_Ops;FetchTWFSasTime=1;HostName=LFE-RBPREATLDB1;PortNumber=1433;UID=fnbjn
+b01\SVC_ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=STAGING;
+NOTE: Libref STI_STAG was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value STI_DBO
+MLOGIC(LOGGING):  Parameter DATABASE has value FNB_STI_Analytics_Ops
+MLOGIC(LOGGING):  Parameter SCHEMA has value dbo
+MLOGIC(LOGGING):  Parameter SERVER has value LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable LIBNAME resolves to STI_DBO
+SYMBOLGEN:  Macro variable DATABASE resolves to FNB_STI_Analytics_Ops
+SYMBOLGEN:  Macro variable SERVER resolves to LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to dbo
+MPRINT(LOGGING):   LIBNAME STI_DBO odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FNB_STI_Analytics_Ops;FetchTWFSasTime=1;HostName=LFE-RBPREATLDB1;PortNumber=1433;UID=fnbjn
+b01\SVC_ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=dbo;
+NOTE: Libref STI_DBO was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value STI_AN
+MLOGIC(LOGGING):  Parameter DATABASE has value FNB_STI_Analytics
+MLOGIC(LOGGING):  Parameter SCHEMA has value STAGING
+MLOGIC(LOGGING):  Parameter SERVER has value LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable LIBNAME resolves to STI_AN
+SYMBOLGEN:  Macro variable DATABASE resolves to FNB_STI_Analytics
+SYMBOLGEN:  Macro variable SERVER resolves to LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to STAGING
+MPRINT(LOGGING):   LIBNAME STI_AN odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FNB_STI_Analytics;FetchTWFSasTime=1;HostName=LFE-RBPREATLDB1;PortNumber=1433;UID=fnbjnb01\
+SVC_ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=STAGING;
+NOTE: Libref STI_AN was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value CA
+MLOGIC(LOGGING):  Parameter DATABASE has value FNB_STI_Analytics
+MLOGIC(LOGGING):  Parameter SCHEMA has value Claims
+MLOGIC(LOGGING):  Parameter SERVER has value LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable LIBNAME resolves to CA
+SYMBOLGEN:  Macro variable DATABASE resolves to FNB_STI_Analytics
+SYMBOLGEN:  Macro variable SERVER resolves to LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to Claims
+MPRINT(LOGGING):   LIBNAME CA odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FNB_STI_Analytics;FetchTWFSasTime=1;HostName=LFE-RBPREATLDB1;PortNumber=1433;UID=fnbjnb01\
+SVC_ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=Claims;
+NOTE: Libref CA was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value STI_SL
+MLOGIC(LOGGING):  Parameter DATABASE has value FNB_STI_Analytics
+MLOGIC(LOGGING):  Parameter SCHEMA has value SALES
+MLOGIC(LOGGING):  Parameter SERVER has value LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable LIBNAME resolves to STI_SL
+SYMBOLGEN:  Macro variable DATABASE resolves to FNB_STI_Analytics
+SYMBOLGEN:  Macro variable SERVER resolves to LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to SALES
+MPRINT(LOGGING):   LIBNAME STI_SL odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FNB_STI_Analytics;FetchTWFSasTime=1;HostName=LFE-RBPREATLDB1;PortNumber=1433;UID=fnbjnb01\
+SVC_ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=SALES;
+NOTE: Libref STI_SL was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value STI_COM
+MLOGIC(LOGGING):  Parameter DATABASE has value FSRLife_Groot
+MLOGIC(LOGGING):  Parameter SCHEMA has value dbo
+MLOGIC(LOGGING):  Parameter SERVER has value 10.5.21.67
+SYMBOLGEN:  Macro variable LIBNAME resolves to STI_COM
+SYMBOLGEN:  Macro variable DATABASE resolves to FSRLife_Groot
+SYMBOLGEN:  Macro variable SERVER resolves to 10.5.21.67
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to dbo
+MPRINT(LOGGING):   LIBNAME STI_COM odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FSRLife_Groot;FetchTWFSasTime=1;HostName=10.5.21.67;PortNumber=1433;UID=fnbjnb01\SVC_ST_OP
+DATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=dbo;
+NOTE: Libref STI_COM was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value STI_CA
+MLOGIC(LOGGING):  Parameter DATABASE has value FNB_ Corporate_Actuarial_Sandbox
+MLOGIC(LOGGING):  Parameter SCHEMA has value dbo
+MLOGIC(LOGGING):  Parameter SERVER has value LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable LIBNAME resolves to STI_CA
+SYMBOLGEN:  Macro variable DATABASE resolves to FNB_ Corporate_Actuarial_Sandbox
+SYMBOLGEN:  Macro variable SERVER resolves to LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to dbo
+MPRINT(LOGGING):   LIBNAME STI_CA odbc noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FNB_ 
+Corporate_Actuarial_Sandbox;FetchTWFSasTime=1;HostName=LFE-RBPREATLDB1;PortNumber=1433;UID=fnbjnb01\SVC_ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=dbo;
+NOTE: Libref STI_CA was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value STI_FLOW
+MLOGIC(LOGGING):  Parameter DATABASE has value FSRLife_FLOW
+MLOGIC(LOGGING):  Parameter SCHEMA has value dbo
+MLOGIC(LOGGING):  Parameter SERVER has value 10.5.21.67
+SYMBOLGEN:  Macro variable LIBNAME resolves to STI_FLOW
+SYMBOLGEN:  Macro variable DATABASE resolves to FSRLife_FLOW
+SYMBOLGEN:  Macro variable SERVER resolves to 10.5.21.67
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to dbo
+MPRINT(LOGGING):   LIBNAME STI_FLOW odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FSRLife_FLOW;FetchTWFSasTime=1;HostName=10.5.21.67;PortNumber=1433;UID=fnbjnb01\SVC_ST_OPD
+ATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=dbo;
+NOTE: Libref STI_FLOW was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value LIFE_OPS
+MLOGIC(LOGGING):  Parameter DATABASE has value FSRLife_Operations
+MLOGIC(LOGGING):  Parameter SCHEMA has value dbo
+MLOGIC(LOGGING):  Parameter SERVER has value 10.5.21.67
+SYMBOLGEN:  Macro variable LIBNAME resolves to LIFE_OPS
+SYMBOLGEN:  Macro variable DATABASE resolves to FSRLife_Operations
+SYMBOLGEN:  Macro variable SERVER resolves to 10.5.21.67
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to dbo
+MPRINT(LOGGING):   LIBNAME LIFE_OPS odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FSRLife_Operations;FetchTWFSasTime=1;HostName=10.5.21.67;PortNumber=1433;UID=fnbjnb01\SVC_
+ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=dbo;
+NOTE: Libref LIFE_OPS was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value STI_BGA
+MLOGIC(LOGGING):  Parameter DATABASE has value FSRInsure_BGA_DEV
+MLOGIC(LOGGING):  Parameter SCHEMA has value dbo
+MLOGIC(LOGGING):  Parameter SERVER has value LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable LIBNAME resolves to STI_BGA
+SYMBOLGEN:  Macro variable DATABASE resolves to FSRInsure_BGA_DEV
+SYMBOLGEN:  Macro variable SERVER resolves to LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to dbo
+MPRINT(LOGGING):   LIBNAME STI_BGA odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FSRInsure_BGA_DEV;FetchTWFSasTime=1;HostName=LFE-RBPREATLDB1;PortNumber=1433;UID=fnbjnb01\
+SVC_ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=dbo;
+NOTE: Libref STI_BGA was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value STI_LC
+MLOGIC(LOGGING):  Parameter DATABASE has value FNB_STI_Analytics
+MLOGIC(LOGGING):  Parameter SCHEMA has value LOC
+MLOGIC(LOGGING):  Parameter SERVER has value LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable LIBNAME resolves to STI_LC
+SYMBOLGEN:  Macro variable DATABASE resolves to FNB_STI_Analytics
+SYMBOLGEN:  Macro variable SERVER resolves to LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to LOC
+MPRINT(LOGGING):   LIBNAME STI_LC odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FNB_STI_Analytics;FetchTWFSasTime=1;HostName=LFE-RBPREATLDB1;PortNumber=1433;UID=fnbjnb01\
+SVC_ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=LOC;
+NOTE: Libref STI_LC was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value STI_BEV
+MLOGIC(LOGGING):  Parameter DATABASE has value FSRST_InsureWorx
+MLOGIC(LOGGING):  Parameter SCHEMA has value dbo
+MLOGIC(LOGGING):  Parameter SERVER has value 10.5.21.59
+SYMBOLGEN:  Macro variable LIBNAME resolves to STI_BEV
+SYMBOLGEN:  Macro variable DATABASE resolves to FSRST_InsureWorx
+SYMBOLGEN:  Macro variable SERVER resolves to 10.5.21.59
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to dbo
+MPRINT(LOGGING):   LIBNAME STI_BEV odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FSRST_InsureWorx;FetchTWFSasTime=1;HostName=10.5.21.59;PortNumber=1433;UID=fnbjnb01\SVC_ST
+_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=dbo;
+NOTE: Libref STI_BEV was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value STI_CAR
+MLOGIC(LOGGING):  Parameter DATABASE has value FSRLIFE_ISE_IDIT_PERSONAL
+MLOGIC(LOGGING):  Parameter SCHEMA has value CarInsurance
+MLOGIC(LOGGING):  Parameter SERVER has value 10.5.21.50
+SYMBOLGEN:  Macro variable LIBNAME resolves to STI_CAR
+SYMBOLGEN:  Macro variable DATABASE resolves to FSRLIFE_ISE_IDIT_PERSONAL
+SYMBOLGEN:  Macro variable SERVER resolves to 10.5.21.50
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to CarInsurance
+MPRINT(LOGGING):   LIBNAME STI_CAR odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FSRLIFE_ISE_IDIT_PERSONAL;FetchTWFSasTime=1;HostName=10.5.21.50;PortNumber=1433;UID=fnbjnb
+01\SVC_ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=CarInsurance;
+NOTE: Libref STI_CAR was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value MVCLAIM
+MLOGIC(LOGGING):  Parameter DATABASE has value FSR_ShortTerm_Insure
+MLOGIC(LOGGING):  Parameter SCHEMA has value temp
+MLOGIC(LOGGING):  Parameter SERVER has value LFE-R1PRDATLDB1
+SYMBOLGEN:  Macro variable LIBNAME resolves to MVCLAIM
+SYMBOLGEN:  Macro variable DATABASE resolves to FSR_ShortTerm_Insure
+SYMBOLGEN:  Macro variable SERVER resolves to LFE-R1PRDATLDB1
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to temp
+MPRINT(LOGGING):   LIBNAME MVCLAIM odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FSR_ShortTerm_Insure;FetchTWFSasTime=1;HostName=LFE-R1PRDATLDB1;PortNumber=1433;UID=fnbjnb
+01\SVC_ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=temp;
+NOTE: Libref MVCLAIM was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value HSL_AIP
+MLOGIC(LOGGING):  Parameter DATABASE has value BI
+MLOGIC(LOGGING):  Parameter SCHEMA has value dbo
+MLOGIC(LOGGING):  Parameter SERVER has value ODS_LISTENER
+SYMBOLGEN:  Macro variable LIBNAME resolves to HSL_AIP
+SYMBOLGEN:  Macro variable DATABASE resolves to BI
+SYMBOLGEN:  Macro variable SERVER resolves to ODS_LISTENER
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to dbo
+MPRINT(LOGGING):   LIBNAME HSL_AIP odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=BI;FetchTWFSasTime=1;HostName=ODS_LISTENER;PortNumber=1433;UID=fnbjnb01\SVC_ST_OPDATSCI_PR
+OD;PWD=A&-m!RYUQ@r8x^X" Schema=dbo;
+NOTE: Libref HSL_AIP was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value CON
+MLOGIC(LOGGING):  Parameter DATABASE has value Connect_Reporting
+MLOGIC(LOGGING):  Parameter SCHEMA has value dbo
+MLOGIC(LOGGING):  Parameter SERVER has value MNO-RBSQLL01
+SYMBOLGEN:  Macro variable LIBNAME resolves to CON
+SYMBOLGEN:  Macro variable DATABASE resolves to Connect_Reporting
+SYMBOLGEN:  Macro variable SERVER resolves to MNO-RBSQLL01
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to dbo
+MPRINT(LOGGING):   LIBNAME CON odbc 
+noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=Connect_Reporting;FetchTWFSasTime=1;HostName=MNO-RBSQLL01;PortNumber=1433;UID=fnbjnb01\SVC
+_ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=dbo;
+NOTE: Libref CON was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+MLOGIC(LOGGING):  Beginning execution.
+MLOGIC(LOGGING):  Parameter LIBNAME has value STI_RES
+MLOGIC(LOGGING):  Parameter DATABASE has value FNB_ Corporate_Actuarial_Sandbox
+MLOGIC(LOGGING):  Parameter SCHEMA has value Reserving
+MLOGIC(LOGGING):  Parameter SERVER has value LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable LIBNAME resolves to STI_RES
+SYMBOLGEN:  Macro variable DATABASE resolves to FNB_ Corporate_Actuarial_Sandbox
+SYMBOLGEN:  Macro variable SERVER resolves to LFE-RBPREATLDB1
+SYMBOLGEN:  Macro variable USER resolves to fnbjnb01\SVC_ST_OPDATSCI_PROD
+SYMBOLGEN:  Macro variable FNB_LOGIN resolves to A&-m!RYUQ@r8x^X
+SYMBOLGEN:  Macro variable SCHEMA resolves to Reserving
+MPRINT(LOGGING):   LIBNAME STI_RES odbc noprompt="Driver=MSSQL;AnsiNPW=1;AuthenticationMethod=10;ApplicationUsingThreads=1;BulkLoadOptions=2;Database=FNB_ 
+Corporate_Actuarial_Sandbox;FetchTWFSasTime=1;HostName=LFE-RBPREATLDB1;PortNumber=1433;UID=fnbjnb01\SVC_ST_OPDATSCI_PROD;PWD=A&-m!RYUQ@r8x^X" Schema=Reserving;
+NOTE: Libref STI_RES was successfully assigned as follows: 
+      Engine:        ODBC 
+      Physical Name: 
+MLOGIC(LOGGING):  Ending execution.
+
+
+
+ERROR: Physical file does not exist, /opt/sas/grid/sasconfig/gnode_cdp/Lev1/SASAppCDP/\\INS-RBFS01\Share\FNB_Insure\Campaign Profiles\APN_Campaign_Config.xlsx.
+NOTE: The SAS System stopped processing this step because of errors.
+NOTE: PROCEDURE IMPORT used (Total process time):
+      real time           0.03 seconds
+      cpu time            0.01 seconds
+      
+NOTE: Fileref APN_CFG has been deassigned.
+
+
+ERROR: File WORK.CAMPAIGN_CONFIG_RAW.DATA does not exist.
+
+NOTE: Numeric values have been converted to character values at the places given by: (Line):(Column).
+      237:34   238:34   
+NOTE: Character values have been converted to numeric values at the places given by: (Line):(Column).
+      237:21   238:21   
+NOTE: The SAS System stopped processing this step because of errors.
+WARNING: The data set WORK.CAMPAIGN_CONFIG may be incomplete.  When this step was stopped there were 0 observations and 8 variables.
+WARNING: Data set WORK.CAMPAIGN_CONFIG was not replaced because this step was stopped.
+NOTE: DATA statement used (Total process time):
+      real time           0.01 seconds
+      cpu time            0.01 seconds
+      
+
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+
+SYMBOLGEN:  Macro variable CONFIG_COUNT resolves to 22
+SYMBOLGEN:  Macro variable CONFIG_COUNT resolves to 22
+NOTE: 22 active product codes loaded from config.
+ERROR: The following columns were not found in the contributing tables: Input_File_Name, Input_File_Path.
+NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
+NOTE: The SAS System stopped processing this step because of errors.
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+WARNING: Apparent symbolic reference MISSING_INPUT_COUNT not resolved.
+WARNING: Apparent symbolic reference MISSING_INPUT_COUNT not resolved.
+ERROR: A character operand was found in the %EVAL function or %IF condition where a numeric operand is required. The condition was: &missing_input_count > 0 
+ERROR: Skipping to next %END statement.
+
+
+
+NOTE: There were 22 observations read from the data set WORK.CAMPAIGN_CONFIG.
+NOTE: PROCEDURE PRINT used (Total process time):
+      real time           0.02 seconds
+      cpu time            0.02 seconds
+      
+
+NOTE: Compressing data set WORK.PRODUCT_CAMPAIGN_MAP increased size by 100.00 percent. 
+      Compressed is 2 pages; un-compressed would require 1 pages.
+NOTE: Table WORK.PRODUCT_CAMPAIGN_MAP created, with 22 rows and 2 columns.
+
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.01 seconds
+      
+
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.01 seconds
+      
+
+SYMBOLGEN:  Macro variable CAMP_COUNT resolves to 3
+NOTE: 3 distinct campaign codes found.
+SYMBOLGEN:  Macro variable PRODUCT_LIST resolves to 
+            'CMA10251V01M01','CMA10251V01M02','CMA10252V01M01','CMA10252V01M02','CMA10479V01M01','CMA10479V01M02','CMA10479V01M03','CMA10479V01M04','CMA10479V01M05','CMA10479V01M06','CMA10479V02M07','
+            CMA10479V02M08','CMA10479V02M09','CMA10479V02M10','CMA10479V02M11','CMA10479V02M12','CMA10479V03M13','CMA10479V03M14','CMA10479V03M15','CMA10479V03M16','CMA10479V03M17','CMA10479V03M18'
+NOTE: Product list: 
+'CMA10251V01M01','CMA10251V01M02','CMA10252V01M01','CMA10252V01M02','CMA10479V01M01','CMA10479V01M02','CMA10479V01M03','CMA10479V01M04','CMA10479V01M05','CMA10479V01M06','CMA10479V02M07','CMA10479V02M
+08','CMA10479V02M09','CMA10479V02M10','CMA10479V02M11','CMA10479V02M12','CMA10479V03M13','CMA10479V03M14','CMA10479V03M15','CMA10479V03M16','CMA10479V03M17','CMA10479V03M18'
+ERROR: Summary functions are restricted to the SELECT and HAVING clauses only.
+NOTE: PROC SQL set option NOEXEC and will continue to check the syntax of statements.
+NOTE: Statement not executed due to NOEXEC option.
+NOTE: The SAS System stopped processing this step because of errors.
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           0.74 seconds
+      cpu time            0.22 seconds
+      
+SYMBOLGEN:  Macro variable OLD_DATE resolves to 15MAY2026
+WARNING: Apparent symbolic reference OLD_TIME not resolved.
+WARNING: Apparent symbolic reference OLD_RECORDS not resolved.
+Pre-run state: 15MAY2026 &Old_time  Records: &Old_records
+NOTE: Libref PASS6 was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnb/clb/archive/5_optimise/passed_phase1
+NOTE: Libref APN_PASS was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnb/clb/prod_data/5_optimise/passed_phase1
+NOTE: Libref DROP6 was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnb/clb/archive/5_optimise/dropped_phase1
+NOTE: Libref APN_DROP was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnb/clb/prod_data/5_optimise/dropped_phase1
+NOTE: Libref APNS was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /data/fnb/clb/prod_data/7_tracking_views/Reporting_views
+
+
+
+NOTE: The file WORK._TABPASS_: (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK._TABDROP_: (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.FULL_OPP_RAW_: (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.FULL_OPPORTUNITY (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.FULL_OPPORTUNITY_ORPHANS (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.DIAG_PRODUCT_CODE_FORMATS (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.ORPHAN_COUNTS (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.PASS_TABLES_ARCH (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.PASS_TABLES_LIVE (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.DROP_TABLES_ARCH (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.DROP_TABLES_LIVE (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.PASS_TABLES_COMBINED (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.DROP_TABLES_COMBINED (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.MONTHLY_PASS_LIST (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.MONTHLY_DROP_LIST (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.ADOBE_FINAL_NEW (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.ADOBE_FINAL_TABLE_CLIENTS (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.ADOBE_TO_CLIENTS_STEP (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.ADOBE_TO_CLIENTS_STEP2 (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.ADOBE_TO_CLIENTS_FINAL (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.ADOBE_DELIVERY_TEST (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.ADOBE_RECENT_DROPS (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.APNS_SENDS_CAMPAIGNS (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.APNS_SENDS_MATCHED (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.CAMPAIGNS_TO_ADOBE (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.CAMPAIGNS_TO_ADOBE_STEP (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.CAMPAIGNS_TO_ADOBE_RENAMED (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.JOINING (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.APN_POT_STEP1 (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.CUST_ADOBE_FLAG (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.CUST_LOADED_SUMMARY (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.APN_POT_SUMMARY_FINAL (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.DIAG_DROPPED_LOADED (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.DIAG_JOIN_DUPLICATES (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: The file WORK.COMPLETE_FUNNEL (memtype=DATA) was not found, but appears on a DELETE statement.
+NOTE: Deleting WORK.PRODUCT_CAMPAIGN_MAP (memtype=DATA).
+NOTE: PROCEDURE DATASETS used (Total process time):
+      real time           0.01 seconds
+      cpu time            0.01 seconds
+      
+
+MLOGIC(BUILD_CAMPAIGN_FILTER):  Beginning execution.
+MLOGIC(BUILD_CAMPAIGN_FILTER):  Parameter LIBREF has value PASS6
+MLOGIC(BUILD_CAMPAIGN_FILTER):  Parameter OUTDS has value pass_tables_arch
+MPRINT(BUILD_CAMPAIGN_FILTER):   proc sql;
+SYMBOLGEN:  Macro variable OUTDS resolves to pass_tables_arch
+SYMBOLGEN:  Macro variable LIBREF resolves to PASS6
+SYMBOLGEN:  Macro variable CAMP_COUNT resolves to 3
+MLOGIC(BUILD_CAMPAIGN_FILTER):  %DO loop beginning; index variable I; start value is 1; stop value is 3; by value is 1.  
+SYMBOLGEN:  Macro variable I resolves to 1
+MLOGIC(BUILD_CAMPAIGN_FILTER):  %IF condition &i > 1 is FALSE
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 1
+SYMBOLGEN:  Macro variable CAMP_1 resolves to CMA10251
+MLOGIC(BUILD_CAMPAIGN_FILTER):  %DO loop index variable I is now 2; loop will iterate again.
+SYMBOLGEN:  Macro variable I resolves to 2
+MLOGIC(BUILD_CAMPAIGN_FILTER):  %IF condition &i > 1 is TRUE
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 2
+SYMBOLGEN:  Macro variable CAMP_2 resolves to CMA10252
+MLOGIC(BUILD_CAMPAIGN_FILTER):  %DO loop index variable I is now 3; loop will iterate again.
+SYMBOLGEN:  Macro variable I resolves to 3
+MLOGIC(BUILD_CAMPAIGN_FILTER):  %IF condition &i > 1 is TRUE
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 3
+SYMBOLGEN:  Macro variable CAMP_3 resolves to CMA10479
+MLOGIC(BUILD_CAMPAIGN_FILTER):  %DO loop index variable I is now 4; loop will not iterate again.
+MPRINT(BUILD_CAMPAIGN_FILTER):   create table pass_tables_arch as select * from dictionary.tables where libname = "PASS6" and ( memname like "CMA10251%" or memname like "CMA10252%" or memname like 
+"CMA10479%" );
+NOTE: Compressing data set WORK.PASS_TABLES_ARCH decreased size by 0.00 percent. 
+      Compressed is 2 pages; un-compressed would require 2 pages.
+NOTE: Table WORK.PASS_TABLES_ARCH created, with 64 rows and 41 columns.
+
+MPRINT(BUILD_CAMPAIGN_FILTER):   quit;
+NOTE: PROCEDURE SQL used (Total process time):
+      real time           8.21 seconds
+      cpu time            6.34 seconds
+      
+
+MLOGIC(BUILD_CAMPAIGN_FILTER):  Ending execution.
+MLOGIC(BUILD_CAMPAIGN_FILTER):  Beginning execution.
+MLOGIC(BUILD_CAMPAIGN_FILTER):  Parameter LIBREF has value APN_PASS
+MLOGIC(BUILD_CAMPAIGN_FILTER):  Parameter OUTDS has value pass_tables_live
+MPRINT(BUILD_CAMPAIGN_FILTER):   proc sql;
+SYMBOLGEN:  Macro variable OUTDS resolves to pass_tables_live
+SYMBOLGEN:  Macro variable LIBREF resolves to APN_PASS
+SYMBOLGEN:  Macro variable CAMP_COUNT resolves to 3
+MLOGIC(BUILD_CAMPAIGN_FILTER):  %DO loop beginning; index variable I; start value is 1; stop value is 3; by value is 1.  
+SYMBOLGEN:  Macro variable I resolves to 1
+MLOGIC(BUILD_CAMPAIGN_FILTER):  %IF condition &i > 1 is FALSE
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 1
+SYMBOLGEN:  Macro variable CAMP_1 resolves to CMA10251
+MLOGIC(BUILD_CAMPAIGN_FILTER):  %DO loop index variable I is now 2; loop will iterate again.
+SYMBOLGEN:  Macro variable I resolves to 2
+MLOGIC(BUILD_CAMPAIGN_FILTER):  %IF condition &i > 1 is TRUE
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 2
+SYMBOLGEN:  Macro variable CAMP_2 resolves to CMA10252
+MLOGIC(BUILD_CAMPAIGN_FILTER):  %DO loop index variable I is now 3; loop will iterate again.
+SYMBOLGEN:  Macro variable I resolves to 3
+MLOGIC(BUILD_CAMPAIGN_FILTER):  %IF condition &i > 1 is TRUE
+SYMBOLGEN:  && resolves to &.
+SYMBOLGEN:  Macro variable I resolves to 3
+SYMBOLGEN:  Macro variable CAMP_3 resolves to CMA10479
+MLOGIC(BUILD_CAMPAIGN_FILTER):  %DO loop index variable I is now 4; loop will not iterate again.
+MPRINT(BUILD_CAMPAIGN_FILTER):   create table pass_tables_live as select * from dictionary.tables where libname = "APN_PASS" and ( memname like "CMA10251%" or memname like "CMA10252%" or memname like 
+"CMA10479%" );
+NOTE: Compressing data set WORK.PASS_TABLES_LIVE increased size by 100.00 percent. 
+      Compressed is 2 pages; un-compressed would require 1 pages.
+NOTE: Table WORK.PASS_TABLES_LIVE created, with 1 rows and 41 columns.
+
+MPRINT(BUILD_CAMPAIGN_FILTER):   quit;
+NOTE: PROCEDURE SQL used (Total process time):
+      real time        
