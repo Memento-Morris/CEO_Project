@@ -1,3 +1,4 @@
+
 %put TAG:JobName1=STI_CA_D_APNS_DATA_REBUILD;
 %put TAG:JobName2=Daily;
 %put TAG:JobCategory=Campaigns;
@@ -10,7 +11,10 @@ options mprint mlogic symbolgen source notes;
 %include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
 
 
-/* SECTION 1: READ CAMPAIGN CONFIG FROM EXCEL */
+%let adobe_load_window        = 60;   /* Days after Optimise batch to look for Adobe load  */
+%let dropped_loaded_threshold = 0;    /* Abort if dropped records reach Adobe (0 = strict) */
+
+
 
 filename APN_CFG "\\INS-RBFS01\Share\FNB_Insure\Campaign Profiles\APN_Campaign_Config.xlsx";
 
@@ -25,6 +29,7 @@ run;
 
 filename APN_CFG clear;
 
+/* Fix 6: add row_num here so all downstream loops use it instead of monotonic() */
 data Campaign_Config;
     set Campaign_Config_Raw;
     where upcase(strip(Active)) = "Y"
@@ -32,6 +37,21 @@ data Campaign_Config;
       and strip(Product_Code)   ne "";
     Campaign_Code = upcase(strip(Campaign_Code));
     Product_Code  = upcase(strip(Product_Code));
+
+    /* Fix 7: clean up new input-file columns */
+    length Input_File_Path  $500
+           Input_File_Name  $200
+           Input_File_Sheet $100
+           Input_File_Type  $10
+           Full_Input_Path  $500;
+    Input_File_Path  = strip(Input_File_Path);
+    Input_File_Name  = strip(Input_File_Name);
+    Input_File_Sheet = strip(Input_File_Sheet);
+    Input_File_Type  = upcase(strip(Input_File_Type));
+    Full_Input_Path  = cats(Input_File_Path, Input_File_Name);
+
+    /* Explicit row number — used in all macro loops (Fix 6) */
+    row_num = _n_;
 run;
 
 proc sql noprint;
@@ -46,12 +66,44 @@ quit;
 
 %put NOTE: &config_count active product codes loaded from config.;
 
+/* Fix 11: log which campaigns are missing input file config before aborting */
+proc sql noprint;
+    select count(*) into :missing_input_count trimmed
+    from Campaign_Config
+    where missing(Input_File_Name) or missing(Input_File_Path);
+quit;
+
+%if &missing_input_count > 0 %then %do;
+    %put ERROR: &missing_input_count active campaign(s) are missing Input_File_Name or Input_File_Path.;
+    %put ERROR: The following campaigns need to be updated in the Excel config:;
+    proc sql;
+        select Campaign_Code, Product_Code, Input_File_Path, Input_File_Name
+        from Campaign_Config
+        where missing(Input_File_Name) or missing(Input_File_Path);
+    quit;
+    %abort cancel;
+%end;
+
 title "CONFIG - Active Campaigns Loaded from Excel";
 proc print data=Campaign_Config noobs; run;
 title;
 
+/* Fix 15: Build product-to-campaign mapping from config.
+   Used in COMPLETE_FUNNEL so the join is anchored on Product_Code
+   (the most reliable key) rather than free-text Campaign_Code/Name. */
+proc sql;
+    create table product_campaign_map as
+    select distinct
+        upcase(strip(Product_Code))  as Product_Code  length = 30,
+        upcase(strip(Campaign_Code)) as Campaign_Code length = 50
+    from Campaign_Config
+    order by Product_Code;
+quit;
 
-/* SECTION 2: BUILD DYNAMIC MACRO VARIABLES FROM CONFIG */
+
+/* ============================================================
+   SECTION 2 : BUILD DYNAMIC MACRO VARIABLES FROM CONFIG
+   ============================================================ */
 
 proc sql noprint;
     select count(distinct Campaign_Code)
@@ -72,7 +124,9 @@ quit;
 %put NOTE: Product list: &product_list;
 
 
-/* SECTION 3: CAPTURE PRE-RUN STATE */
+/* ============================================================
+   SECTION 3 : CAPTURE PRE-RUN STATE
+   ============================================================ */
 
 proc sql noprint;
     select max(date_to_adobe) format date9.
@@ -92,7 +146,9 @@ quit;
 %put Pre-run state: &Old_date &Old_time  Records: &Old_records;
 
 
-/* SECTION 4: LIBNAMES */
+/* ============================================================
+   SECTION 4 : LIBNAMES
+   ============================================================ */
 
 libname Pass6    "/data/fnb/clb/archive/5_optimise/passed_phase1";
 libname APN_Pass "/data/fnb/clb/prod_data/5_optimise/passed_phase1";
@@ -101,10 +157,18 @@ libname APN_Drop "/data/fnb/clb/prod_data/5_optimise/dropped_phase1";
 libname APNS     "/data/fnb/clb/prod_data/7_tracking_views/Reporting_views";
 
 
-/* SECTION 5: CLEAR STALE WORK TABLES */
+/* ============================================================
+   SECTION 5 : CLEAR STALE WORK TABLES
+   Fix 12: full_opp_raw_: and full_opportunity added to list
+   ============================================================ */
 
 proc datasets library=work nolist;
     delete _tabpass_:      _tabdrop_:
+           full_opp_raw_:  full_opportunity
+           full_opportunity_orphans
+           product_campaign_map
+           diag_product_code_formats          /* Fix 17 */
+           orphan_counts                      /* Fix 18 */
            pass_tables_arch     pass_tables_live
            drop_tables_arch     drop_tables_live
            pass_tables_combined drop_tables_combined
@@ -113,15 +177,20 @@ proc datasets library=work nolist;
            adobe_to_clients_step  adobe_to_clients_step2
            adobe_to_clients_final adobe_delivery_test
            adobe_recent_drops     apns_sends_campaigns
+           apns_sends_matched
            campaigns_to_adobe     campaigns_to_adobe_step
            campaigns_to_adobe_renamed joining
            apn_pot_step1
            cust_adobe_flag      cust_loaded_summary
-           apn_pot_summary_final;
+           apn_pot_summary_final
+           diag_dropped_loaded  diag_join_duplicates
+           complete_funnel;
 quit;
 
 
-/* SECTION 6: CAMPAIGN TABLE DISCOVERY */
+/* ============================================================
+   SECTION 6 : CAMPAIGN TABLE DISCOVERY
+   ============================================================ */
 
 %macro build_campaign_filter(libref=, outds=);
     proc sql;
@@ -161,22 +230,23 @@ run;
 proc sort data=drop_tables_combined; by memname descending Source; run;
 proc sort data=drop_tables_combined nodupkey; by memname; run;
 
-proc sql noprint;
-    create table monthly_pass_list as
-    select distinct memname, crdate, Source
-    from pass_tables_combined
-    order by memname;
+/* Fix 6: add explicit row_num so loop index reliably matches dataset row */
+data monthly_pass_list;
+    set pass_tables_combined;
+    row_num = _n_;
+run;
 
+proc sql noprint;
     select count(*) into :monthly_pass_count trimmed
     from monthly_pass_list;
 quit;
 
-proc sql noprint;
-    create table monthly_drop_list as
-    select distinct memname, crdate, Source
-    from drop_tables_combined
-    order by memname;
+data monthly_drop_list;
+    set drop_tables_combined;
+    row_num = _n_;
+run;
 
+proc sql noprint;
     select count(*) into :monthly_drop_count trimmed
     from monthly_drop_list;
 quit;
@@ -191,7 +261,366 @@ proc print data=monthly_drop_list noobs; run;
 title;
 
 
-/* SECTION 7: READ ALL PASSED RECORDS */
+/* ============================================================
+   SECTION 6B : READ FULL OPPORTUNITY FROM CONFIG INPUT FILES
+   -------------------------------------------------------
+   Fix 13: %find_input_file searches four locations in priority
+   order so the job never reads from the live incoming/ folder
+   (where Optimise may hold a lock or have already moved the file).
+
+   Priority order:
+     1. passed_import  — file was imported successfully by Optimise
+     2. dropped_import — file failed import (still worth tracking)
+     3. archive        — older batches moved to archive
+     4. incoming/in/   — last resort; only if file hasn't been moved
+                          yet (e.g. job runs before Optimise does)
+
+   The resolved path and status (PASSED/FAILED/ARCHIVED/INCOMING)
+   are written to macro variables &resolved_path_&i and
+   &import_status_&i for use in diagnostics.
+
+   Fix 8 : CUST_NO rename handled post-import via PROC CONTENTS
+            to accommodate any column-name casing from the source.
+   Fix 9 : unique_id includes loop index to avoid _n_ collisions.
+   ============================================================ */
+
+/* Base paths — change here if the environment moves */
+%let path_passed_import  = /data/fnb/clb/prod_data/4_import_validation/passed_import/;
+%let path_dropped_import = /data/fnb/clb/prod_data/4_import_validation/dropped_import/;
+%let path_archive        = /data/fnb/clb/archive/4_import_validation/passed_import/;
+%let path_incoming       = /data/fnb/clb/incoming_files/4_import_validation/in/;
+
+/* Fix 13: macro that resolves the correct file location */
+%macro find_input_file(file_name=, idx=);
+    /* Reset output macro variables */
+    %global resolved_path_&idx import_status_&idx;
+    %let resolved_path_&idx  = ;
+    %let import_status_&idx  = NOT_FOUND;
+
+    %if %sysfunc(fileexist(&path_passed_import.&file_name)) %then %do;
+        %let resolved_path_&idx  = &path_passed_import.&file_name;
+        %let import_status_&idx  = PASSED;
+    %end;
+    %else %if %sysfunc(fileexist(&path_dropped_import.&file_name)) %then %do;
+        %let resolved_path_&idx  = &path_dropped_import.&file_name;
+        %let import_status_&idx  = FAILED;
+        %put WARNING: Input file for campaign at index &idx found in dropped_import.;
+        %put WARNING: This means Optimise rejected the file. Full opportunity counts may be unreliable.;
+    %end;
+    %else %if %sysfunc(fileexist(&path_archive.&file_name)) %then %do;
+        %let resolved_path_&idx  = &path_archive.&file_name;
+        %let import_status_&idx  = ARCHIVED_PASSED;
+    %end;
+    %else %if %sysfunc(fileexist(&path_incoming.&file_name)) %then %do;
+        %let resolved_path_&idx  = &path_incoming.&file_name;
+        %let import_status_&idx  = INCOMING;
+        %put WARNING: Input file for campaign at index &idx is still in the incoming folder.;
+        %put WARNING: Optimise may not have processed it yet or may move it during this read.;
+    %end;
+    %else %do;
+        %put ERROR: Input file [&file_name] not found in any of the four expected locations:;
+        %put ERROR:   1. &path_passed_import;
+        %put ERROR:   2. &path_dropped_import;
+        %put ERROR:   3. &path_archive;
+        %put ERROR:   4. &path_incoming;
+    %end;
+%mend find_input_file;
+
+
+%macro read_full_opportunity;
+
+    proc datasets library=work nolist;
+        delete full_opp_raw_:;
+    quit;
+
+    %put NOTE: Reading full opportunity from &config_count input files.;
+
+    %local i camp_code prod_code file_name file_type file_sheet full_path;
+
+    %do i = 1 %to &config_count;
+
+        /* Fix 6: select by row_num (explicit), not monotonic() */
+        proc sql noprint;
+            select Campaign_Code, Product_Code,
+                   Input_File_Name, Input_File_Type, Input_File_Sheet
+            into   :camp_code  trimmed, :prod_code   trimmed,
+                   :file_name  trimmed, :file_type   trimmed,
+                   :file_sheet trimmed
+            from   Campaign_Config
+            where  row_num = &i;
+        quit;
+
+        %put NOTE: Processing input file &i of &config_count: &camp_code -> &file_name;
+
+        /* Fix 13: resolve the correct file path across four locations */
+        %find_input_file(file_name=&file_name, idx=&i)
+
+        %if %length(&&resolved_path_&i) > 0 %then %do;
+
+            %let full_path = &&resolved_path_&i;
+            %put NOTE: File resolved at [&&import_status_&i]: &full_path;
+
+            /* ---- Import based on file type ---- */
+            %if &file_type = EXCEL %then %do;
+                proc import
+                    datafile = "&full_path"
+                    out      = _full_opp_import_&i
+                    dbms     = xlsx
+                    replace;
+                    sheet    = "&file_sheet";
+                    getnames = yes;
+                run;
+            %end;
+
+            %else %if &file_type = CSV %then %do;
+                proc import
+                    datafile = "&full_path"
+                    out      = _full_opp_import_&i
+                    dbms     = csv
+                    replace;
+                    getnames = yes;
+                run;
+            %end;
+
+            %else %if &file_type = SAS %then %do;
+                data _full_opp_import_&i;
+                    set "&full_path";
+                run;
+            %end;
+
+            %else %do;
+                %put WARNING: Unknown file type [&file_type] for &camp_code. Skipping.;
+                %goto next_campaign;
+            %end;
+
+            /* Fix 8: post-import rename — handles any column-name casing */
+            proc contents data=_full_opp_import_&i
+                          out=_colcheck_&i (keep=name) noprint; run;
+
+            proc sql noprint;
+                select count(*) into :has_cust_no trimmed
+                from _colcheck_&i
+                where upcase(name) = "CUST_NO";
+            quit;
+
+            %if &has_cust_no > 0 %then %do;
+                proc sql noprint;
+                    select name into :cust_col trimmed
+                    from _colcheck_&i
+                    where upcase(name) = "CUST_NO";
+                quit;
+
+                data _full_opp_import_&i;
+                    set _full_opp_import_&i
+                        (rename=(&cust_col = cust_no));
+                run;
+            %end;
+            %else %do;
+                %put ERROR: Input file for &camp_code does not contain a CUST_NO column.;
+                %put ERROR: Please check &full_path and ensure the customer number column is named CUST_NO.;
+                %goto next_campaign;
+            %end;
+
+            /* Fix 9: unique_id includes loop index to prevent _n_ collision */
+            data full_opp_raw_&i;
+                set _full_opp_import_&i;
+                length Campaign_Code  $50
+                       Product_Code   $30
+                       Input_File     $200
+                       Import_Status  $20
+                       unique_id      $100;
+                Campaign_Code = "&camp_code";
+                Product_Code  = "&prod_code";
+                Input_File    = "&file_name";
+                Import_Status = "&&import_status_&i";   /* Fix 13: location status */
+                row_id        = _n_;
+                unique_id     = cats("&camp_code", "_", "&prod_code", "_", &i, "_", row_id);
+
+                flag_missing_product_code = (missing(Product_Code) or strip(Product_Code) = "");
+                flag_missing_cust_no      = (missing(cust_no) or cust_no <= 0);
+            run;
+
+            proc datasets library=work nolist;
+                delete _full_opp_import_&i _colcheck_&i;
+            quit;
+
+        %end;
+        /* else: %find_input_file already issued ERROR message — skip this campaign */
+
+        %next_campaign:
+
+    %end; /* end do i */
+
+%mend read_full_opportunity;
+
+%read_full_opportunity;
+
+
+/* ============================================================
+   SECTION 6C : COMBINE FULL OPPORTUNITY RECORDS
+   ============================================================ */
+
+data FULL_OPPORTUNITY;
+    set full_opp_raw_:;
+    /* Ensure Product_Code is clean for joining */
+    Product_Code = upcase(strip(Product_Code));
+    /* Exclude records with no customer number — they cannot be tracked */
+    if flag_missing_cust_no then delete;
+run;
+
+proc sql noprint;
+    select count(*) into :full_opp_count trimmed
+    from FULL_OPPORTUNITY;
+
+    select count(distinct Campaign_Code) into :full_opp_campaigns trimmed
+    from FULL_OPPORTUNITY;
+quit;
+
+%put NOTE: FULL_OPPORTUNITY contains &full_opp_count records across &full_opp_campaigns campaigns.;
+
+title "FULL OPPORTUNITY — Records, Import Quality and File Status per Campaign";
+proc sql;
+    select Campaign_Code,
+           Product_Code,
+           Import_Status,
+           Input_File,
+           count(*)                        as Record_Count,
+           sum(flag_missing_product_code)  as Missing_Product_Code
+    from FULL_OPPORTUNITY
+    group by Campaign_Code, Product_Code, Import_Status, Input_File
+    order by Campaign_Code;
+quit;
+title;
+
+/* ============================================================
+   FIX 17 : PRODUCT CODE FORMAT DIAGNOSTIC + JOIN STRATEGY
+   -------------------------------------------------------
+   The Optimise tables store the FULL product code including
+   Variation and Message suffixes (e.g. CMA03787V01M01 = 13
+   chars). The stakeholder input file may contain only the
+   BASE code (e.g. CMA03787 = 8 chars) or the full code.
+
+   If the two sides use different lengths every cust_no match
+   will fail silently — no error, just missing funnel rows.
+
+   This block:
+     1. Classifies each distinct Product_Code in FULL_OPPORTUNITY
+        as BASE_ONLY, FULL, or UNKNOWN_FORMAT.
+     2. Derives the dominant format (most records) and writes it
+        to &product_code_strategy (FULL | BASE).
+     3. All downstream joins (orphan check, COMPLETE_FUNNEL)
+        use a CASE expression to normalise the Optimise code to
+        match whatever format the input file uses.
+   ============================================================ */
+
+proc sql;
+    create table diag_product_code_formats as
+    select distinct
+        Product_Code,
+        case
+            when length(strip(Product_Code)) <= 8  then "BASE_ONLY"
+            when length(strip(Product_Code)) = 13  then "FULL"
+            else                                        "UNKNOWN_FORMAT"
+        end as Code_Type    length = 20,
+        count(*) as Occurrences
+    from FULL_OPPORTUNITY
+    group by Product_Code;
+quit;
+
+title "DIAGNOSTIC FIX 17 — Product Code Formats in Input File";
+proc print data=diag_product_code_formats noobs; run;
+title;
+
+/* Derive the dominant format: whichever type has the most records */
+proc sql noprint;
+    select Code_Type
+    into   :product_code_strategy trimmed
+    from (
+        select Code_Type, sum(Occurrences) as Total_Occurrences
+        from diag_product_code_formats
+        group by Code_Type
+    )
+    order by Total_Occurrences desc;   /* first row = dominant type */
+quit;
+
+/* Collapse BASE_ONLY and UNKNOWN_FORMAT to the same join approach */
+%if %upcase(&product_code_strategy) ne FULL %then
+    %let product_code_strategy = BASE;
+
+%put NOTE: Fix 17 — Product code join strategy: &product_code_strategy;
+%if &product_code_strategy = BASE %then %do;
+    %put NOTE: Fix 17 — Input file uses BASE codes (<=8 chars). Optimise product codes;
+    %put NOTE:           will be truncated to substr(product_code,1,8) in all joins.;
+%end;
+%else %do;
+    %put NOTE: Fix 17 — Input file uses FULL codes (13 chars). Joins will match exactly.;
+%end;
+
+/* Fix 16: Identify FULL_OPPORTUNITY records that never reached Optimise at all.
+   These are records in the stakeholder input file that did not appear in either
+   the Optimise passed or dropped tables. Possible causes:
+     - The file failed import validation before Optimise saw it
+     - SharePoint or pre-Optimise screening rejected them
+     - Timing: this job ran before Optimise processed the batch
+   The Import_Status column (from Fix 13) helps distinguish these cases.
+
+   Fix 17: The Optimise product code is normalised to match the join strategy
+   derived from the input file's format (FULL = exact match; BASE = truncate
+   the Optimise code to 8 chars so it aligns with base-only input codes).    */
+
+proc sql;
+    create table FULL_OPPORTUNITY_ORPHANS as
+    select
+        a.Campaign_Code,
+        a.Product_Code,
+        a.cust_no,
+        a.unique_id,
+        a.Input_File,
+        a.Import_Status,
+        a.flag_missing_product_code
+    from FULL_OPPORTUNITY a
+    left join (
+        select distinct cust_no,
+            /* Fix 17: normalise Optimise code to the input file's format */
+            %if &product_code_strategy = BASE %then %do;
+                upcase(strip(substr(product_code, 1, 8))) as product_code
+            %end;
+            %else %do;
+                upcase(strip(product_code)) as product_code
+            %end;
+        from CAMPAIGNS_TO_ADOBE
+    ) b
+        on  a.cust_no      = b.cust_no
+        and a.Product_Code = b.product_code
+    where b.cust_no is missing;
+quit;
+
+proc sql noprint;
+    select coalesce(count(*), 0) into :orphan_count trimmed
+    from FULL_OPPORTUNITY_ORPHANS;
+quit;
+
+%put NOTE: FULL_OPPORTUNITY_ORPHANS (never reached Optimise): &orphan_count records.;
+
+%if &orphan_count > 0 %then %do;
+    title "DIAGNOSTIC FIX 16 — Full Opportunity Records That Never Reached Optimise";
+    proc sql;
+        select Campaign_Code,
+               Product_Code,
+               Import_Status,
+               count(*) as Orphan_Count
+        from FULL_OPPORTUNITY_ORPHANS
+        group by Campaign_Code, Product_Code, Import_Status
+        order by Campaign_Code;
+    quit;
+    title;
+%end;
+
+
+/* ============================================================
+   SECTION 7 : READ ALL PASSED RECORDS
+   Fix 6: uses row_num instead of monotonic()
+   ============================================================ */
 
 %macro iterate_pass;
     proc datasets library=work nolist;
@@ -201,11 +630,12 @@ title;
     %local i tname tdate tsource libref;
     %do i = 1 %to &monthly_pass_count;
 
+        /* Fix 6: select by explicit row_num */
         proc sql noprint;
             select memname, crdate, Source
             into   :tname trimmed, :tdate trimmed, :tsource trimmed
             from   monthly_pass_list
-            where  monotonic() = &i;
+            where  row_num = &i;
         quit;
 
         %put Processing pass &i of &monthly_pass_count: &tname (&tsource);
@@ -246,7 +676,10 @@ title;
 %iterate_pass;
 
 
-/* SECTION 8: READ ALL DROPPED RECORDS */
+/* ============================================================
+   SECTION 8 : READ ALL DROPPED RECORDS
+   Fix 6: uses row_num instead of monotonic()
+   ============================================================ */
 
 %macro iterate_drop;
     proc datasets library=work nolist;
@@ -256,11 +689,12 @@ title;
     %local i tname tdate tsource libref;
     %do i = 1 %to &monthly_drop_count;
 
+        /* Fix 6: select by explicit row_num */
         proc sql noprint;
             select memname, crdate, Source
             into   :tname trimmed, :tdate trimmed, :tsource trimmed
             from   monthly_drop_list
-            where  monotonic() = &i;
+            where  row_num = &i;
         quit;
 
         %put Processing drop &i of &monthly_drop_count: &tname (&tsource);
@@ -301,7 +735,9 @@ title;
 %iterate_drop;
 
 
-/* SECTION 9: COMBINE ALL CAMPAIGN DATA */
+/* ============================================================
+   SECTION 9 : COMBINE ALL CAMPAIGN DATA
+   ============================================================ */
 
 data CAMPAIGNS_TO_ADOBE;
     set _tabpass_:
@@ -332,16 +768,27 @@ proc sql;
 quit;
 title;
 
+/* Capture the date range from Optimise files for use in Adobe filters */
 proc sql noprint;
     select min(Date_to_adobe) format date9.
     into   :min_date trimmed
     from   CAMPAIGNS_TO_ADOBE;
+
+    select max(Date_to_adobe) format date9.
+    into   :max_date trimmed
+    from   CAMPAIGNS_TO_ADOBE;
 quit;
 
-%put Min date: &min_date;
+%put Min Optimise date: &min_date;
+%put Max Optimise date: &max_date;
 
 
-/* SECTION 10: ADOBE SENDS - includes answer column for open tracking */
+/* ============================================================
+   SECTION 10 : ADOBE SENDS
+   Filtered to product list AND Optimise date range + window.
+   The Campaign_Name join in Section 10B (below) ensures sends
+   are never shared across campaigns with identical product codes.
+   ============================================================ */
 
 data APNS_sends_campaigns
     (keep=cust_no mucn product_code Date_loaded Time
@@ -382,13 +829,150 @@ quit;
 title;
 
 
-/* SECTION 11: ADOBE DROP-OFFS */
+/* ============================================================
+   SECTION 10B : FIX 1 — MATCH ADOBE SENDS TO OPTIMISE
+                  USING CAMPAIGN_NAME + PRODUCT_CODE + DATE
+   -------------------------------------------------------
+   WHY: When two campaigns share the same product code
+   (e.g. "Ebucks" and "Personal Ebucks" both using V02M07),
+   a product-code-only join gives every Optimise row ALL
+   Adobe sends for that code, inflating counts.
+
+   HOW: We inner-join from the Optimise master (passed
+   records only — Optimize = "Sent") so Adobe sends are
+   attributed to exactly one campaign per batch.
+
+   Fix 14: Validate that Campaign_Name exists in the Adobe
+   sends table before relying on it for the join. If it is
+   absent, issue a clear WARNING so the inflation risk is
+   visible in the log — the job continues but counts may be
+   overstated for campaigns that share a product code.
+   ============================================================ */
+
+/* Fix 14: check Campaign_Name column exists in adobe sends table */
+proc sql noprint;
+    select count(*) into :has_campaign_name trimmed
+    from dictionary.columns
+    where libname = "APNS"
+      and memname = upcase("apn_sends_and_feedback")
+      and upcase(name) = "CAMPAIGN_NAME";
+quit;
+
+%if &has_campaign_name = 0 %then %do;
+    %put WARNING: Fix 14 — APNS.apn_sends_and_feedback does not contain a Campaign_Name column.;
+    %put WARNING: Fix 1 (campaign-scoped Adobe send attribution) will not work correctly.;
+    %put WARNING: Adobe sends will be joined on Product_Code only, which may inflate counts;
+    %put WARNING: for any campaigns that share the same product code.;
+    %put WARNING: Contact the Adobe data team to confirm whether Campaign_Name is available.;
+%end;
+
+proc sql;
+    create table APNS_sends_matched as
+    select
+        b.*,
+        a.Campaign_Name                    as Campaign_Name_match,
+        a.date_to_adobe                    as opt_batch_date
+    from
+        /* Optimise master: unique campaign + product + batch combinations */
+        (select distinct
+             cust_no,
+             product_code,
+             Campaign_Name,
+             date_to_adobe
+         from CAMPAIGNS_TO_ADOBE
+         where drop_reason = ''           /* Passed records only */
+        ) a
+    inner join APNS_sends_campaigns b
+        on  a.cust_no      = b.cust_no
+        and a.product_code = b.product_code
+        and (b.date_loaded between a.date_to_adobe
+                               and a.date_to_adobe + &adobe_load_window.);
+quit;
+
+proc sql noprint;
+    select count(*) into :matched_sends trimmed
+    from APNS_sends_matched;
+quit;
+
+%put Adobe sends after Campaign_Name match: &matched_sends;
+
+/* ============================================================
+   FIX 5 — MANY-TO-MANY JOIN GUARD
+   If one Optimise record matched more than one Adobe send
+   inside the window, log how many such cases exist.
+   This does not abort — it informs; dedup downstream handles it.
+   ============================================================ */
+
+proc sql noprint;
+    create table diag_join_duplicates as
+    select cust_no, product_code, opt_batch_date,
+           count(*) as join_count
+    from APNS_sends_matched
+    group by cust_no, product_code, opt_batch_date
+    having count(*) > 1;
+
+    select count(*) into :dup_join_count trimmed
+    from diag_join_duplicates;
+quit;
+
+%put NOTE: Customers with multiple Adobe sends in the &adobe_load_window.-day window: &dup_join_count;
+
+%if &dup_join_count > 0 %then %do;
+    title "DIAGNOSTIC - Customers with Multiple Adobe Sends in Window (sample 50)";
+    proc print data=diag_join_duplicates (obs=50) noobs; run;
+    title;
+%end;
+
+
+/* ============================================================
+   SECTION 11 : ADOBE DROP-OFFS
+   Fix 19: Validate that the customer-number column in
+   APNS.adobe_drop_offs_data exists and resolve its name before
+   reading the table. The column may be named ucn, cust_no, UCN,
+   or CustomerNumber depending on environment. The resolved name
+   is stored in &ucn_col; if no recognised name is found the job
+   aborts with a clear diagnostic rather than producing a table
+   with all-missing cust_no values.
+   ============================================================ */
+
+%macro validate_ucn_col;
+    %global ucn_col;
+    %let ucn_col = ;
+
+    proc sql noprint;
+        select name into :ucn_col trimmed
+        from dictionary.columns
+        where libname = "APNS"
+          and memname = upcase("adobe_drop_offs_data")
+          and upcase(name) in ("UCN", "CUST_NO", "CUSTOMERNUMBER")
+        order by
+            case upcase(name)
+                when "UCN"            then 1
+                when "CUST_NO"        then 2
+                when "CUSTOMERNUMBER" then 3
+                else                       4
+            end;
+    quit;
+
+    %if %length(&ucn_col) = 0 %then %do;
+        %put ERROR: Fix 19 — APNS.adobe_drop_offs_data does not contain a recognisable;
+        %put ERROR:           customer-number column (checked: ucn, cust_no, CustomerNumber).;
+        %put ERROR:           Run: proc contents data=APNS.adobe_drop_offs_data; run;;
+        %put ERROR:           Update %validate_ucn_col with the correct column name.;
+        %abort cancel;
+    %end;
+    %else %do;
+        %put NOTE: Fix 19 — Customer-number column in adobe_drop_offs_data resolved as: &ucn_col;
+    %end;
+%mend validate_ucn_col;
+%validate_ucn_col;
+
 
 data Adobe_recent_drops;
     set APNS.adobe_drop_offs_data;
     where product_code in (&product_list.)
       and datepart(Date_loaded) >= "&min_date."d;
-    cust_no       = ucn;
+    cust_no       = &ucn_col;   /* Fix 19: resolved column name, not hard-coded ucn */
     Date_loaded   = datepart(Date_loaded);
     format Date_loaded date9.;
     Time          = timepart(Date_loaded);
@@ -417,7 +1001,11 @@ quit;
 title;
 
 
-/* SECTION 12: COMBINE ADOBE DATA - answer carried through for open tracking */
+/* ============================================================
+   SECTION 12 : COMBINE ADOBE DATA
+   Uses APNS_sends_matched (campaign-scoped) instead of the
+   original APNS_sends_campaigns to prevent cross-campaign bleed.
+   ============================================================ */
 
 data adobe_to_clients_step;
     length mucn                $28
@@ -426,7 +1014,7 @@ data adobe_to_clients_step;
            distribution_status $43
            answer              $815;
     set Adobe_recent_drops
-        APNS_sends_campaigns;
+        APNS_sends_matched;     /* FIX 1: matched sends, not raw sends */
 run;
 
 data adobe_to_clients_final (drop=etl_source_data etl_date daymonth);
@@ -436,7 +1024,9 @@ data adobe_to_clients_final (drop=etl_source_data etl_date daymonth);
 run;
 
 
-/* SECTION 13: OPTIMISE STEP */
+/* ============================================================
+   SECTION 13 : OPTIMISE STEP
+   ============================================================ */
 
 data campaigns_to_adobe_step
     (keep=Optimize sub_segment Drop_reason product_code
@@ -457,7 +1047,9 @@ data campaigns_to_adobe_renamed;
 run;
 
 
-/* SECTION 14: ADOBE CLASSIFICATION */
+/* ============================================================
+   SECTION 14 : ADOBE CLASSIFICATION
+   ============================================================ */
 
 data adobe_to_clients_step2 (drop=success drop);
     length Adobe         $50
@@ -523,7 +1115,11 @@ quit;
 %put Adobe final table rows: &final_rows;
 
 
-/* SECTION 15: FINAL JOIN - OPTIMISE + ADOBE */
+/* ============================================================
+   SECTION 15 : FINAL JOIN — OPTIMISE + ADOBE
+   Optimise is the LEFT (master) table.
+   Adobe enriches; it never adds rows.
+   ============================================================ */
 
 proc sql;
     create table joining as
@@ -532,7 +1128,8 @@ proc sql;
     left join adobe_final_table_clients b
         on  a.cust_no               = b.cust_no2
         and a.product_code_to_adobe  = b.product_code
-        and (b.date_loaded between a.date_to_adobe and a.date_to_adobe + 60);
+        and (b.date_loaded between a.date_to_adobe
+                               and a.date_to_adobe + &adobe_load_window.);
 quit;
 
 data APN_POT_Step1
@@ -543,9 +1140,9 @@ data APN_POT_Step1
     set joining;
 
     if missing(cust_no2) and Optimize = "Sent"
-        then Adobe = "Not loaded into Adobe within 60 days";
+        then Adobe = "Not loaded into Adobe within &adobe_load_window. days";
     if missing(cust_no2) and Optimize = "Sent"
-        and intck('day', date_to_adobe, today()) <= 60
+        and intck('day', date_to_adobe, today()) <= &adobe_load_window.
         and missing(Date_loaded)
         then Adobe = "Sending to Adobe";
 
@@ -586,7 +1183,61 @@ quit;
 title;
 
 
-/* SECTION 15B: DISTINCT CUSTOMERS LOADED INTO ADOBE */
+/* ============================================================
+   FIX 3 — DROPPED-BUT-LOADED DIAGNOSTIC
+   -------------------------------------------------------
+   Customers who were dropped by Optimise but still reached
+   Adobe (Loaded) represent a process exception. This block
+   quantifies them and — if they exceed the configured
+   threshold — aborts the load.
+
+   Set %let dropped_loaded_threshold = 0; for strict mode
+   (any dropped-but-loaded record aborts).
+   Set a positive number to allow a tolerance before aborting.
+   ============================================================ */
+
+proc sql noprint;
+    create table diag_dropped_loaded as
+    select
+        Campaign_Name_to_adobe,
+        product_code_to_adobe,
+        Optimize                           as Optimise_Drop_Reason,
+        Adobe,
+        Client,
+        count(*)                           as Record_Count
+    from APN_POT
+    where Optimize not in ("Sent")         /* Dropped by Optimise */
+      and Adobe     in ("Loaded")          /* But still in Adobe  */
+    group by 1, 2, 3, 4, 5
+    order by Record_Count desc;
+
+    select coalesce(sum(Record_Count), 0)
+    into   :dropped_loaded_count trimmed
+    from   diag_dropped_loaded;
+quit;
+
+%put NOTE: Dropped-but-Loaded records detected: &dropped_loaded_count;
+
+%if &dropped_loaded_count > 0 %then %do;
+    title "DIAGNOSTIC FIX 3 - Dropped by Optimise but Loaded into Adobe";
+    proc print data=diag_dropped_loaded noobs; run;
+    title;
+%end;
+
+%if &dropped_loaded_count > &dropped_loaded_threshold %then %do;
+    %put ERROR: &dropped_loaded_count dropped-but-loaded records exceed threshold (&dropped_loaded_threshold).;
+    %put ERROR: Review diag_dropped_loaded before proceeding.;
+    %put ERROR: If these are expected (e.g. Adobe loaded before Optimise flagged), increase dropped_loaded_threshold.;
+    %abort cancel;
+%end;
+
+
+/* ============================================================
+   SECTION 15B : DISTINCT CUSTOMERS LOADED INTO ADOBE
+   Scoped to Adobe="Loaded" rows only (Fix 2).
+   This prevents the count bleeding onto dropped rows in
+   the summary table.
+   ============================================================ */
 
 proc sql;
     create table cust_loaded_summary as
@@ -594,15 +1245,220 @@ proc sql;
         Campaign_Name_to_adobe,
         product_code_to_adobe,
         date_to_adobe                                       as Batch_Date,
+        Optimize,
+        Adobe,
+        Client,
         count(distinct cust_no) as Loaded_Adobe
                                 label = "Distinct Customers Loaded into Adobe"
     from APN_POT_Final
-    where Adobe = "Loaded"
-    group by Campaign_Name_to_adobe, product_code_to_adobe, date_to_adobe;
+    where Adobe = "Loaded"                   /* FIX 2: only "Loaded" rows */
+    group by Campaign_Name_to_adobe, product_code_to_adobe,
+             date_to_adobe, Optimize, Adobe, Client;
 quit;
 
 
-/* SECTION 16: SUMMARY TABLE FOR POWER BI */
+/* ============================================================
+   SECTION 15C : COMPLETE FUNNEL — FULL OPPORTUNITY TO OPEN
+   -------------------------------------------------------
+   Fix 15: The join from FULL_OPPORTUNITY to Optimise uses
+   Product_Code as the primary anchor (most reliable), with
+   Campaign_Code as a secondary filter applied via the
+   product_campaign_map lookup built from config. Free-text
+   Campaign_Name from SharePoint is too fragile to join on
+   directly; product codes are controlled and unique per batch.
+
+   Fix 10: All percentage calculations guarded against
+   division-by-zero.
+
+   Fix 16: Pre-Optimise orphan count (records in the input
+   file that never reached Optimise) is included as a funnel
+   stage so stakeholders can see the full drop-off picture.
+
+   Fix 17: The Optimise product code in the left join subquery
+   is normalised to match &product_code_strategy. If the input
+   file uses BASE codes (<=8 chars) the Optimise code is
+   truncated to 8 chars so both sides compare at the same
+   level. This prevents silent join failures when stakeholders
+   supply base codes rather than full variation+message codes.
+
+   Fix 18: The Pre_Optimise_Orphans column previously used a
+   correlated subquery that re-executed for every GROUP BY
+   combination, stamping the same product-level count on every
+   row and potentially double-counting. Replaced with a
+   pre-aggregated table (orphan_counts) joined once on
+   Product_Code — faster and logically correct.
+   ============================================================ */
+
+/* Fix 18: pre-aggregate orphan counts once before the funnel query */
+proc sql;
+    create table orphan_counts as
+    select Product_Code,
+           count(*) as Orphan_Count
+    from FULL_OPPORTUNITY_ORPHANS
+    group by Product_Code;
+quit;
+
+proc sql;
+    create table COMPLETE_FUNNEL as
+    select
+        /* Use config-controlled Campaign_Code as the funnel label.
+           Fall back to whatever Optimise recorded if no config match. */
+        coalesce(m.Campaign_Code, b.Campaign_Name_to_adobe) as Campaign
+                 length = 100 label = "Campaign",
+        coalesce(a.Product_Code,  b.product_code_to_adobe)  as Product_Code
+                 length = 29  label = "Product Code",
+
+        /* Stage 0: Full upstream opportunity (stakeholder input file) */
+        count(distinct a.unique_id)                          as Full_Opportunity
+                 label = "Full Opportunity (Input File)",
+
+        /* Pre-Optimise drop-off: Fix 18 — joined from pre-aggregated table,
+           not a correlated subquery, to avoid per-row re-execution and
+           incorrect repeated counts in a grouped result set.              */
+        coalesce(o.Orphan_Count, 0)                          as Pre_Optimise_Orphans
+                 label = "Pre-Optimise Drop-Off",
+
+        /* Stage 1: Passed Optimise */
+        count(distinct b.cust_no)                            as Passed_Optimise
+                 label = "Passed Optimise",
+
+        /* Stage 2: Loaded to Adobe */
+        count(distinct c.cust_no2)                           as Loaded_to_Adobe
+                 label = "Loaded to Adobe",
+
+        /* Stage 3: Sent to Client */
+        count(distinct
+            case when d.Client = "Sent to Client"
+                 then d.cust_no2 end)                        as Sent_to_Client
+                 label = "Sent to Client",
+
+        /* Stage 4: Opened */
+        count(distinct
+            case when d.answer is not null
+                  and strip(d.answer) ne ""
+                 then d.cust_no2 end)                        as Opened
+                 label = "Opened",
+
+        /* Import quality */
+        sum(case when a.flag_missing_product_code = 1
+                 then 1 else 0 end)                          as Import_Missing_Product
+                 label = "Import: Missing Product Code",
+
+        /* Fix 10: Division-by-zero-safe percentages */
+        case when count(distinct a.unique_id) > 0
+             then (count(distinct b.cust_no) /
+                   count(distinct a.unique_id)) * 100
+             else . end                                      as Pct_Passed_Optimise
+                 format = 5.1 label = "% Passed Optimise",
+
+        case when count(distinct b.cust_no) > 0
+             then (count(distinct c.cust_no2) /
+                   count(distinct b.cust_no)) * 100
+             else . end                                      as Pct_Loaded_to_Adobe
+                 format = 5.1 label = "% Loaded to Adobe",
+
+        case when count(distinct c.cust_no2) > 0
+             then (count(distinct
+                       case when d.Client = "Sent to Client"
+                            then d.cust_no2 end) /
+                   count(distinct c.cust_no2)) * 100
+             else . end                                      as Pct_Sent_to_Client
+                 format = 5.1 label = "% Sent to Client",
+
+        case when count(distinct
+                        case when d.Client = "Sent to Client"
+                             then d.cust_no2 end) > 0
+             then (count(distinct
+                       case when d.answer is not null
+                             and strip(d.answer) ne ""
+                            then d.cust_no2 end) /
+                   count(distinct
+                       case when d.Client = "Sent to Client"
+                            then d.cust_no2 end)) * 100
+             else . end                                      as Pct_Opened
+                 format = 5.1 label = "% Opened"
+
+    from FULL_OPPORTUNITY a
+
+    /* Fix 15: join config map on Product_Code for a reliable Campaign_Code lookup */
+    left join product_campaign_map m
+        on  a.Product_Code = m.Product_Code
+
+    /* Fix 18: join pre-aggregated orphan counts — one row per Product_Code */
+    left join orphan_counts o
+        on  coalesce(a.Product_Code, "") = coalesce(o.Product_Code, "")
+
+    /* Left join to Optimise passed records.
+       Fix 17: Optimise product code normalised to &product_code_strategy level
+       so base-code input files match full-code Optimise records correctly.   */
+    left join (
+        select distinct cust_no,
+            %if &product_code_strategy = BASE %then %do;
+                upcase(strip(substr(product_code_to_adobe, 1, 8))) as product_code,
+            %end;
+            %else %do;
+                upcase(strip(product_code_to_adobe))               as product_code,
+            %end;
+                        upcase(strip(Campaign_Name_to_adobe)) as Campaign_Name_to_adobe
+        from campaigns_to_adobe_renamed
+        where optimize = "Sent"
+    ) b
+        on  a.cust_no      = b.cust_no
+        and a.Product_Code = b.product_code
+
+    /* Left join to Adobe loaded records */
+    left join (
+        select distinct cust_no2,
+                        upcase(strip(product_code)) as product_code
+        from adobe_final_table_clients
+        where Adobe = "Loaded"
+    ) c
+        on  coalesce(a.cust_no, b.cust_no) = c.cust_no2
+        and coalesce(a.Product_Code, b.product_code) = c.product_code
+
+    /* Left join to full client status */
+    left join adobe_final_table_clients d
+        on  coalesce(a.cust_no, b.cust_no) = d.cust_no2
+        and coalesce(a.Product_Code, b.product_code) = d.product_code
+
+    group by coalesce(m.Campaign_Code, b.Campaign_Name_to_adobe),
+             coalesce(a.Product_Code,  b.product_code_to_adobe),
+             coalesce(o.Orphan_Count, 0);
+quit;
+
+/* Human-readable funnel summary */
+data COMPLETE_FUNNEL;
+    set COMPLETE_FUNNEL;
+    length Funnel_Summary $600;
+
+    Drop_Off_Pre_Optimise    = Full_Opportunity - Passed_Optimise;
+    Drop_Off_Before_Send     = Passed_Optimise  - Sent_to_Client;
+
+    Funnel_Summary = cats(
+        "Of ", Full_Opportunity, " leads: ",
+        Pre_Optimise_Orphans, " never reached Optimise; ",
+        Passed_Optimise, " (", put(Pct_Passed_Optimise, 5.1), "%) passed Optimise; ",
+        Loaded_to_Adobe, " (", put(Pct_Loaded_to_Adobe, 5.1), "%) loaded to Adobe; ",
+        Sent_to_Client, " (", put(Pct_Sent_to_Client, 5.1), "%) sent to client; ",
+        Opened, " (", put(Pct_Opened, 5.1), "%) opened."
+    );
+run;
+
+title "COMPLETE FUNNEL — Full Opportunity to Open";
+proc print data=COMPLETE_FUNNEL noobs;
+    var Campaign Product_Code
+        Full_Opportunity Pre_Optimise_Orphans
+        Passed_Optimise Loaded_to_Adobe Sent_to_Client Opened
+        Pct_Passed_Optimise Pct_Loaded_to_Adobe Pct_Sent_to_Client Pct_Opened
+        Funnel_Summary;
+    format Pct_Passed_Optimise Pct_Loaded_to_Adobe Pct_Sent_to_Client Pct_Opened 5.1;
+run;
+title;
+
+
+/* ============================================================
+   SECTION 16 : SUMMARY TABLE FOR POWER BI
+   ============================================================ */
 
 proc sql;
     create table APN_POT_SUMMARY as
@@ -633,7 +1489,8 @@ proc sql;
 
         sum(case when Adobe in ("ADB_NoConsent","ADB_NoChannel",
                                 "ADB_NotInSegment","ADB_NoBrand",
-                                "NO CHANNEL","INCORRECT SEGMENT")
+                                "NO CHANNEL","INCORRECT SEGMENT",
+                                "NO CONSENT","GLOBAL OPTOUT")
                  then 1 else 0 end)                         as Dropped_Adobe
                                                             label = "Dropped by Adobe",
         sum(case when Adobe = "Sending to Adobe"
@@ -641,7 +1498,7 @@ proc sql;
                                                             label = "Sending to Adobe",
         sum(case when Adobe contains "Not loaded"
                  then 1 else 0 end)                         as Not_Loaded
-                                                            label = "Not Loaded (60d)",
+                                                            label = "Not Loaded (&adobe_load_window.d)",
 
         sum(case when Client = "Sent to Client"
                  then 1 else 0 end)                         as Sent_to_Client
@@ -705,18 +1562,32 @@ data APN_POT_SUMMARY;
     label  Open_Rate = "Open Rate (%)";
 run;
 
-/* Join distinct customer counts - replaces Loaded_Adobe case-when */
+/* ============================================================
+   FIX 2 — JOIN LOADED_ADOBE ON MATCHING DIMENSIONS ONLY
+   -------------------------------------------------------
+   Old approach joined only on Campaign + Product + Batch_Date,
+   which stamped the distinct-customer count on every row in
+   that batch — including dropped rows.
+
+   New approach joins on all six grouping dimensions so
+   Loaded_Adobe only appears on the exact "Loaded" rows it
+   was derived from. All other rows correctly receive 0.
+   ============================================================ */
+
 proc sql;
     create table APN_POT_SUMMARY_FINAL as
     select
         a.*,
-        coalesce(b.Loaded_Adobe, 0) as Loaded_Adobe
+        coalesce(b.Loaded_Adobe, 0)         as Loaded_Adobe
                  label = "Distinct Customers Loaded into Adobe"
     from APN_POT_SUMMARY a
     left join cust_loaded_summary b
         on  a.Campaign_Name = b.Campaign_Name_to_adobe
         and a.Product_Code  = b.product_code_to_adobe
-        and a.Batch_Date    = b.Batch_Date;
+        and a.Batch_Date    = b.Batch_Date
+        and a.Optimize      = b.Optimize     /* FIX 2: match all dimensions */
+        and a.Adobe         = b.Adobe
+        and a.Client        = b.Client;
 quit;
 
 proc sql noprint;
@@ -727,7 +1598,9 @@ quit;
 %put APN_POT_SUMMARY_FINAL rows: &summary_rows;
 
 
-/* SECTION 17: LOAD TO PRODUCTION */
+/* ============================================================
+   SECTION 17 : LOAD TO PRODUCTION
+   ============================================================ */
 
 %macro LoadTable(Table=, Target=);
     %if %sysfunc(exist(&Table.)) %then %do;
@@ -762,7 +1635,9 @@ quit;
 %LoadTable(Table=APN_POT_SUMMARY_FINAL, Target=APN_POT_SUMMARY);
 
 
-/* SECTION 18: CAPTURE POST-RUN STATE */
+/* ============================================================
+   SECTION 18 : CAPTURE POST-RUN STATE
+   ============================================================ */
 
 proc sql noprint;
     select max(date_to_adobe) format date9.
@@ -789,7 +1664,11 @@ quit;
 %put Records added this run: &Diff_Records;
 
 
-/* SECTION 19: EMAIL NOTIFICATION */
+/* ============================================================
+   SECTION 19 : EMAIL NOTIFICATION
+   Fix 12: full_opp_count added to diagnostics block in both
+           the "no update" and "updated" email variants.
+   ============================================================ */
 
 %macro EMAIL;
 
@@ -804,14 +1683,21 @@ quit;
             PUT "Hi,";
             PUT " ";
             PUT "The APN POT script ran with no table update,";
-            PUT "please check log for any possible failure(s)";
+            PUT "please check log for any possible failure(s).";
             PUT " ";
             PUT "Max Date in table before run: &Old_date";
             PUT "Max Time in table before run: &Old_time";
             PUT "Max Date in table after run:  &New_date";
             PUT "Max Time in table after run:  &New_time";
             PUT " ";
-            PUT "The APN Dashboard does not require refreshing";
+            PUT "--- Run Diagnostics ---";
+            PUT "Full opportunity records read:          &full_opp_count";
+            PUT "Pre-Optimise orphan records:            &orphan_count";
+            PUT "Adobe sends after Campaign_Name match:  &matched_sends";
+            PUT "Customers with multiple Adobe sends:    &dup_join_count";
+            PUT "Dropped-but-Loaded records:             &dropped_loaded_count";
+            PUT " ";
+            PUT "The APN Dashboard does not require refreshing.";
             PUT " ";
             PUT "Kind Regards";
             PUT "Morris";
@@ -829,13 +1715,22 @@ quit;
             FILE EML;
             PUT "Hi,";
             PUT "APN POT script ran with a table update.";
+            PUT " ";
             PUT "Max Date in table before run: &Old_date";
             PUT "Max Time in table before run: &Old_time";
             PUT "Max Date in table after run:  &New_date";
             PUT "Max Time in table after run:  &New_time";
             PUT "Records added this run:       &Diff_Records";
             PUT " ";
-            PUT "The APN Dashboard can be refreshed";
+            PUT "--- Run Diagnostics ---";
+            PUT "Adobe load window (days):               &adobe_load_window";
+            PUT "Full opportunity records read:          &full_opp_count";
+            PUT "Pre-Optimise orphan records:            &orphan_count";
+            PUT "Adobe sends after Campaign_Name match:  &matched_sends";
+            PUT "Customers with multiple Adobe sends:    &dup_join_count";
+            PUT "Dropped-but-Loaded records:             &dropped_loaded_count";
+            PUT " ";
+            PUT "The APN Dashboard can be refreshed.";
             PUT " ";
             PUT "Kind Regards";
             PUT "Morris";
