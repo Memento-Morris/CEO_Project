@@ -1,0 +1,8 @@
+{
+  "bundle": "t001_config_load_macrovars",
+  "source_file": "2",
+  "source_blob_sha": "e2a354b137daa98cf030991de809b1075dd09d20",
+  "source_commit": "fec999b3059cfb14c990dde44a840b910172f797",
+  "tier": "real_data",
+  "notes": "Sections 1-2: campaign config filter + select-into macro vars. PROC IMPORT (network XLSX) replaced by inline DATALINES of the Config columns; open-ended INTO range :camp_1 - written as :camp_1 - :camp_99 (SAS-equivalent)."
+}

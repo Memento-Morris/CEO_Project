@@ -1,0 +1,12 @@
+                                          Adobe / Client classification result                                          
+
+
+TESTINDICATOR       ADOBE             CLIENT  CUST_NO2  DATE_LOADED  PRODUCT_CODE  DELIVERY_CODE           DISTRIBUTION_STATUS  DROP_REASON
+-------------  ----------  -----------------  --------  -----------  ------------  -------------  ----------------------------  -----------
+TEST           TEST        TEST                   3001    05JAN2026  FNR001        TEST           SENT
+Actual         Loaded      Sent to Client         3002    05JAN2026  FNR001        DELIVERED      SENT
+Actual         Loaded      Sent to Provider       3003    06JAN2026  LIF010        DELIVERED      SENT TO THE SERVICE PROVIDER
+Actual         Loaded      Pending                3004    06JAN2026  LIF010        DELIVERED      PENDING
+Actual         Loaded      Delivery Canceled      3005    07JAN2026  FNR002        DELIVERED      DELIVERY CANCELED
+Actual         No Consent  No Consent             3006    07JAN2026  FNR002                                                     No Consent
+

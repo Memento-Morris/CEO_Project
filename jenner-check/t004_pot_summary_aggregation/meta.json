@@ -1,0 +1,8 @@
+{
+  "bundle": "t004_pot_summary_aggregation",
+  "source_file": "2",
+  "source_blob_sha": "e2a354b137daa98cf030991de809b1075dd09d20",
+  "source_commit": "fec999b3059cfb14c990dde44a840b910172f797",
+  "tier": "real_data",
+  "notes": "Section 16: the Power BI summary table \u2014 grouped PROC SQL with CASE rollups + open-rate DATA step. APN_POT supplied as an inline sample; aggregation SQL unchanged."
+}

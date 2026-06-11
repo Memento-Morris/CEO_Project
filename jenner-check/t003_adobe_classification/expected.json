@@ -1,0 +1,18 @@
+{
+  "_captured_at": "2026-06-11T22:11:32Z",
+  "_captured_run_id": "r_019eb8b4c1b67bc386486d7cd10fc364",
+  "status": "ok",
+  "exit_code": 0,
+  "log_contains": [
+    "Adobe final table rows: 6",
+    "PROC PRINT completed"
+  ],
+  "log_does_not_contain": [
+    "ERROR:",
+    "[JENNER-ERROR"
+  ],
+  "diagnostics": {
+    "parse_warnings": [],
+    "runtime_warnings": []
+  }
+}

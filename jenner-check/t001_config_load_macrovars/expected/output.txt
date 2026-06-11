@@ -1,0 +1,10 @@
+                                      CONFIG - Active Campaigns Loaded from Excel                                       
+
+
+       FULL_INPUT_PATH  ACTIVE  CAMPAIGN_CODE  PRODUCT_CODE  INPUT_FILE_PATH  INPUT_FILE_NAME  INPUT_FILE_SHEET  INPUT_FILE_TYPE  ROW_NUM
+----------------------  ------  -------------  ------------  ---------------  ---------------  ----------------  ---------------  -------
+/share/in/funeral.xlsx  Y       APN_FUNERAL    FNR001        /share/in/       funeral.xlsx     Sheet1            XLSX                   1
+/share/in/funeral.xlsx  Y       APN_FUNERAL    FNR002        /share/in/       funeral.xlsx     Sheet1            XLSX                   2
+/share/in/life.xlsx     Y       APN_LIFE       LIF010        /share/in/       life.xlsx        Sheet1            XLSX                   3
+/share/in/motor.xlsx    Y       APN_MOTOR      MOT050        /share/in/       motor.xlsx       Sheet1            XLSX                   6
+

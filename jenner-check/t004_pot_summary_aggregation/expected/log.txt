@@ -1,0 +1,34 @@
+Jenner 0.1.0 (Unlicensed - limited to 100 observations)
+Get a license at https://jenneranalytics.com/license
+
+NOTE: Option OBS changed to 100.
+NOTE: DATA APN_POT
+
+NOTE: Processing inline DATALINES (8 lines)
+
+NOTE: Read 8 rows from DATALINES.
+NOTE: Wrote APN_POT (8 rows, 11 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: PROC SQL 
+
+NOTE: Table APN_POT_SUMMARY created.
+NOTE: PROC SQL statement used.
+NOTE: DATA APN_POT_SUMMARY
+
+
+NOTE: Read 7 rows from APN_POT_SUMMARY.
+NOTE: Wrote APN_POT_SUMMARY (7 rows, 21 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: PROC SQL 
+
+NOTE: Macro variable SUMMARY_ROWS = 7
+NOTE: PROC SQL statement used.
+APN_POT_SUMMARY rows: 7
+NOTE: Option TITLE changed to APN_POT_SUMMARY - Power BI feed.
+NOTE: PROC PRINT data=APN_POT_SUMMARY
+
+NOTE: PROC PRINT completed: 7 observations printed, 21 variables
