@@ -1,1083 +1,416 @@
-/* Campaign Comms Overview - loads APN_OV_* tables to STI_PBI */
-%include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
-libname OptView "/data/fnb/clb/prod_data/5_optimise_views";
-libname APNS    "/data/fnb/clb/prod_data/7_tracking_views/Reporting_views";
-libname WH_ENH  "/data/fnbinsurance_warehouse/data/life/03 Enhanced";
+/*=====================================================================
+  OBR EMAIL DISTRIBUTION - TESTING PHASE
+  ------------------------------------------------------------
+  Sends 3 emails, ALL routed to Morris only while testing:
 
-/*--- Parameters ----------------------------------------------------*/
-%let lookback_days = 365;   /* one-year window (was 183 = 6 months) */
+    1. Agent email   - one xlsx attached PER AGENT (their pack only,
+                        so nobody's file shows anyone else's numbers)
+    2. TL email      - TL coaching pack attached, roster run-down in body
+    3. Manager email - manager overview pack attached, book run-down in body
 
-%let cutoff_num  = %eval(%sysfunc(today()) - &lookback_days.);
-%let cutoff_date = %sysfunc(putn(&cutoff_num., date9.));
-%let cutoff_dt   = %sysfunc(putn(%sysfunc(dhms(&cutoff_num.,0,0,0)), datetime19.));
-%put NOTE: cutoff_date=&cutoff_date  cutoff_dt=&cutoff_dt;
+  Each body is built from the data (top/bottom performer, averages,
+  payout splits, weak component) via macro variables - not static text.
 
-/* READ CONFIG FROM EXCEL */
-proc import
-    datafile = "\\INS-RBFS01\Share\FNB_Insure\Campaign Profiles\APN_Campaign_Config.xlsx"
-    out      = _config_raw  dbms = excelcs  replace;
-    server = 'lfe-rbgfs01';  port = 9621;  sheet = "Campaigns";
-run;
+  DEPENDS ON: this must run in the same session AFTER
+  OBR_View_Generation.sas, since it reuses AgentEarn_now, roster,
+  comp_health, payout_desk, payout_rating, monthly_trend, TLEarn_all
+  and MgmtEarn_all without recomputing them.
 
-proc import
-    datafile = "\\INS-RBFS01\Share\FNB_Insure\Campaign Profiles\APN_Campaign_Config.xlsx"
-    out      = _exclude_raw  dbms = excelcs  replace;
-    server = 'lfe-rbgfs01';  port = 9621;  sheet = "Exclude";
-run;
+  TEST MODE: every %macro below sends only to &TEST_TO. When ready to
+  go live, replace the TO= line inside each macro with the real
+  distribution logic (search "TEST MODE" markers below).
 
-data Campaign_Config;
-    length Campaign_Type $10;
-    set _config_raw;
-    where strip(Campaign_Code) ne "";
-    Campaign_Code = upcase(strip(Campaign_Code));
-    if missing(Campaign_Target) then Campaign_Target = 0;
-    /* Campaign_Type: "Ongoing" = evergreen, never graded vs target;
-       anything else (incl. missing) treated as "Finite". */
-    if upcase(strip(Campaign_Type)) = "ONGOING" then Campaign_Type = "Ongoing";
-    else Campaign_Type = "Finite";
-    keep Campaign_Code Campaign_Target Campaign_Type;
-run;
+  Author: Morris | Growth Analytics
+=====================================================================*/
 
-/* Guard against the same Campaign_Code being entered twice in the Excel
-   Campaigns sheet */
-proc sort data=Campaign_Config nodupkey;
-  by Campaign_Code;
-run;
+%LET TEST_TO   = Morris.Nkomo@fnb.co.za;
+%LET AGENT_OUT = &OUT_PATH/Agents;
 
-data Exclude_List;
-    set _exclude_raw;
-    where strip(Product_Code) ne "";
-    Product_Code = upcase(strip(Product_Code));
-    keep Product_Code;
-run;
+/* Make sure the per-agent output folder exists */
+options dlcreatedir;
+libname _mkdir "&AGENT_OUT";
+libname _mkdir clear;
 
-proc sql noprint;
-    select count(*) into :config_count  trimmed from Campaign_Config;
-    select count(*) into :exclude_count trimmed from Exclude_List;
-quit;
+/*=====================================================================
+  STEP 1 - ONE WORKBOOK PER AGENT (real file-level segregation)
+=====================================================================*/
 
-%macro check_config;
-    %if &config_count = 0 %then %do;
-        %put ERROR: Campaigns sheet has no rows.;
-        %abort cancel;
-    %end;
-    %put NOTE: &config_count campaigns loaded - &exclude_count product codes excluded.;
-%mend;
-%check_config;
+%MACRO agent_file(agent_fnum, agent_name);
 
-%let exclude_list = ;
-proc sql noprint;
-    select distinct cats("'", upcase(strip(Product_Code)), "'")
-    into :exclude_list separated by "," from Exclude_List;
-quit;
-%macro guard_exclude;
-  %if %superq(exclude_list) = %str() %then %let exclude_list = '~none~';
-%mend;
-%guard_exclude;
-%put NOTE: exclude_list = &exclude_list;
+    %GLOBAL agent_file_&agent_fnum;
+    %LET agent_file_&agent_fnum = &AGENT_OUT/Agent_OBR_&agent_fnum._&RPT_LABEL..xlsx;
 
-proc sql noprint;
-    select distinct cats("'", Campaign_Code, "'")
-    into :camp_list separated by "," from Campaign_Config;
-quit;
-%put NOTE: camp_list = &camp_list;
+    ODS EXCEL FILE="&&agent_file_&agent_fnum"
+        OPTIONS(SHEET_INTERVAL='NONE' EMBEDDED_TITLES='YES' FLOW='TABLES');
 
-/* OPTIMISE SIDE  (full_log)  -  all runs, all configured campaigns */
-proc sql;
-  create table _optimise_rows as
-  select
-      strip(Campaign_Name)                      as Campaign_Name length=100,
-      upcase(substr(strip(Product_Code),1,8))   as Campaign_Code length=8,
-      strip(Channel)                            as Channel length=30,
-      Product_Code,
-      Records_Processed,
-      Records_Passed,
-      AdobeExport_Excluded_Segments, AdobeExport_Invalid_ID,
-      AdobeExport_Uncontactable, AdobeExport_Duplicate_Recipient,
-      AdobeExport_IDLength, AdobeExport_Deceased,
-      Pressure_Rule, Uncontactable, Marketing_Consent, DEBT_REVIEW,
-      Incorrect_Sub_Segment, Sub_Segment_Not_Approved, Redlist,
-      Customer_Minor, Non_staged, Undesirable, Undesirable_E, Undesirable_M,
-      Deceased, Strategic_prioritisation, Brand_Check, Control_Group,
-      Invalid_CUST_NO, Invalid_ID_NO, Duplicate_CUST_NO, Duplicate_ID_NO,
-      SMS_to_APP_Reg, APN_to_non_APP_Reg, No_Prim_DDA_ACCT, COVID_19,
-      Staff, VIP, UHNW, Excess_Leads,
-      Processed_Date, Processed_Time
-  from OptView.full_log
-  where calculated Campaign_Code in (&camp_list.)
-    and upcase(Product_Code) not in (&exclude_list.)
-    and upcase(Optimise_Status) = 'SUCCESSFUL'
-    and Records_Processed > 1000
-    and Processed_Date >= &cutoff_num.;   /* window optimise to the same period as sends */
-quit;
+    /* --- This month summary --- */
+    ODS EXCEL OPTIONS(SHEET_NAME='OBR Receipt');
+    TITLE1 "OBR RECEIPT - &agent_name";
+    TITLE2 "Employee ID: &agent_fnum   |   Period: %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.))";
 
-/* All-runs copy for the funnel: Passed/Pushed must cover the same window
-   as Sent. Latest-run-only would undercount and invert (Sent > Passed). */
-data _optimise_allruns;
-  set _optimise_rows;
-run;
+    PROC PRINT DATA=AgentEarn_now NOOBS LABEL
+        STYLE(HEADER)=[BACKGROUND=#B85042 COLOR=WHITE FONTWEIGHT=BOLD];
+        WHERE Agent = "&agent_fnum";
+        VAR Product Desk OverallScore RatingFull EarnRate CollectedGWP Earn;
+        FORMAT OverallScore 5.2 EarnRate PERCENT8.0
+               CollectedGWP Earn NLMNY16.2;
+        LABEL OverallScore = 'Overall Score'
+              RatingFull   = 'Rating'
+              EarnRate     = 'Earn Rate'
+              CollectedGWP = 'Collected GWP'
+              Earn         = 'Earn (share)';
+    RUN;
 
-/* Drop only exact duplicate records (same wave written twice). Reprocess
-   overlaps aren't collapsed , full_log has counts, not customer IDs, so
-   summing slightly over-counts where reruns overlap (bounded, accepted). */
-proc sort data=_optimise_allruns nodupkey;
-  by Product_Code Processed_Date Processed_Time Records_Processed Records_Passed;
-run;
+    /* --- Top row for the scorecard grid --- */
+    PROC SQL NOPRINT;
+        SELECT Product, Desk INTO :top_prod, :top_desk
+        FROM AgentEarn_now
+        WHERE Agent = "&agent_fnum"
+        ORDER BY OverallScore DESC;
+    QUIT;
 
-/* Keep latest run per product for the drops (each run is a full refresh,
-   so latest = current state). Summing would double-count reprocesses. */
-proc sort data=_optimise_rows;
-  by Product_Code descending Processed_Date descending Processed_Time;
-run;
+    DATA scorecard_&agent_fnum.;
+        SET AgentEarn_now;
+        WHERE Agent = "&agent_fnum" AND Product = "&top_prod" AND Desk = "&top_desk";
+        LENGTH RowLabel $22;
+        RowLabel = 'Target';
+        c_Effe = '100%'; c_Save = '50%/32%'; c_FC = '80%'; c_GWP = 'R160k/R120k';
+        c_Comp = '0'; c_Effo = '90%'; c_QA = '90%'; c_Score = ''; c_Rating = '';
+        OUTPUT;
+        RowLabel = 'Weighting';
+        c_Effe = '15%'; c_Save = '30%'; c_FC = '30%'; c_GWP = '25%';
+        c_Comp = '10%'; c_Effo = '45%'; c_QA = '45%'; c_Score = ''; c_Rating = '';
+        OUTPUT;
+        RowLabel = 'Actual Result';
+        c_Effe = PUT(Effectiveness, PERCENT9.2);
+        c_Save = PUT(SaveRatio, PERCENT9.2);
+        c_FC   = PUT(FirstCollPerc, PERCENT9.2);
+        c_GWP  = CATS('R ', PUT(RetainedGWP, COMMA14.2));
+        c_Comp = PUT(Complaints, BEST.);
+        c_Effo = PUT(EffortScore, PERCENT9.2);
+        c_QA   = PUT(QA, PERCENT9.2);
+        c_Score = ''; c_Rating = '';
+        OUTPUT;
+        RowLabel = 'Points (1-5)';
+        c_Effe = PUT(EffeScore, 1.);
+        c_Save = PUT(SaveScore, 1.);
+        c_FC   = PUT(FCScore,   1.);
+        c_GWP  = PUT(GWPScore,  1.);
+        c_Comp = PUT(CompScore, 1.);
+        c_Effo = PUT(EffoScore, 1.);
+        c_QA   = PUT(QAScore,   1.);
+        c_Score = PUT(OverallScore, 5.2);
+        c_Rating = RatingFull;
+        OUTPUT;
+        RowLabel = 'Contribution to Score';
+        c_Effe = PUT(Effe_Contrib, 4.2);
+        c_Save = PUT(Save_Contrib, 4.2);
+        c_FC   = PUT(FC_Contrib,   4.2);
+        c_GWP  = PUT(GWP_Contrib,  4.2);
+        c_Comp = PUT(Comp_Contrib, 4.2);
+        c_Effo = PUT(Effo_Contrib, 4.2);
+        c_QA   = PUT(QA_Contrib,   4.2);
+        c_Score = PUT(OverallScore, 5.2);
+        c_Rating = '';
+        OUTPUT;
+        KEEP RowLabel c_:;
+    RUN;
 
-proc sort data=_optimise_rows nodupkey;
-  by Product_Code;
-run;
+    TITLE3 "SCORECARD - &top_prod / &top_desk";
+    PROC REPORT DATA=scorecard_&agent_fnum. NOWD
+        STYLE(HEADER)=[BACKGROUND=#B85042 COLOR=WHITE FONTWEIGHT=BOLD];
+        COLUMN RowLabel c_Effe c_Save c_FC c_GWP c_Comp c_Effo c_QA c_Score c_Rating;
+        DEFINE RowLabel / DISPLAY ' ' STYLE=[FONTWEIGHT=BOLD BACKGROUND=#F5E6DC];
+        DEFINE c_Effe   / DISPLAY 'Effectiveness';
+        DEFINE c_Save   / DISPLAY 'Save Ratio';
+        DEFINE c_FC     / DISPLAY '1st Coll %';
+        DEFINE c_GWP    / DISPLAY 'GWP Retained';
+        DEFINE c_Comp   / DISPLAY 'Complaints';
+        DEFINE c_Effo   / DISPLAY 'Effort Score';
+        DEFINE c_QA     / DISPLAY 'QA';
+        DEFINE c_Score  / DISPLAY 'Score';
+        DEFINE c_Rating / DISPLAY 'Rating';
+    RUN;
 
-/* Funnel totals from full_log (all runs, year window). full_log is the only
-   source covering a full year; raw pass tables retain only weeks. */
-proc sql;
-  create table _ov_optimise as
-  select
-      Campaign_Code,
-      sum(Records_Processed)  as Imported,
-      sum(Records_Passed)     as Passed_Optimise,
-      sum(Records_Passed
-          - (AdobeExport_Excluded_Segments + AdobeExport_Invalid_ID
-           + AdobeExport_Uncontactable + AdobeExport_Duplicate_Recipient
-           + AdobeExport_IDLength + AdobeExport_Deceased))
-                              as Pushed_to_Adobe
-  from _optimise_allruns
-  group by Campaign_Code;
-quit;
+    /* --- Where you lost points --- */
+    DATA reflect_&agent_fnum.;
+        SET AgentEarn_now;
+        WHERE Agent = "&agent_fnum" AND Product = "&top_prod" AND Desk = "&top_desk";
+        LENGTH Component $18;
+        Component = 'Effectiveness'; Points = EffeScore; Earned = Effe_Contrib;
+        MaxPossible = Effe_MaxContrib; Gap = Effe_Lost; OUTPUT;
+        Component = 'Save Ratio';    Points = SaveScore; Earned = Save_Contrib;
+        MaxPossible = Save_MaxContrib; Gap = Save_Lost; OUTPUT;
+        Component = '1st Collection';Points = FCScore;   Earned = FC_Contrib;
+        MaxPossible = FC_MaxContrib;   Gap = FC_Lost;   OUTPUT;
+        Component = 'GWP Retained';  Points = GWPScore;  Earned = GWP_Contrib;
+        MaxPossible = GWP_MaxContrib;  Gap = GWP_Lost;  OUTPUT;
+        Component = 'Complaints';    Points = CompScore; Earned = Comp_Contrib;
+        MaxPossible = Comp_MaxContrib; Gap = Comp_Lost; OUTPUT;
+        Component = 'Effort Score';  Points = EffoScore; Earned = Effo_Contrib;
+        MaxPossible = Effo_MaxContrib; Gap = Effo_Lost; OUTPUT;
+        Component = 'QA';            Points = QAScore;   Earned = QA_Contrib;
+        MaxPossible = QA_MaxContrib;   Gap = QA_Lost;   OUTPUT;
+        KEEP Component Points Earned MaxPossible Gap;
+    RUN;
 
-proc sql noprint;
-  select distinct cats("'", Product_Code, "'")
-  into :product_list separated by "," from _optimise_rows;
-quit;
-%macro guard_product;
-  %if %superq(product_list) = %str() %then %let product_list = '~none~';
-%mend;
-%guard_product;
+    DATA reflect_&agent_fnum.;
+        SET reflect_&agent_fnum.;
+        LENGTH CoachingNote $40;
+        IF Points >= 5      THEN CoachingNote = 'Maxed. Hold this.';
+        ELSE IF Points >= 4 THEN CoachingNote = 'Strong. One more push for max.';
+        ELSE IF Points >= 3 THEN CoachingNote = 'On target. Room to improve.';
+        ELSE IF Points >= 2 THEN CoachingNote = 'Below target. Focus area.';
+        ELSE                     CoachingNote = 'Critical. Address first.';
+    RUN;
 
-/* Code -> name map (one display name per code) for slicers/labels,
-   joined onto every campaign-level output table. */
-proc sql;
-  create table _camp_name0 as
-  select Campaign_Code, Campaign_Name, count(*) as n
-  from _optimise_rows
-  where not missing(Campaign_Name) and strip(Campaign_Name) ne ''
-  group by Campaign_Code, Campaign_Name;
-quit;
-proc sort data=_camp_name0; by Campaign_Code descending n; run;
-data _camp_name;
-  set _camp_name0;
-  by Campaign_Code;
-  if first.Campaign_Code;            /* most common name per code, one row each */
-  length Campaign $8;
-  Campaign = Campaign_Code;
-  keep Campaign Campaign_Name;
-run;
+    PROC SORT DATA=reflect_&agent_fnum.; BY DESCENDING Gap; RUN;
 
-/* Code -> channel map (most common channel per code) for the funnel. */
-proc sql;
-  create table _camp_chan0 as
-  select Campaign_Code, Channel, count(*) as n
-  from _optimise_rows
-  where not missing(Channel) and strip(Channel) ne ''
-  group by Campaign_Code, Channel;
-quit;
-proc sort data=_camp_chan0; by Campaign_Code descending n; run;
-data _camp_chan;
-  set _camp_chan0;
-  by Campaign_Code;
-  if first.Campaign_Code;
-  length Campaign $8;
-  Campaign = Campaign_Code;
-  keep Campaign Channel;
-run;
+    TITLE3 'WHERE YOU STAND';
+    PROC PRINT DATA=reflect_&agent_fnum. NOOBS LABEL
+        STYLE(HEADER)=[BACKGROUND=#B85042 COLOR=WHITE FONTWEIGHT=BOLD];
+        VAR Component Points Earned MaxPossible Gap CoachingNote;
+        FORMAT Earned MaxPossible Gap 4.2;
+        LABEL Component='Component' Points='Your Points'
+              Earned='You Earned' MaxPossible='Max Possible'
+              Gap='Gap' CoachingNote='Coaching Note';
+    RUN;
 
-/* Send base: union all six channel sends-and-feedback views at event grain,
-   each tagged with its Channel.*/
-%macro read_channel(view=, channel=, hasanswer=Y, hasopen=N);
-    data _ch_&channel.;
-        length Channel $20 MUCN $35 PRODUCT_CODE $29
-               DISTRIBUTION_STATUS $43 DELIVERY_CODE $51
-               %if &hasanswer = Y %then answer $815; ;
-        set APNS.&view.
-            (keep=product_code cust_no mucn distribution_date distribution_status delivery_code
-                  %if &hasanswer = Y %then answer;
-                  %if &hasopen   = Y %then open_date open_status; );
-        where product_code in (&product_list.)
-          and datepart(Distribution_date) >= &cutoff_num.;
-        Channel       = "&channel.";
-        %if &hasanswer ne Y %then %do; length answer $815; answer = ""; %end;
-        length Campaign_Code $8;
-        Campaign_Code = upcase(substr(strip(product_code),1,8));
-        Send_Date     = datepart(Distribution_date);
-        format Send_Date date9.;
-        _status = upcase(strip(Distribution_Status));
-        client_flag   = (_status = 'SENT');
-        provider_flag = (_status = 'SENT TO THE SERVICE PROVIDER');
-        sent_flag     = (_status in ('SENT','SENT TO THE SERVICE PROVIDER'));
-        %if &hasopen = Y %then %do;
-            /* Email opens are their own event rows and can land on a non-sent
-                */
-            opened_flag = (not missing(open_date)
-                           or upcase(strip(open_status)) = 'OPEN');
-        %end;
-        %else %do;
-            opened_flag = (sent_flag and not missing(answer) and strip(answer) ne '');
-        %end;
-        keep Channel Campaign_Code cust_no product_code MUCN Send_Date
-             client_flag provider_flag sent_flag opened_flag
-             DISTRIBUTION_STATUS DELIVERY_CODE;
+    /* --- Trend --- */
+    PROC SQL;
+        CREATE TABLE trend_&agent_fnum. AS
+        SELECT CampaignMonth FORMAT=MONYY7. AS Month,
+               MAX(OverallScore) AS BestScore FORMAT=5.2,
+               PUT(MAX(OverallScore), ratingband.) AS Rating LENGTH=12,
+               SUM(CollectedGWP) AS TotalGWP FORMAT=NLMNY16.2,
+               SUM(Earn)         AS TotalEarn FORMAT=NLMNY16.2
+        FROM AgentEarn_scored
+        WHERE Agent = "&agent_fnum"
+        GROUP BY CampaignMonth
+        ORDER BY CampaignMonth;
+    QUIT;
+
+    TITLE3 'YOUR TREND (4 MONTHS)';
+    PROC PRINT DATA=trend_&agent_fnum. NOOBS LABEL
+        STYLE(HEADER)=[BACKGROUND=#B85042 COLOR=WHITE FONTWEIGHT=BOLD];
+    RUN;
+
+    TITLE;
+    ODS EXCEL CLOSE;
+%MEND;
+
+/* Build the per-agent file list, same pattern as the sheet loop in
+   OBR_View_Generation.sas, but now each call opens/closes its own file */
+PROC SQL NOPRINT;
+    SELECT DISTINCT CATS("%NRSTR(%agent_file)","(",Agent,",",Name,")")
+    INTO :AgentFileCalls SEPARATED BY ';'
+    FROM AgentEarn_now;
+QUIT;
+&AgentFileCalls.;
+
+/* Collect the generated file paths into one space-separated, quoted
+   list for the ATTACH= option, e.g. ("path1" "path2" "path3" ...) */
+PROC SQL NOPRINT;
+    SELECT DISTINCT CATS('"', "&AGENT_OUT", '/Agent_OBR_', Agent, '_', "&RPT_LABEL", '.xlsx"')
+    INTO :AgentAttachList SEPARATED BY ' '
+    FROM AgentEarn_now;
+QUIT;
+%LET AgentAttachList = (&AgentAttachList);
+
+
+/*=====================================================================
+  STEP 2 - RUN-DOWN STATS FOR EACH EMAIL BODY
+=====================================================================*/
+
+/* --- Agent-pack run-down --- */
+PROC SQL NOPRINT;
+    SELECT COUNT(DISTINCT Agent) INTO :n_agents FROM AgentEarn_now;
+
+    SELECT Name, OverallScore FORMAT=5.2
+        INTO :top_agent_name, :top_agent_score
+        FROM AgentEarn_now ORDER BY OverallScore DESC;
+
+    SELECT Name, OverallScore FORMAT=5.2
+        INTO :low_agent_name, :low_agent_score
+        FROM AgentEarn_now ORDER BY OverallScore;
+
+    SELECT COUNT(DISTINCT Agent) INTO :n_below3
+        FROM AgentEarn_now WHERE OverallScore < 3;
+
+    SELECT PUT(MEAN(OverallScore),5.2) INTO :avg_score
+        FROM (SELECT Agent, MAX(OverallScore) AS OverallScore
+              FROM AgentEarn_now GROUP BY Agent);
+
+    SELECT PUT(SUM(Earn),NLMNY16.2) INTO :total_agent_earn
+        FROM AgentEarn_now;
+QUIT;
+
+/* --- TL-pack run-down (built off the roster/comp_health tables that
+       already exist from OBR_View_Generation.sas) --- */
+PROC SQL NOPRINT;
+    SELECT CATX(', ', Name, PUT(Score,5.2))
+        INTO :top3_agents SEPARATED BY ' | '
+        FROM (SELECT * FROM roster ORDER BY Score DESC) (OBS=3);
+
+    SELECT CATX(', ', Name, PUT(Score,5.2))
+        INTO :bottom3_agents SEPARATED BY ' | '
+        FROM (SELECT * FROM roster ORDER BY Score) (OBS=3);
+
+    SELECT PUT(MEAN(Score),5.2) INTO :team_avg_score FROM roster;
+
+    SELECT Component INTO :weakest_component
+        FROM comp_health ORDER BY AvgPts;
+
+    SELECT PUT(SUM(TotalEarn),NLMNY16.2) INTO :team_total_earn FROM roster;
+QUIT;
+
+/* --- Manager-pack run-down (payout_desk / payout_rating / monthly_trend
+       already exist from OBR_View_Generation.sas) --- */
+PROC SQL NOPRINT;
+    SELECT Desk, PUT(TotalEarn,NLMNY16.2)
+        INTO :top_desk_name, :top_desk_earn
+        FROM payout_desk ORDER BY TotalEarn DESC;
+
+    SELECT PUT(SUM(TotalEarn),NLMNY16.2) INTO :book_total_earn FROM payout_desk;
+
+    SELECT CATX(': ', Rating, PUT(People,BEST.))
+        INTO :rating_breakdown SEPARATED BY ' | '
+        FROM payout_rating;
+QUIT;
+
+/* Month-on-month direction, off monthly_trend */
+PROC SQL NOPRINT;
+    SELECT COUNT(*) INTO :n_months FROM monthly_trend;
+QUIT;
+%IF &n_months >= 2 %THEN %DO;
+    PROC SQL NOPRINT;
+        SELECT AvgScore INTO :score_this_month
+            FROM (SELECT * FROM monthly_trend ORDER BY Month DESC) (OBS=1);
+        SELECT AvgScore INTO :score_last_month
+            FROM (SELECT * FROM monthly_trend ORDER BY Month DESC) (OBS=1 FIRSTOBS=2);
+    QUIT;
+    %LET score_move = %SYSEVALF(&score_this_month - &score_last_month);
+    %IF %SYSEVALF(&score_move >= 0) %THEN %LET trend_word = up;
+    %ELSE %LET trend_word = down;
+%END;
+%ELSE %DO;
+    %LET score_move  = 0;
+    %LET trend_word  = flat (only one month of data so far);
+%END;
+
+
+/*=====================================================================
+  STEP 3 - THREE TEST EMAILS, ALL FROM MORRIS TO MORRIS
+  ------------------------------------------------------------
+  HTML format lifted from the working Campaign Comms Overview job
+  (filename ... email ... content_type="text/html", from=to=Morris).
+  That's the pattern proven to actually send in this environment, so
+  every macro below follows it instead of the plain-text FILE approach.
+=====================================================================*/
+
+/*--- 3a. AGENT EMAIL - one xlsx per agent attached, ~&n_agents files ---*/
+%MACRO email_agents;
+    /* TEST MODE: from/to both Morris. Go-live: loop this macro per
+       agent, TO=<agent's own email>, ATTACH=(their one file only). */
+    filename myemail email
+        from         = "Morris.Nkomo@fnb.co.za"
+        to           = "Morris.Nkomo@fnb.co.za"
+        subject      = "TEST - Agent OBR Packs - %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.))"
+        attach       = &AgentAttachList
+        content_type = "text/html";
+
+    data _null_;
+        file myemail;
+        put '<html><body style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#2b2b2b;">';
+        put "Hi Morris,<br><br>";
+        put "TEST RUN &#8212; agent OBR packs for %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.)). ";
+        put "This is a dry run: all &n_agents agent files are attached to this one email ";
+        put "so you can review them together. In production, each agent gets only their own file.<br><br>";
+
+        put '<table cellpadding="0" cellspacing="0" border="0" width="480" style="border-collapse:collapse;margin-bottom:10px;">';
+        put '<tr><td colspan="2" style="background:#B85042;color:#ffffff;font-weight:600;padding:7px 12px;">Agent pack run-down</td></tr>';
+        put "<tr><td style=""border:1px solid #e6d3ce;padding:6px 12px;"">Top performer</td><td style=""border:1px solid #e6d3ce;padding:6px 12px;text-align:right;font-weight:600;"">&top_agent_name (&top_agent_score)</td></tr>";
+        put "<tr><td style=""background:#F5E6DC;border:1px solid #e6d3ce;padding:6px 12px;"">Needs the most support</td><td style=""background:#F5E6DC;border:1px solid #e6d3ce;padding:6px 12px;text-align:right;font-weight:600;"">&low_agent_name (&low_agent_score)</td></tr>";
+        put "<tr><td style=""border:1px solid #e6d3ce;padding:6px 12px;"">Team average score</td><td style=""border:1px solid #e6d3ce;padding:6px 12px;text-align:right;font-weight:600;"">&avg_score</td></tr>";
+        put "<tr><td style=""background:#F5E6DC;border:1px solid #e6d3ce;padding:6px 12px;"">Below the 3.0 earn threshold</td><td style=""background:#F5E6DC;border:1px solid #e6d3ce;padding:6px 12px;text-align:right;font-weight:600;"">&n_below3 of &n_agents</td></tr>";
+        put "<tr><td style=""border:1px solid #e6d3ce;padding:6px 12px;"">Total agent payout this month</td><td style=""border:1px solid #e6d3ce;padding:6px 12px;text-align:right;font-weight:600;"">&total_agent_earn</td></tr>";
+        put '</table>';
+
+        put "Kind Regards<br>Morris";
+        put '</body></html>';
     run;
-%mend;
 
-%read_channel(view=apn_sends_and_feedback,      channel=APN,      hasanswer=Y, hasopen=N);
-%read_channel(view=email_sends_and_feedback,    channel=Email,    hasanswer=N, hasopen=Y);
-%read_channel(view=sms_sends_and_feedback,      channel=SMS,      hasanswer=Y, hasopen=N);
-%read_channel(view=ussd_sends_and_feedback,     channel=USSD,     hasanswer=Y, hasopen=N);
-%read_channel(view=whatsapp_sends_and_feedback, channel=WhatsApp, hasanswer=Y, hasopen=N);
-
-data _send_base;
-    set _ch_APN _ch_Email _ch_SMS _ch_USSD _ch_WhatsApp;
-run;
-
-/* customer+product+date grain for the funnel aggregates below.
-   (still event-dated: a customer sent in two periods keeps both dates) */
-proc sql;
-  create table _sends as
-  select
-      Campaign_Code, Channel,
-      cust_no, product_code, Send_Date,
-      max(client_flag)   as client_flag,
-      max(provider_flag) as provider_flag,
-      max(sent_flag)     as sent_flag,
-      max(opened_flag)   as opened_flag
-  from _send_base
-  group by Campaign_Code, Channel, cust_no, product_code, Send_Date;
-quit;
-
-/* ETB/NTB tag: join sends customers to the warehouse and classify by
-   record-open tenure (NTB if opened < 6 months ago, else ETB). Sends side
-   only - optimise has no cust_no to segment on. */
-proc sql;
-  create table _cust_tenure as
-  select distinct
-      strip(put(s.cust_no, best32.))            as cust_char length=36,
-      case when w.CustRecOpenDate is missing                  then 'Non-Banker'
-           when intck('month', w.CustRecOpenDate, today()) < 6 then 'NTB'
-           else 'ETB' end                        as NTB_ETB length=7
-  from (select distinct cust_no from _sends)    s
-  left join WH_ENH.CUST                          w
-      on strip(put(s.cust_no, best32.)) = strip(w.Cust_No);
-quit;
-
-proc sql;
-  create table _sends as
-  select s.*, coalesce(t.NTB_ETB,'Non-Banker') as NTB_ETB length=7
-  from _sends s
-  left join _cust_tenure t
-      on strip(put(s.cust_no, best32.)) = t.cust_char;
-quit;
-
-/* HEADLINE FUNNEL + TARGET + RAG  (campaign level) */
-proc sql;
-  create table _ov_sends as
-  select
-      Campaign_Code,
-      sum(client_flag)   as Sent_to_Client,
-      sum(provider_flag) as Sent_to_Provider,
-      sum(sent_flag)     as Sent,
-      sum(opened_flag)   as Opened,
-      sum(case when sent_flag   and NTB_ETB='NTB'     then 1 else 0 end) as Sent_NTB,
-      sum(case when sent_flag   and NTB_ETB='ETB'     then 1 else 0 end) as Sent_ETB,
-      sum(case when sent_flag   and NTB_ETB='Non-Banker' then 1 else 0 end) as Sent_Unknown,
-      sum(case when opened_flag and NTB_ETB='NTB'     then 1 else 0 end) as Opened_NTB,
-      sum(case when opened_flag and NTB_ETB='ETB'     then 1 else 0 end) as Opened_ETB,
-      sum(case when opened_flag and NTB_ETB='Non-Banker' then 1 else 0 end) as Opened_Unknown
-  from _sends
-  group by Campaign_Code;
-quit;
-
-/* Business rule: floor Pushed_to_Adobe at Sent+105 where it lands below Sent
-   (avoids an inverted funnel). Raw value kept as Pushed_to_Adobe_Raw for audit. */
-proc sql;
-  create table _ov_optimise as
-  select
-      o.Campaign_Code,
-      o.Imported,
-      o.Passed_Optimise,
-      o.Pushed_to_Adobe as Pushed_to_Adobe_Raw,
-      case when o.Pushed_to_Adobe < coalesce(s.Sent,0)
-           then coalesce(s.Sent,0) + 105
-           else o.Pushed_to_Adobe
-      end as Pushed_to_Adobe
-  from _ov_optimise o
-  left join _ov_sends s on o.Campaign_Code = s.Campaign_Code;
-quit;
-
-/* Dated send table (campaign x month) so Power BI can slice/trend by period.
-   Month_Start is the date axis. */
-proc sql;
-  create table OV_SEND_MONTHLY as
-  select
-      s.Campaign_Code                             as Campaign length=8 label="Campaign" ,
-      coalesce(nm.Campaign_Name, s.Campaign_Code) as Campaign_Name length=100 label="Campaign name" ,
-      s.Channel                                   length=20 label="Channel" ,
-      intnx('month', s.Send_Date, 0, 'b')         as Month_Start
-                                                  format=date9. label="Month" ,
-      sum(s.sent_flag)                            as Sent
-                                                  format=comma12. label="Sent" ,
-      sum(s.client_flag)                          as Sent_to_Client
-                                                  format=comma12. label="Sent to client" ,
-      sum(s.provider_flag)                        as Sent_to_Provider
-                                                  format=comma12. label="Sent to provider" ,
-      sum(s.opened_flag)                          as Opened
-                                                  format=comma12. label="Opened" ,
-      today()                                     as Run_Date format=date9. label="Run date"
-  from _sends s
-  left join _camp_name nm on s.Campaign_Code = nm.Campaign
-  group by s.Campaign_Code, calculated Campaign_Name, s.Channel, calculated Month_Start
-  order by s.Campaign_Code, s.Channel, calculated Month_Start;
-quit;
-
-/* Campaign-level ETB/NTB split (one row per campaign x segment). Replaces the
-   old month x segment table  */
-proc sql;
-  create table OV_SEGMENT as
-  select
-      s.Campaign_Code                             as Campaign length=8 label="Campaign" ,
-      coalesce(nm.Campaign_Name, s.Campaign_Code) as Campaign_Name length=100 label="Campaign name" ,
-      coalesce(ch.Channel, 'Non-Banker')             as Channel length=30 label="Channel" ,
-      s.NTB_ETB                                   as Segment length=7 label="Tenure segment" ,
-      sum(s.sent_flag)                            as Sent
-                                                  format=comma12. label="Sent" ,
-      sum(s.opened_flag)                          as Opened
-                                                  format=comma12. label="Opened" ,
-      today()                                     as Run_Date format=date9. label="Run date"
-  from _sends s
-  left join _camp_name nm on s.Campaign_Code = nm.Campaign
-  left join _camp_chan ch on s.Campaign_Code = ch.Campaign
-  group by s.Campaign_Code, calculated Campaign_Name, calculated Channel, s.NTB_ETB
-  order by s.Campaign_Code, s.NTB_ETB;
-quit;
-
-/* Opt-outs: consent withdrawals, not sends - kept as a separate metric
-   (campaign x month). Read from the optout view directly. */
-proc sql;
-  create table OV_OPTOUTS as
-  select
-      upcase(substr(strip(o.product_code),1,8))   as Campaign length=8 label="Campaign" ,
-      coalesce(nm.Campaign_Name,
-               upcase(substr(strip(o.product_code),1,8)))
-                                                   as Campaign_Name length=100 label="Campaign name" ,
-      intnx('month', datepart(o.distribution_date), 0, 'b') as Month_Start
-                                                   format=date9. label="Month" ,
-      count(*)                                     as Optouts
-                                                   format=comma12. label="Opt-outs" ,
-      today()                                      as Run_Date format=date9. label="Run date"
-  from APNS.optout_sends_and_feedback o
-  left join _camp_name nm
-      on upcase(substr(strip(o.product_code),1,8)) = nm.Campaign
-  where o.product_code in (&product_list.)
-    and datepart(o.distribution_date) >= &cutoff_num.
-  group by calculated Campaign, calculated Campaign_Name, calculated Month_Start
-  order by calculated Campaign, calculated Month_Start;
-quit;
-
-proc sql;
-  create table OV_CAMPAIGN as
-  select
-      o.Campaign_Code                              as Campaign length=8 label="Campaign" ,
-      coalesce(nm.Campaign_Name, o.Campaign_Code)  as Campaign_Name length=100 label="Campaign name" ,
-      coalesce(ch.Channel, 'Non-Banker')              as Channel length=30 label="Channel" ,
-      coalesce(c.Campaign_Target,0)                as Target
-                                                   format=comma12. label="Target sends" ,
-      o.Passed_Optimise                            format=comma12. label="Passed Optimise" ,
-      o.Pushed_to_Adobe                            format=comma12. label="Pushed to Adobe" ,
-      coalesce(s.Sent,0)                           as Sent
-                                                   format=comma12. label="Sent to customers" ,
-      coalesce(s.Opened,0)                         as Opened
-                                                   format=comma12. label="Opened" ,
-      case when coalesce(s.Sent,0) > 0
-           then round(coalesce(s.Opened,0)/s.Sent*100,1) else . end
-                                                   as Open_Rate
-                                                   format=8.1 label="Open rate pct" ,
-      case when coalesce(c.Campaign_Target,0) > 0
-            and c.Campaign_Type ne "Ongoing"
-           then round(coalesce(s.Sent,0)/c.Campaign_Target*100,1) else . end
-                                                   as Pct_of_Target
-                                                   format=8.1 label="Pct of target" ,
-      case
-          /* ongoing/evergreen campaigns are monitored, never graded */
-          when c.Campaign_Type = "Ongoing"                 then "Monitoring"
-          /* finite but no target supplied - tracked, not graded, NOT "Behind" */
-          when coalesce(c.Campaign_Target,0) <= 0          then "No target set"
-          /* finite with a real target - grade it */
-          when coalesce(s.Sent,0) >= c.Campaign_Target     then "Target met"
-          when coalesce(s.Sent,0) >= c.Campaign_Target*0.8 then "On track"
-          when coalesce(s.Sent,0) >= c.Campaign_Target*0.5 then "At risk"
-          else "Behind"
-      end                                          as Target_RAG length=20 label="Target status" ,
-      today()                                      as Run_Date format=date9. label="Run date"
-  from _ov_optimise o
-  left join _ov_sends s       on o.Campaign_Code = s.Campaign_Code
-  left join Campaign_Config c on o.Campaign_Code = c.Campaign_Code
-  left join _camp_name nm     on o.Campaign_Code = nm.Campaign
-  left join _camp_chan ch     on o.Campaign_Code = ch.Campaign
-  order by o.Campaign_Code;
-quit;
-
-/* SEND REPORT  -  dispatch decomposition (campaign level)
-   Loaded -> Client + Provider = Dispatched -> Opened */
-proc sql;
-  create table OV_SEND_REPORT as
-  select
-      o.Campaign_Code                              as Campaign length=8 label="Campaign" ,
-      coalesce(nm.Campaign_Name, o.Campaign_Code)  as Campaign_Name length=100 label="Campaign name" ,
-      o.Pushed_to_Adobe                            as Loaded_to_Adobe
-                                                   format=comma12. label="Loaded to Adobe" ,
-      coalesce(s.Sent_to_Client,0)                 as Sent_to_Client
-                                                   format=comma12. label="Sent to client" ,
-      coalesce(s.Sent_to_Provider,0)               as Sent_to_Provider
-                                                   format=comma12. label="Sent to provider" ,
-      coalesce(s.Sent,0)                           as Total_Dispatched
-                                                   format=comma12. label="Total dispatched" ,
-      coalesce(s.Opened,0)                         as Opened
-                                                   format=comma12. label="Opened" ,
-      today()                                      as Run_Date format=date9. label="Run date"
-  from _ov_optimise o
-  left join _ov_sends s on o.Campaign_Code = s.Campaign_Code
-  left join _camp_name nm on o.Campaign_Code = nm.Campaign
-  order by o.Campaign_Code;
-quit;
-
-/* Optimise drop reasons, long format at product-code grain.
-   Campaign_Code carried so the drop tables relate to the hub on Campaign,
-   not on the fragile Campaign_Name string. */
-proc sql;
-  create table _opt_drops_long as
-  select Campaign_Code, Campaign_Name, Product_Code, "Pressure rules"          as Drop_Reason length=40, sum(Pressure_Rule)          as Count from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Uncontactable",            sum(Uncontactable)          from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Marketing Consent",        sum(Marketing_Consent)      from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Debt Review",              sum(DEBT_REVIEW)            from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Incorrect Sub Segment",    sum(Incorrect_Sub_Segment)  from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Strategic prioritisation", sum(Strategic_prioritisation) from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Redlist",                  sum(Redlist)                from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Undesirables_M",           sum(Undesirable_M)          from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Undesirables_E",           sum(Undesirable_E)          from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Deceased",                 sum(Deceased)               from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Brand check",              sum(Brand_Check)            from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Non-staged",               sum(Non_staged)             from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Customer age < 18",        sum(Customer_Minor)         from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Control group",            sum(Control_Group)          from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Sub Segment not Approved", sum(Sub_Segment_Not_Approved) from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Invalid CUST_NO",          sum(Invalid_CUST_NO)        from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Invalid ID",              sum(Invalid_ID_NO)          from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Duplicate CUST_NO",        sum(Duplicate_CUST_NO)      from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Duplicate ID",            sum(Duplicate_ID_NO)        from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "SMS to APP Reg",           sum(SMS_to_APP_Reg)         from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "APN to non-APP Reg",       sum(APN_to_non_APP_Reg)     from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "No Primary DDA Account",   sum(No_Prim_DDA_ACCT)       from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "COVID-19",                 sum(COVID_19)               from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Staff",                    sum(Staff)                  from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "VIP",                      sum(VIP)                    from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "UHNW",                     sum(UHNW)                   from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "Excess Leads",             sum(Excess_Leads)           from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code;
-quit;
-
-proc sql;
-  create table OV_FAILED_BREAKDOWN as
-  select Campaign_Code                 as Campaign length=8 label="Campaign" ,
-         Campaign_Name                  label="Campaign_Name" ,
-         Product_Code                   label="Product_Code" ,
-         Drop_Reason                    label="Drop_Reason" ,
-         Count format=comma12.          label="Count" ,
-         today() as Run_Date format=date9. label="Run date"
-  from _opt_drops_long
-  where Count > 0
-  order by Campaign, Product_Code, Count desc;
-quit;
-
-/* ADOBE DROP REASONS  -  long format, product-code grain
-   AdobeExport_* taxonomy from full_log (same shape as optimise) */
-proc sql;
-  create table _adb_drops_long as
-  select Campaign_Code, Campaign_Name, Product_Code, "AdobeExport:Duplicate Recipient" as Drop_Reason length=40, sum(AdobeExport_Duplicate_Recipient) as Count from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "AdobeExport:excluded Segments", sum(AdobeExport_Excluded_Segments) from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "AdobeExport:Invalid ID",        sum(AdobeExport_Invalid_ID)        from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "AdobeExport:Uncontactable",     sum(AdobeExport_Uncontactable)     from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "AdobeExport:ID Length",         sum(AdobeExport_IDLength)          from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code
-  union all select Campaign_Code, Campaign_Name, Product_Code, "AdobeExport:Deceased",          sum(AdobeExport_Deceased)          from _optimise_rows group by Campaign_Code, Campaign_Name, Product_Code;
-quit;
-
-proc sql;
-  create table OV_ADOBE_DROPS as
-  select Campaign_Code                 as Campaign length=8 label="Campaign" ,
-         Campaign_Name                  label="Campaign_Name" ,
-         Product_Code                   label="Product_Code" ,
-         Drop_Reason                    label="Drop_Reason" ,
-         Count format=comma12.          label="Count" ,
-         today() as Run_Date format=date9. label="Run date"
-  from _adb_drops_long
-  where Count > 0
-  order by Campaign, Product_Code, Count desc;
-quit;
-
-/* SPLIT OV_CAMPAIGN INTO FUNNEL + TARGET
-   Two lean tables matching the trimmed existing STI_PBI schemas.*/
-proc sql;
-  create table OV_FUNNEL as
-  select c.Campaign            length=8  label="Campaign" ,
-         c.Campaign_Name       length=100 label="Campaign name" ,
-         c.Channel             length=30  label="Channel" ,
-         coalesce(p.Product_Codes,'') as Product_Codes
-                               length=500 label="Product codes" ,
-         c.Passed_Optimise     format=comma12. label="Passed Optimise" ,
-         c.Pushed_to_Adobe     format=comma12. label="Pushed to Adobe" ,
-         c.Sent                format=comma12. label="Sent" ,
-         c.Opened              format=comma12. label="Opened" ,
-         c.Run_Date            format=date9.   label="Run date"
-  from OV_CAMPAIGN c
-  left join (
-      select Campaign_Code as Campaign length=8,
-             catx(', ', Product_Code) as Product_Codes length=500
-      from (select distinct Campaign_Code,
-                   upcase(strip(Product_Code)) as Product_Code
-            from _optimise_rows
-            where strip(Product_Code) ne '')
-      group by Campaign_Code
-  ) p on c.Campaign = p.Campaign;
-quit;
-
-/* Safety: guarantee one row per Campaign for the Power BI hub.  */
-proc sql noprint;
-  select count(*) into :dupe_n trimmed
-  from (select Campaign from OV_FUNNEL group by Campaign having count(*) > 1);
-quit;
-%macro dedupe_funnel;
-  %if &dupe_n > 0 %then %do;
-    %put WARNING: OV_FUNNEL had &dupe_n duplicated Campaign code(s) - collapsing to one row each.;
-    proc sort data=OV_FUNNEL; by Campaign descending Sent; run;
-    proc sort data=OV_FUNNEL nodupkey; by Campaign; run;
-  %end;
-%mend;
-%dedupe_funnel;
-
-/* PRODUCT-GRAIN FUNNEL  (OV_FUNNEL_PRODUCT)*/
-
-/* optimise side, per product code (mirrors the campaign-level _ov_optimise
-   build from _optimise_allruns, but grouped by Campaign_Code + Product_Code) */
-proc sql;
-  create table _ov_optimise_prod as
-  select
-      Campaign_Code,
-      Product_Code,
-      sum(Records_Processed)  as Imported,
-      sum(Records_Passed)     as Passed_Optimise,
-      sum(Records_Passed
-          - (AdobeExport_Excluded_Segments + AdobeExport_Invalid_ID
-           + AdobeExport_Uncontactable + AdobeExport_Duplicate_Recipient
-           + AdobeExport_IDLength + AdobeExport_Deceased))
-                              as Pushed_to_Adobe
-  from _optimise_allruns
-  group by Campaign_Code, Product_Code;
-quit;
-
-/* sends side, per product code (same flags as _ov_sends, grouped by
-   Campaign_Code + product_code so Sent/Opened split by code too) */
-proc sql;
-  create table _ov_sends_prod as
-  select
-      Campaign_Code,
-      product_code,
-      sum(client_flag)   as Sent_to_Client,
-      sum(provider_flag) as Sent_to_Provider,
-      sum(sent_flag)     as Sent,
-      sum(opened_flag)   as Opened
-  from _sends
-  group by Campaign_Code, product_code;
-quit;
-
-
-proc sql;
-  create table _ov_optimise_prod as
-  select
-      o.Campaign_Code,
-      o.Product_Code,
-      o.Imported,
-      o.Passed_Optimise,
-      o.Pushed_to_Adobe as Pushed_to_Adobe_Raw,
-      case when o.Pushed_to_Adobe < coalesce(s.Sent,0)
-           then coalesce(s.Sent,0) + 105
-           else o.Pushed_to_Adobe
-      end as Pushed_to_Adobe
-  from _ov_optimise_prod o
-  left join _ov_sends_prod s
-      on o.Campaign_Code = s.Campaign_Code
-     and o.Product_Code  = s.product_code;
-quit;
-
-/* final product-grain funnel table. Campaign_Name + Channel carried for
-   labels/slicing (campaign-level maps, same as OV_FUNNEL). */
-proc sql;
-  create table OV_FUNNEL_PRODUCT as
-  select
-      o.Campaign_Code                              as Campaign length=8
-                                                   label="Campaign" ,
-      coalesce(nm.Campaign_Name, o.Campaign_Code)  as Campaign_Name length=100
-                                                   label="Campaign name" ,
-      upcase(strip(o.Product_Code))                as Product_Code length=50
-                                                   label="Product code" ,
-      coalesce(ch.Channel, 'Non-Banker')              as Channel length=30
-                                                   label="Channel" ,
-      o.Passed_Optimise                            format=comma12.
-                                                   label="Passed Optimise" ,
-      o.Pushed_to_Adobe                            format=comma12.
-                                                   label="Pushed to Adobe" ,
-      coalesce(s.Sent,0)                           as Sent format=comma12.
-                                                   label="Sent" ,
-      coalesce(s.Opened,0)                         as Opened format=comma12.
-                                                   label="Opened" ,
-      case when coalesce(s.Sent,0) > 0
-           then round(coalesce(s.Opened,0)/s.Sent*100,1) else . end
-                                                   as Open_Rate format=8.1
-                                                   label="Open rate pct" ,
-      today()                                      as Run_Date format=date9.
-                                                   label="Run date"
-  from _ov_optimise_prod o
-  left join _ov_sends_prod s
-      on o.Campaign_Code = s.Campaign_Code and o.Product_Code = s.product_code
-  left join _camp_name nm on o.Campaign_Code = nm.Campaign
-  left join _camp_chan ch on o.Campaign_Code = ch.Campaign
-  order by o.Campaign_Code, o.Product_Code;
-quit;
-
-proc sql;
-  create table OV_TARGET as
-  select Campaign            length=8  label="Campaign" ,
-         Campaign_Name       length=100 label="Campaign name" ,
-         Target              format=comma12. label="Target" ,
-         Sent                format=comma12. label="Sent" ,
-         Pct_of_Target       format=8.1      label="Pct of target" ,
-         Target_RAG          length=20       label="Target status" ,
-         Run_Date            format=date9.   label="Run date"
-  from OV_CAMPAIGN;
-quit;
-
-/* OUTPUT  (preview) */
-title "Funnel";        proc print data=OV_FUNNEL noobs label; run;
-title "Funnel by product (head)"; proc print data=OV_FUNNEL_PRODUCT(obs=20) noobs label; run;
-title "Target";        proc print data=OV_TARGET noobs label; run;
-title "Send report";   proc print data=OV_SEND_REPORT noobs label; run;
-title "Segment split"; proc print data=OV_SEGMENT noobs label; run;
-title "Optimise drops (head)"; proc print data=OV_FAILED_BREAKDOWN(obs=20) noobs label; run;
-title "Adobe drops (head)";    proc print data=OV_ADOBE_DROPS(obs=20) noobs label; run;
-title;
-
-/* Per-campaign change detection*/
-%macro ensure_camp_state;
-    %if %sysfunc(exist(STI_PBI.APN_OV_CAMP_STATE)) = 0 %then %do;
-        proc sql;
-            create table STI_PBI.APN_OV_CAMP_STATE
-                ( Campaign char(8), Checksum float, Run_Date date );
-        quit;
-    %end;
-%mend;
-%ensure_camp_state;
-
-/* Load APN_OV_* to STI_PBI: drop, create with explicit types, then insert
-   (controls the SQL Server column types). */
-%macro LoadTable(Table=, Target=, Cols=, SelectList=, AllowEmpty=N);
-    %if %sysfunc(exist(&Table.)) = 0 %then %do;
-        %put ERROR: Work table &Table. does not exist.; %abort cancel;
-    %end;
-    proc sql noprint; select count(*) into :row_count trimmed from &Table.; quit;
-    %if &row_count = 0 and %upcase(&AllowEmpty) ne Y %then %do;
-        %put ERROR: &Table. has ZERO rows. Load of &Target. ABORTED.; %abort cancel;
-    %end;
-
-    /* drop existing target if present */
-    %if %sysfunc(exist(STI_PBI.&Target.)) %then %do;
-        proc sql; drop table STI_PBI.&Target.; quit;
-    %end;
-    %if %sysfunc(exist(STI_PBI.&Target.)) %then %do;
-        %put ERROR: STI_PBI.&Target. could not be dropped. Load ABORTED.; %abort cancel;
-    %end;
-
-    /* create with explicit SQL Server column types */
-    proc sql;
-        create table STI_PBI.&Target. ( &Cols. );
-    quit;
-
-    /* insert the rows */
-    proc sql;
-        insert into STI_PBI.&Target.
-        select &SelectList. from &Table.;
-    quit;
-
-    /* honest success check */
-    proc sql noprint;
-        select count(*) into :ins_rows trimmed from STI_PBI.&Target.;
-    quit;
-    %if &sqlrc = 0 and &ins_rows > 0 %then
-        %put NOTE: STI_PBI.&Target. loaded (&ins_rows rows).;
-    %else %if &row_count = 0 and %upcase(&AllowEmpty) = Y %then
-        %put NOTE: STI_PBI.&Target. created empty (AllowEmpty=Y).;
-    %else %do;
-        %put ERROR: STI_PBI.&Target. LOAD FAILED (sqlrc=&sqlrc ins_rows=&ins_rows).; %abort cancel;
-    %end;
-%mend;
-
-%LoadTable(
-  Table=OV_FUNNEL, Target=APN_OV_FUNNEL,
-  Cols=%str(Campaign char(8), Campaign_Name char(100), Channel char(30),
-            Product_Codes char(500), Passed_Optimise float, Pushed_to_Adobe float,
-            Sent float, Opened float, Run_Date date),
-  SelectList=%str(Campaign, Campaign_Name, Channel, Product_Codes, Passed_Optimise,
-                  Pushed_to_Adobe, Sent, Opened, Run_Date)
-)
-
-%LoadTable(
-  Table=OV_FUNNEL_PRODUCT, Target=APN_OV_FUNNEL_PRODUCT,
-  Cols=%str(Campaign char(8), Campaign_Name char(100), Product_Code char(50), Channel char(30),
-            Passed_Optimise float, Pushed_to_Adobe float, Sent float, Opened float,
-            Open_Rate float, Run_Date date),
-  SelectList=%str(Campaign, Campaign_Name, Product_Code, Channel, Passed_Optimise,
-                  Pushed_to_Adobe, Sent, Opened, Open_Rate, Run_Date)
-)
-
-%LoadTable(
-  Table=OV_TARGET, Target=APN_OV_TARGET,
-  Cols=%str(Campaign char(8), Campaign_Name char(100), Target float, Sent float,
-            Pct_of_Target float, Target_RAG char(20), Run_Date date),
-  SelectList=%str(Campaign, Campaign_Name, Target, Sent, Pct_of_Target, Target_RAG, Run_Date)
-)
-
-%LoadTable(
-  Table=OV_SEND_REPORT, Target=APN_OV_SEND_REPORT,
-  Cols=%str(Campaign char(8), Campaign_Name char(100), Loaded_to_Adobe float, Sent_to_Client float,
-            Sent_to_Provider float, Total_Dispatched float, Opened float, Run_Date date),
-  SelectList=%str(Campaign, Campaign_Name, Loaded_to_Adobe, Sent_to_Client, Sent_to_Provider,
-                  Total_Dispatched, Opened, Run_Date)
-)
-
-%LoadTable(
-  Table=OV_SEND_MONTHLY, Target=APN_OV_SEND_MONTHLY,
-  Cols=%str(Campaign char(8), Campaign_Name char(100), Channel char(20), Month_Start date, Sent float,
-            Sent_to_Client float, Sent_to_Provider float, Opened float, Run_Date date),
-  SelectList=%str(Campaign, Campaign_Name, Channel, Month_Start, Sent, Sent_to_Client,
-                  Sent_to_Provider, Opened, Run_Date)
-)
-
-%LoadTable(
-  Table=OV_SEGMENT, Target=APN_OV_SEGMENT,
-  Cols=%str(Campaign char(8), Campaign_Name char(100), Channel char(30), Segment char(7),
-            Sent float, Opened float, Run_Date date),
-  SelectList=%str(Campaign, Campaign_Name, Channel, Segment, Sent, Opened, Run_Date)
-)
-
-%LoadTable(
-  Table=OV_OPTOUTS, Target=APN_OV_OPTOUTS, AllowEmpty=Y,
-  Cols=%str(Campaign char(8), Campaign_Name char(100), Month_Start date, Optouts float, Run_Date date),
-  SelectList=%str(Campaign, Campaign_Name, Month_Start, Optouts, Run_Date)
-)
-
-%LoadTable(
-  Table=OV_FAILED_BREAKDOWN, Target=APN_OV_FAILED_BREAKDOWN,
-  Cols=%str(Campaign char(8), Campaign_Name char(100), Product_Code char(50),
-            Drop_Reason char(40), Count float, Run_Date date),
-  SelectList=%str(Campaign, Campaign_Name, Product_Code, Drop_Reason, Count, Run_Date)
-)
-
-%LoadTable(
-  Table=OV_ADOBE_DROPS, Target=APN_OV_ADOBE_DROPS, AllowEmpty=Y,
-  Cols=%str(Campaign char(8), Campaign_Name char(100), Product_Code char(50),
-            Drop_Reason char(40), Count float, Run_Date date),
-  SelectList=%str(Campaign, Campaign_Name, Product_Code, Drop_Reason, Count, Run_Date)
-)
-
-/* ---- per-campaign change detection (funnel numbers) ----
-   checksum each campaign's Passed/Pushed/Sent/Opened, compare to the
-   stored value from last run, flag changed campaigns, then persist. */
-proc sql noprint;
-  create table _camp_now as
-  select Campaign,
-         input(substr(md5(catx('|', Campaign,
-                    put(Passed_Optimise,best16.), put(Pushed_to_Adobe,best16.),
-                    put(Sent,best16.),            put(Opened,best16.))),1,8), pib8.)
-                                                  as Checksum
-  from OV_FUNNEL;
-quit;
-
-proc sql noprint;
-  create table _camp_cmp as
-  select n.Campaign,
-         n.Checksum                          as new_chk,
-         p.Checksum                          as old_chk
-  from _camp_now n
-  left join STI_PBI.APN_OV_CAMP_STATE p on n.Campaign = p.Campaign;
-quit;
-
-data _camp_cmp;
-  set _camp_cmp;
-  length Updated $8;
-  if missing(old_chk)        then Updated = '';        /* new campaign: no tag */
-  else if new_chk ne old_chk then Updated = 'Updated';
-  else                            Updated = '';
-run;
-
-/* persist this run's checksums (full replace of the state table) */
-proc sql;
-  delete from STI_PBI.APN_OV_CAMP_STATE;
-  insert into STI_PBI.APN_OV_CAMP_STATE (Campaign, Checksum, Run_Date)
-  select Campaign, Checksum, %sysfunc(today()) from _camp_now;
-quit;
-
-/* Email: success summary from OV_FUNNEL + OV_TARGET, or a no-data warning. */
-
-/* overall totals across all campaigns */
-proc sql noprint;
-    select put(sum(Passed_Optimise), comma12.) into :tot_passed   trimmed from OV_FUNNEL;
-    select put(sum(Pushed_to_Adobe), comma12.) into :tot_pushed   trimmed from OV_FUNNEL;
-    select put(sum(Sent),            comma12.) into :tot_sent      trimmed from OV_FUNNEL;
-    select put(sum(Opened),          comma12.) into :tot_opened    trimmed from OV_FUNNEL;
-    select count(*)                            into :n_campaigns   trimmed from OV_FUNNEL;
-    select count(*)                            into :n_met         trimmed from OV_TARGET where Target_RAG = "Target met";
-quit;
-
-/* per-campaign lines for the email body. Channel pulled from OV_FUNNEL (it
-   carries the per-campaign channel), aligned to the same Campaign order. */
-proc sql noprint;
-    select Campaign,
-           case when upcase(Channel) in ('APP PUSH NOTIFICATION','APP PUSH','PUSH')
-                then 'APN' else Channel end,
-           put(Passed_Optimise, comma12.),
-           put(Pushed_to_Adobe, comma12.),
-           put(Sent,            comma12.),
-           put(Opened,          comma12.)
-    into :ec_name_1    - :ec_name_99,
-         :ec_chan_1    - :ec_chan_99,
-         :ec_passed_1  - :ec_passed_99,
-         :ec_pushed_1  - :ec_pushed_99,
-         :ec_sent_1    - :ec_sent_99,
-         :ec_opened_1  - :ec_opened_99
-    from OV_FUNNEL
-    order by Campaign;
-
-    select Campaign,
-           put(Target,        comma12.),
-           put(Pct_of_Target, 8.1),
-           Target_RAG
-    into :et_name_1 - :et_name_99,
-         :et_tgt_1  - :et_tgt_99,
-         :et_pct_1  - :et_pct_99,
-         :et_rag_1  - :et_rag_99
-    from OV_TARGET
-    order by Campaign;
-quit;
-
-/* campaign-name lookup (one display name per code) + segment counts/%s,
-   ordered by Campaign so these arrays line up with ec_* above */
-proc sql noprint;
-    create table _email_name as
-    select Campaign_Code as Campaign length=8,
-           max(Campaign_Name) as Campaign_Name length=100
-    from _optimise_rows
-    group by Campaign_Code;
-quit;
-
-proc sql noprint;
-    select coalesce(n.Campaign_Name, v.Campaign)
-    into :ec_dispname_1 - :ec_dispname_99
-    from OV_FUNNEL v left join _email_name n on v.Campaign = n.Campaign
-    order by v.Campaign;
-quit;
-
-/* pre-compute segment counts + percentages in a forgiving data step,
-   aligned to OV_FUNNEL's campaign order, then pull plain strings */
-proc sql noprint;
-  create table _email_seg as
-  select v.Campaign,
-         coalesce(g.Sent,0)         as Sent,
-         coalesce(g.Sent_NTB,0)     as Sent_NTB,
-         coalesce(g.Sent_ETB,0)     as Sent_ETB,
-         coalesce(g.Sent_Unknown,0) as Sent_Unknown
-  from OV_FUNNEL v
-  left join _ov_sends g on v.Campaign = g.Campaign_Code
-  order by v.Campaign;
-quit;
-
-/* bring Target_RAG in so we can derive the campaign-type label here
-   (Monitored vs Finite), avoiding any %if logic inside the email data step */
-proc sql noprint;
-  create table _email_seg as
-  select s.*, coalesce(t.Target_RAG,'') as Target_RAG length=20
-  from _email_seg s
-  left join OV_TARGET t on s.Campaign = t.Campaign
-  order by s.Campaign;
-quit;
-
-data _email_seg;
-  set _email_seg;
-  length ntb_c etb_c unk_c $14  ntb_p etb_p unk_p $7;
-  ntb_c = strip(put(Sent_NTB,     comma12.));
-  etb_c = strip(put(Sent_ETB,     comma12.));
-  unk_c = strip(put(Sent_Unknown, comma12.));
-  if Sent > 0 then do;
-     ntb_p = strip(put(round(Sent_NTB    /Sent*100,0.1), 5.1));
-     etb_p = strip(put(round(Sent_ETB    /Sent*100,0.1), 5.1));
-     unk_p = strip(put(round(Sent_Unknown/Sent*100,0.1), 5.1));
-     /* integer cell widths for the HTML mini-bar; Unknown is the remainder
-        so the three always sum to exactly 100 (no rounding gap in the bar) */
-     ntb_w = round(Sent_NTB/Sent*100);
-     etb_w = round(Sent_ETB/Sent*100);
-     unk_w = 100 - ntb_w - etb_w;
-     if unk_w < 0 then unk_w = 0;
-  end;
-  else do; ntb_p='0.0'; etb_p='0.0'; unk_p='0.0'; ntb_w=0; etb_w=0; unk_w=0; end;
-
-  /* campaign-type label, computed here (not in the email step) */
-  length ctype $10;
-  if strip(Target_RAG) = 'Monitoring' then ctype = 'Monitored';
-  else ctype = 'Finite';
-
-  length ntb_ws etb_ws unk_ws $3;
-  ntb_ws = strip(put(ntb_w, 3.));
-  etb_ws = strip(put(etb_w, 3.));
-  unk_ws = strip(put(unk_w, 3.));
-run;
-
-proc sql noprint;
-  select ntb_c, etb_c, unk_c, ntb_p, etb_p, unk_p,
-         ctype, ntb_ws, etb_ws, unk_ws
-  into :ec_ntb_1    - :ec_ntb_99,
-       :ec_etb_1    - :ec_etb_99,
-       :ec_unk_1    - :ec_unk_99,
-       :ec_ntbp_1   - :ec_ntbp_99,
-       :ec_etbp_1   - :ec_etbp_99,
-       :ec_unkp_1   - :ec_unkp_99,
-       :ec_ctype_1  - :ec_ctype_99,
-       :ec_ntbw_1   - :ec_ntbw_99,
-       :ec_etbw_1   - :ec_etbw_99,
-       :ec_unkw_1   - :ec_unkw_99
-  from _email_seg
-  order by Campaign;
-quit;
-
-/* per-campaign Updated flag (blank or 'Updated'), aligned to OV_FUNNEL order */
-proc sql noprint;
-  select coalesce(c.Updated,'')
-  into :ec_upd_1 - :ec_upd_99
-  from OV_FUNNEL v
-  left join _camp_cmp c on v.Campaign = c.Campaign
-  order by v.Campaign;
-quit;
-
-%macro send_email;
-    %if &n_campaigns = 0 %then %do;
-        filename eml email
-            to           = "Morris.Nkomo@fnb.co.za"
-            cc = ("dlfnbstioperationalanalytics@fnb.co.za"
-      "Joel.Mtsweni@fnb.co.za")
-            from         = "dlfnbstioperationalanalytics@fnb.co.za"
-            subject      = "APN Overview - No Data"
-            content_type = "text/html";
-        data _null_;
-            file eml;
-            put '<html><body style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#2b2b2b;">';
-            put 'Hi,<br><br>The APN overview job ran but produced no campaign rows. ';
-            put 'Please check the log &#8212; the source views may have been locked.';
-            put '<br><br>Kind Regards<br>Morris';
-            put '</body></html>';
-        run;
-    %end;
-    %else %do;
-        filename eml email
-            to           = "Morris.Nkomo@fnb.co.za"
-            cc = ("dlfnbstioperationalanalytics@fnb.co.za"
-      "Joel.Mtsweni@fnb.co.za" "Webster.Khoza@fnb.co.za")
-            from         = "Morris.Nkomo@fnb.co.za"
-            subject      = "Campaign overview - Dashboard Updated"
-            content_type = "text/html";
-        data _null_;
-            file eml;
-
-            put '<html><body style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#2b2b2b;">';
-            put 'Hi,<br><br>The APN Campaign job ran successfully and the dashboard tables have been refreshed.<br>';
-            put "Lookback: last &lookback_days. days (from &cutoff_date.).<br><br>";
-
-            /* ---- overall funnel table ---- */
-            put '<table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:22px;">';
-            put '<tr><td colspan="2" style="background:#54B9AC;color:#ffffff;font-weight:600;padding:7px 12px;">Overall funnel</td></tr>';
-            put "<tr><td style=""border:1px solid #cfe0de;padding:6px 12px;"">Passed Optimise</td><td style=""border:1px solid #cfe0de;padding:6px 12px;text-align:right;font-weight:600;"">&tot_passed</td></tr>";
-            put "<tr><td style=""background:#e8f4f2;border:1px solid #cfe0de;padding:6px 12px;"">Pushed to Adobe</td><td style=""background:#e8f4f2;border:1px solid #cfe0de;padding:6px 12px;text-align:right;font-weight:600;"">&tot_pushed</td></tr>";
-            put "<tr><td style=""border:1px solid #cfe0de;padding:6px 12px;"">Sent</td><td style=""border:1px solid #cfe0de;padding:6px 12px;text-align:right;font-weight:600;"">&tot_sent</td></tr>";
-            put "<tr><td style=""background:#e8f4f2;border:1px solid #cfe0de;padding:6px 12px;"">Opened</td><td style=""background:#e8f4f2;border:1px solid #cfe0de;padding:6px 12px;text-align:right;font-weight:600;"">&tot_opened</td></tr>";
-            put '</table>';
-
-            /* ---- one table per campaign ---- */
-            %do i = 1 %to &n_campaigns;
-                put '<table cellpadding="0" cellspacing="0" border="0" width="560" style="border-collapse:collapse;margin-bottom:20px;">';
-
-                put '<tr><td colspan="2" style="background:#54B9AC;color:#ffffff;padding:7px 12px;">';
-                put "<strong>&&ec_dispname_&i</strong> (&&ec_name_&i) &#183; &&ec_chan_&i</td>";
-                put '<td colspan="2" style="background:#54B9AC;color:#ffffff;padding:7px 12px;text-align:right;font-weight:600;">';
-                put "&&ec_ctype_&i" @;
-                %if %superq(ec_upd_&i) = Updated %then %do;
-                    put ' <span style="font-weight:400;color:#d6f7f0;">(Updated)</span>' @;
-                %end;
-                put '</td></tr>';
-
-                /* metrics: labels plain, the four value cells shaded */
-                put '<tr><td style="border:1px solid #cfe0de;padding:6px 12px;">Passed Optimise</td>';
-                put "<td style=""background:#e8f4f2;border:1px solid #cfe0de;padding:6px 12px;text-align:right;font-weight:600;"">&&ec_passed_&i</td>";
-                put '<td style="border:1px solid #cfe0de;padding:6px 12px;">Sent</td>';
-                put "<td style=""background:#e8f4f2;border:1px solid #cfe0de;padding:6px 12px;text-align:right;font-weight:600;"">&&ec_sent_&i</td></tr>";
-
-                put '<tr><td style="border:1px solid #cfe0de;padding:6px 12px;">Pushed to Adobe</td>';
-                put "<td style=""background:#e8f4f2;border:1px solid #cfe0de;padding:6px 12px;text-align:right;font-weight:600;"">&&ec_pushed_&i</td>";
-                put '<td style="border:1px solid #cfe0de;padding:6px 12px;">Opened</td>';
-                put "<td style=""background:#e8f4f2;border:1px solid #cfe0de;padding:6px 12px;text-align:right;font-weight:600;"">&&ec_opened_&i</td></tr>";
-
-                /* tenure split: NTB / ETB / Unknown with counts, %, and a coloured bar */
-                put '<tr><td colspan="4" style="border:1px solid #cfe0de;padding:8px 12px;">';
-                put '<div style="font-size:12px;color:#5a6b6a;margin-bottom:5px;">Tenure mix (share of Sent)</div>';
-
-                /* the coloured bar (full width) */
-                put '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;"><tr>';
-                /* macro-var width in dq, then the &nbsp; literal in sq
-                   (single quotes stop SAS reading &nbsp; as a macro reference) */
-                put "<td bgcolor=""#7bc47f"" width=""&&ec_ntbw_&i.%"" style=""height:12px;line-height:12px;font-size:1px;"">" @;
-                put '&nbsp;</td>' @;
-                put "<td bgcolor=""#0d7a72"" width=""&&ec_etbw_&i.%"" style=""height:12px;line-height:12px;font-size:1px;"">" @;
-                put '&nbsp;</td>' @;
-                put "<td bgcolor=""#e8923a"" width=""&&ec_unkw_&i.%"" style=""height:12px;line-height:12px;font-size:1px;"">" @;
-                put '&nbsp;</td>';
-                put '</tr></table>';
-
-                /* single-line legend: NTB n (x%) . ETB n (x%) . Unknown n (x%) */
-                put '<div style="font-size:12px;color:#5a6b6a;margin-top:6px;">';
-                put '<span style="display:inline-block;width:9px;height:9px;background:#7bc47f;"></span> ' @;
-                put "<strong>NTB</strong> &&ec_ntb_&i (&&ec_ntbp_&i.%)  &#183;  " @;
-                put '<span style="display:inline-block;width:9px;height:9px;background:#0d7a72;"></span> ' @;
-                put "<strong>ETB</strong> &&ec_etb_&i (&&ec_etbp_&i.%)  &#183;  " @;
-                put '<span style="display:inline-block;width:9px;height:9px;background:#e8923a;"></span> ' @;
-                put "<strong>Non-Banker</strong> &&ec_unk_&i (&&ec_unkp_&i.%)";
-                put '</div>';
-
-                put '</td></tr>';
-
-                put '</table>';
-            %end;
-
-            put 'The APN dashboard can be refreshed.<br><br>Kind Regards<br>Morris';
-            put '</body></html>';
-        run;
-    %end;
-%mend send_email;
-%send_email;
-
+    filename myemail email;
+%MEND;
+%email_agents;
+
+
+/*--- 3b. TL EMAIL - TL coaching pack attached ---*/
+%MACRO email_tl;
+    filename myemail email
+        from         = "Morris.Nkomo@fnb.co.za"
+        to           = "Morris.Nkomo@fnb.co.za"
+        subject      = "TEST - TL Coaching Pack - %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.))"
+        attach       = "&OUT_PATH/TL_Coaching_Pack_&RPT_LABEL..xlsx"
+        content_type = "text/html";
+
+    data _null_;
+        file myemail;
+        put '<html><body style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#2b2b2b;">';
+        put "Hi Morris,<br><br>";
+        put "TEST RUN &#8212; TL coaching pack for %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.)).<br><br>";
+
+        put '<table cellpadding="0" cellspacing="0" border="0" width="480" style="border-collapse:collapse;margin-bottom:10px;">';
+        put '<tr><td colspan="2" style="background:#2C3E50;color:#ffffff;font-weight:600;padding:7px 12px;">TL coaching run-down</td></tr>';
+        put "<tr><td style=""border:1px solid #d3d9de;padding:6px 12px;"">Team average score</td><td style=""border:1px solid #d3d9de;padding:6px 12px;text-align:right;font-weight:600;"">&team_avg_score</td></tr>";
+        put "<tr><td style=""background:#EAEDF0;border:1px solid #d3d9de;padding:6px 12px;"">Top 3 this month</td><td style=""background:#EAEDF0;border:1px solid #d3d9de;padding:6px 12px;text-align:right;font-weight:600;"">&top3_agents</td></tr>";
+        put "<tr><td style=""border:1px solid #d3d9de;padding:6px 12px;"">Needing coaching attention</td><td style=""border:1px solid #d3d9de;padding:6px 12px;text-align:right;font-weight:600;"">&bottom3_agents</td></tr>";
+        put "<tr><td style=""background:#EAEDF0;border:1px solid #d3d9de;padding:6px 12px;"">Weakest component (team-wide)</td><td style=""background:#EAEDF0;border:1px solid #d3d9de;padding:6px 12px;text-align:right;font-weight:600;"">&weakest_component</td></tr>";
+        put "<tr><td style=""border:1px solid #d3d9de;padding:6px 12px;"">Total team payout</td><td style=""border:1px solid #d3d9de;padding:6px 12px;text-align:right;font-weight:600;"">&team_total_earn</td></tr>";
+        put '</table>';
+
+        put "Full roster, component health and coaching priority sheets are in the attached pack.<br><br>";
+        put "Kind Regards<br>Morris";
+        put '</body></html>';
+    run;
+
+    filename myemail email;
+%MEND;
+%email_tl;
+
+
+/*--- 3c. MANAGER EMAIL - manager overview pack attached ---*/
+%MACRO email_manager;
+    filename myemail email
+        from         = "Morris.Nkomo@fnb.co.za"
+        to           = "Morris.Nkomo@fnb.co.za"
+        subject      = "TEST - Manager Overview Pack - %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.))"
+        attach       = "&OUT_PATH/Manager_Overview_Pack_&RPT_LABEL..xlsx"
+        content_type = "text/html";
+
+    data _null_;
+        file myemail;
+        put '<html><body style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#2b2b2b;">';
+        put "Hi Morris,<br><br>";
+        put "TEST RUN &#8212; manager overview pack for %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.)).<br><br>";
+
+        put '<table cellpadding="0" cellspacing="0" border="0" width="480" style="border-collapse:collapse;margin-bottom:10px;">';
+        put '<tr><td colspan="2" style="background:#1A2E4A;color:#ffffff;font-weight:600;padding:7px 12px;">Manager overview run-down</td></tr>';
+        put "<tr><td style=""border:1px solid #d3d9e2;padding:6px 12px;"">Total book payout</td><td style=""border:1px solid #d3d9e2;padding:6px 12px;text-align:right;font-weight:600;"">&book_total_earn</td></tr>";
+        put "<tr><td style=""background:#E9ECF2;border:1px solid #d3d9e2;padding:6px 12px;"">Top-earning desk</td><td style=""background:#E9ECF2;border:1px solid #d3d9e2;padding:6px 12px;text-align:right;font-weight:600;"">&top_desk_name (&top_desk_earn)</td></tr>";
+        put "<tr><td style=""border:1px solid #d3d9e2;padding:6px 12px;"">Rating split (people)</td><td style=""border:1px solid #d3d9e2;padding:6px 12px;text-align:right;font-weight:600;"">&rating_breakdown</td></tr>";
+        put "<tr><td style=""background:#E9ECF2;border:1px solid #d3d9e2;padding:6px 12px;"">Average score vs last month</td><td style=""background:#E9ECF2;border:1px solid #d3d9e2;padding:6px 12px;text-align:right;font-weight:600;"">Trending &trend_word</td></tr>";
+        put '</table>';
+
+        put "Team-of-teams, payout-by-desk, payout-by-rating and the 4-month roll-up are all in the attached pack.<br><br>";
+        put "Kind Regards<br>Morris";
+        put '</body></html>';
+    run;
+
+    filename myemail email;
+%MEND;
+%email_manager;
+
+/*=====================================================================
+  END OF EMAIL DISTRIBUTION - TESTING PHASE
+=====================================================================*/
