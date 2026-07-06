@@ -1,83 +1,299 @@
+%put TAG:JobName1=STI_CA_W_COMP_ITEMS_EMAILS; /* 1st Level of the Job Name --> Max 64 Chars */
+%put TAG:JobName2=Daily; /* Optional Second Level of the Job Name (used for sub dividing Jobs if needed) --> Max 64 Chars */
+%put TAG:JobCategory=Campaigns; /* ETL, Reporting, Model, Leads, Campaigns --> Max 16 Chars */
+%put TAG:JobPurpose= Operational; 
+%put TAG:JobPriority=Medium; /* Low, Medium, High, Critical --> Max 8 Chars */
+%put TAG:JobStatus=Prod; /* AdHoc, Lab, Dev, QA, Prod --> Max 8 Chars */
 
 
-%put TAG:JobName1=STI_CA_D_APNS_DATA_REBUILD;
-%put TAG:JobName2=Daily;
-%put TAG:JobCategory=Campaigns;
-%put TAG:JobPurpose=Operational;
-%put TAG:JobPriority=Medium;
-%put TAG:JobStatus=Prod;
 
-options mprint mlogic symbolgen source notes;
+/*set the required information*/
+%include "/data/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Servicing_Flow_Creds.sas";
+/*libname workflow odbc user=&Us_FNBHA datasrc="FNBHA" pass=&Pwd_FNBHA schema=WORKFLOW connection=unique;*/
+/**/
+/*proc import */
+/*datafile="/data/fnbinsurance/Corporate_Actuarial/Short_Term/Servicing/Servicing.xlsx"*/
+/*/*datafile="/data/fnbinsurance/Collections/Ops/Excel/LOC_Claims_MINT_22APR2021.xlsx"*/*/
+/*dbms=xlsx replace*/
+/*out=Servicing;*/
+/*quit;*/
+/**/
+/*proc sql;*/
+/*select quote(employeenumber) */
+/*into*/
+/*:agents seperated by ","*/
+/*from Servicing*/
+/*where active = 1*/
+/*;*/
+/**/
+/**/
+/*%let agents = */
+/**/
+/*(*/
+/*'F2988763',*/
+/*'F3446921',*/
+/*'F4650085',*/
+/*'F4841239',*/
+/*'F4903773',*/
+/*'F4961935',*/
+/*'F5107695',*/
+/*'F5192145',*/
+/*'F5216893',*/
+/*'F5282004',*/
+/*'F5324823',*/
+/*'F5330246',*/
+/*'F5369665',*/
+/*'F5485428',*/
+/*'F5493552',*/
+/*'F5493919',*/
+/*'F5502764',*/
+/*'F5518598',*/
+/*'F5530563',*/
+/*'F5554020',*/
+/*'F7527373',*/
+/*'F8872892',*/
+/*'F8872449',*/
+/*'F5584817',*/
+/*'F5663393',*/
+/*'F5663547',*/
+/*'F5073502',*/
+/*'F8877187',*/
+/*'F8877177'*/
+/*);*/
+/*%PUT &AGENTS;*/;
+
+/* ---------------------------------------------------------------------------
+   @AL adding new agent list 
+--------------------------------------------------------------------------- */
 
 %include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
 
+/*** Build &agents from new source table ***/
+Data Servicing;
+Set  STI_PBI.STI_Servicing_Agents;
+Run;
 
-%let adobe_load_window        = 30;   /* Days after Optimise batch to look for Adobe load  */
-%let dropped_loaded_threshold = 0;    /* Abort if dropped records reach Adobe (0 = strict) */
+proc sql noprint;
+    select distinct
+           cats("'", strip(EmployeeNumber), "'")
+    into :agents_list separated by ','
+    from STI_PBI.STI_Servicing_Agents
+    ;
+quit;
+
+/* Wrap in parentheses for IN() usage */
+%let agents = (&agents_list);
+%put NOTE: &=agents;
+
+;
+;/******/
+
+/* ---------------------------------------------------------------------------*/
 
 
-%macro logging(libname,database,schema);
-LIBNAME &libname odbc noprompt="Driver=MSSQL;AnsiNPW=1;
-AuthenticationMethod=10;ApplicationUsingThreads=1;
-BulkLoadOptions=2;Database=&database;
-FetchTWFSasTime=1;HostName=LFE-RBPREATLDB1;
-PortNumber=1433;UID=&User.;PWD=&FNB_Login." 
-Schema=&schema;
-%MEND; 
-%logging(STI_META,FNB_STI_Analytics_Ops,METADATA);
-
-/* SECTION 1: READ CAMPAIGN CONFIG FROM EXCEL */
+%include "/data/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Servicing_Flow_Creds.sas";
 
 
-proc import
-    datafile = "\\INS-RBFS01\Share\FNB_Insure\Campaign Profiles\APN_Campaign_Config.xlsx"
-    out      = Campaign_Config_Raw
-    DBMS=excelcs 
-    REPLACE;
-    server= 'lfe-rbgfs01';
-    PORT=9621;
+%LET Us_FNBHA2=FNBLFELDA;
+%LET Pwd_FNBHA2='@n8lf3lda';
+
+
+/*get and combine the data from workflow*/
+
+PROC SQL ;
+     CONNECT TO ODBC as WORKFLOW_ (DATASRC="FNBHA" USER=FNBLFELDA PASS='@n8lf3lda' );
+
+
+     create table FNB400_AYH_Workflow as 
+     select * 
+     from connection to WORKFLOW_
+                ( 
+
+	select a.*,b.name as Status_Name,c.name as Queue_Name,d.name as Worktype_Name,
+     f.Created_Date as Comments_Created_Date, f.id as COMMENTS_ID,f.COMMENT,
+     f.BEGIN_DATE as Comments_Begin_Date, f.END_DATE as Comments_End_Date, 
+     g.name as Comments_Status_Name,h.name as Comments_Queue_Name,i.name as Comments_Worktype_Name
+     from workflow.Workflow_Item a
+     left join workflow.Status b on
+     a.status_id = b.id
+     left join workflow.Queue c on
+     a.queue_id = c.id
+     left join workflow.Worktype d on
+     a.worktype_id = d.id
+     left join workflow.WORKFLOW_ITEM_WORKFLOW_COMMENT e on
+     a.id = e.WORKFLOW_ITEM_ID
+     left join workflow.workflow_comment f on
+     e.COMMENTS_ID = f.id
+     left join workflow.Status g on
+     f.status_id = g.id
+     left join workflow.Queue h on
+     f.queue_id = h.id
+     left join workflow.Worktype i on
+     f.worktype_id = i.id
+/*where upper(Queue_Name) in ('SHORT TERM SERVICING','PRE-QA','END') */
+where a.ASSIGNED_TO in &Agents
+and upper(c.name) in ('LOCSERVICING','LOCPERSERVICING','LOCBUSSERVICING','SHORT TERM SERVICING','PRE-QA','END')
+
+);
+disconnect from WORKFLOW_;
+quit;
+
+
+
+proc sql;
+Create Table FNB400_AYH_Workflow2 as select
+ID,CREATED_DATE,intnx('month',datepart(CREATED_DATE),0,'E') format date9. as Month,
+ASSIGNED_TO,POLICY_NUMBER,BEGIN_DATE,END_DATE,QUEUE_ID,Queue_Name,
+WORKTYPE_ID,Worktype_Name,STATUS_ID,Status_Name,REFERENCE_NUMBER,
+Comments_Created_Date,COMMENTS_ID,COMMENT,Comments_Begin_Date,Comments_End_Date,Comments_Status_Name,
+Comments_Queue_Name,Comments_Worktype_Name
+from FNB400_AYH_Workflow;
+quit;
+
+ 
+
+proc sql;
+Create Table Workflow_Yest as select * from 
+FNB400_AYH_Workflow2
+where Status_Name = ('INDEXED');
+quit;
+
+/*proc sql;*/
+/*create table test as*/
+/*select distinct Status_Name*/
+/*from FNB400_AYH_Workflow2*/
+/*;Quit;*/
+
+%let date = date()-1;
+
+/*proc sql;*/
+/*select **/
+/*from LOC_Workflow_Yest*/
+/*where ASSIGNED_TO IN ("F2407000");*/
+/*QUIT;*/
+
+proc sql;
+Create Table OLDEST_ITEM_STEP as 
+select distinct id,intnx("month",&date,0,"end") as Month format date9.
+,ASSIGNED_TO,max(datepart(Comments_Begin_Date)) as Oldest_Item format date9.,&date-max(datepart(Comments_Begin_Date)) as No_Days format 8.,
+count(distinct ID) as number_of_items_in_queue
+from Workflow_Yest
+group by ID,ASSIGNED_TO;
+quit;
+
+proc sql;
+create table SERVICE_OLDEST_ITEM_FINAL as
+select distinct Month, ASSIGNED_TO, min(Oldest_Item) as Oldest_Item format date9., max(No_Days) as No_Days, sum(number_of_items_in_queue) as number_of_items_in_queue
+from OLDEST_ITEM_STEP
+group by ASSIGNED_TO;
+quit;
+
+
+
+/*SLA*/
+proc sql;
+create table Items as
+select distinct ID, Created_Date, Assigned_To, Policy_Number, upcase(Status_Name) as Status_Name, min(Comments_Created_Date) format datetime20. as min_Comments_Created_Date, 
+max(Comments_Created_Date) format datetime20. as max_Comments_Created_Date
+from FNB400_AYH_WORKFLOW2
+group by ID, Assigned_To, Policy_Number
+;quit;
+
+PROC sql;
+create table Items_step as
+select * 
+,CASE WHEN Status_Name in ("DONE","DUPLICATE","RETAINED","UNCONTACTABLE","NO ACTION REQUIRED") THEN "CLOSED"
+ELSE "OPEN"
+END AS Indicator
+from Items
+;quit;
+
+%let date = today();
+
+
+
+data SERVICE_ITEMS_FINAL;
+set Items_step;
+min_Created_Day_of_Week = weekday(datepart(min_comments_created_date));
+max_Created_Day_of_Week = weekday(datepart(max_comments_created_date));
+if min_Created_Day_of_Week in (2,3,4) then close_Target = min_Comments_Created_Date + 48*60*60;
+else if min_Created_Day_of_Week in (5,6) then close_Target = min_Comments_Created_Date + 96*60*60;
+else if min_Created_Day_of_Week = 7 then close_Target = dhms(datepart(min_Comments_Created_Date)+2,8,0,0) + 48*60*60;
+else if min_Created_Day_of_Week = 1 then close_Target = dhms(datepart(min_Comments_Created_Date)+1,8,0,0) + 48*60*60;
+format close_Target datetime20.;
+
+if Indicator = "CLOSED" and max_Comments_Created_Date > close_Target then SLA = 'Outside SLA';
+else if Indicator = "OPEN" and &date > datepart(close_Target) then SLA = 'Outside SLA';
+else SLA = 'In SLA';
+
+Duration = &date - datepart(close_Target);
+
+if Indicator = "CLOSED" then Assigned_Date = datepart(max_comments_created_date);
+else if Indicator = "OPEN" then Assigned_Date = &date-1;
+format Assigned_Date date10.;
+
+run;
+
+proc sql;
+
+create table Out_of_SLA_File as
+select *
+from SERVICE_ITEMS_FINAL
+where Indicator = "OPEN" 
+and SLA = "Outside SLA"
+;quit;
+
+
+/* importing active employees*/
+
+proc sql;
+create table Open_Items_Out_of_SLA as
+select  b.*,a.* 
+from Out_of_SLA_File a
+left join Servicing b
+on a.ASSIGNED_TO = b.EmployeeNumber
+where b.active = 1;
 run;
 
 
-proc sql noprint;
-    select count(*) into :config_raw_count trimmed
-    from Campaign_Config_Raw;
-quit;
 
-%if &config_raw_count = 0 %then %do;
-    %put ERROR: Fix 21 — Campaign_Config_Raw imported successfully but contains 0 rows.;
-    %put ERROR: Check that the "Config" sheet exists and has data rows below the header.;
-    %abort cancel;
-%end;
+/* Send email */
 
-%put NOTE: Fix 21 — Campaign_Config_Raw imported with &config_raw_count rows. Proceeding.;
-
-/* Fix 6: add row_num here so all downstream loops use it instead of monotonic() */
-data Campaign_Config;
-    set Campaign_Config_Raw;
-    where upcase(strip(Active)) = "Y"
-      and strip(Campaign_Code)  ne ""
-      and strip(Product_Code)   ne "";
-    Campaign_Code = upcase(strip(Campaign_Code));
-    Product_Code  = upcase(strip(Product_Code));
-
-    /* Fix 7: clean up new input-file columns */
-    length Input_File_Path  $500
-           Input_File_Name  $200
-           Input_File_Sheet $100
-           Input_File_Type  $10
-           Full_Input_Path  $500;
-    Input_File_Path  = strip(Input_File_Path);
-    Input_File_Name  = strip(Input_File_Name);
-    Input_File_Sheet = strip(Input_File_Sheet);
-    Input_File_Type  = upcase(strip(Input_File_Type));
-    Full_Input_Path  = cats(Input_File_Path, Input_File_Name);
-
-    /* Explicit row number — used in all macro loops (Fix 6) */
-    row_num = _n_;
+proc export data=Open_Items_Out_of_SLA
+    outfile="/data/fnbinsurance/Corporate_Actuarial/Short_Term/Servicing/Open_items_out_of_SLA.csv"
+    dbms = csv
+    replace;
 run;
 
-proc sql noprint;
-    select count(*) into :config_count trimmed
-    from Campaign_Config;
-quit;
+%macro email(name);
+filename myemail email
+from = "asher.levin@fnb.co.za"
+to = "&name"
+cc=("asher.levin@fnb.co.za" "Morris.Nkomo@fnb.co.za")
+subject= "Open Items Out of SLA - Servicing"
+attach ="/data/fnbinsurance/Corporate_Actuarial/Short_Term/Servicing/Open_items_out_of_SLA.csv"
+;
+
+
+data _null_;
+file myemail;
+put "Hi everyone,";
+put "														";
+put "Attached is the Open items out of SLA document as of &today0_yymmdd10.";
+put "														";
+put "Please do remember to cc us when communicating with IT helpdesk on items which are not valid.";
+put "																							";
+put "Please note this is an automated email.";
+put "																		   ";
+put "Kind Regards";
+put "Orris";
+run;
+
+filename myemail email;
+%mend email;
+%email(asher.levin@fnb.co.za)
+%email(Cleoreece.Joseph@fnb.co.za)
+%email(ajay.jayalall@fnb.co.za)
+%email(Jenise.Connies@fnb.co.za)
+%email(lyzette.ferris@fnb.co.za)
+%email(leilani.debod@fnb.co.za)
