@@ -1,866 +1,586 @@
-%put TAG:JobName1=STI_CA_D_APNS_DATA_REBUILD;
-%put TAG:JobName2=Daily;
-%put TAG:JobCategory=Campaigns;
-%put TAG:JobPurpose=Operational;
-%put TAG:JobPriority=Medium;
-%put TAG:JobStatus=Prod;
-
-options mprint mlogic symbolgen source notes;
-
-%include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
-
-
-/* SECTION 1: READ CAMPAIGN CONFIG FROM EXCEL */
-
-filename APN_CFG "\\INS-RBFS01\Share\FNB_Insure\Campaign Profiles\APN_Campaign_Config.xlsx";
-
-proc import
-    datafile = APN_CFG
-    out      = Campaign_Config_Raw
-    dbms     = xlsx
-    replace;
-    sheet    = "Config";
-    getnames = yes;
-run;
-
-filename APN_CFG clear;
-
-data Campaign_Config;
-    set Campaign_Config_Raw;
-    where upcase(strip(Active)) = "Y"
-      and strip(Campaign_Code)  ne ""
-      and strip(Product_Code)   ne "";
-    Campaign_Code = upcase(strip(Campaign_Code));
-    Product_Code  = upcase(strip(Product_Code));
-run;
-
-proc sql noprint;
-    select count(*) into :config_count trimmed
-    from Campaign_Config;
-quit;
-
-%if &config_count = 0 %then %do;
-    %put ERROR: Config has no active rows. Check Excel file.;
-    %abort cancel;
-%end;
-
-%put NOTE: &config_count active product codes loaded from config.;
-
-title "CONFIG - Active Campaigns Loaded from Excel";
-proc print data=Campaign_Config noobs; run;
-title;
-
-
-/* SECTION 2: BUILD DYNAMIC MACRO VARIABLES FROM CONFIG */
-
-proc sql noprint;
-    select count(distinct Campaign_Code)
-    into   :camp_count trimmed
-    from   Campaign_Config;
-
-    select distinct Campaign_Code
-    into   :camp_1 -
-    from   Campaign_Config
-    order  by Campaign_Code;
-
-    select distinct cats("'", Product_Code, "'")
-    into   :product_list separated by ","
-    from   Campaign_Config;
-quit;
-
-%put NOTE: &camp_count distinct campaign codes found.;
-%put NOTE: Product list: &product_list;
-
-
-/* SECTION 3: CAPTURE PRE-RUN STATE */
-
-proc sql noprint;
-    select max(date_to_adobe) format date9.
-    into   :Old_date trimmed
-    from   STI_PBI.APN_POT;
-
-    select max(time_created_to_adobe) format time9.
-    into   :Old_time trimmed
-    from   STI_PBI.APN_POT
-    where  date_to_adobe = max(date_to_adobe);
-
-    select count(CUST_NO)
-    into   :Old_records trimmed
-    from   STI_PBI.APN_POT;
-quit;
-
-%put Pre-run state: &Old_date &Old_time  Records: &Old_records;
-
-
-/* SECTION 4: LIBNAMES */
-
-libname Pass6    "/data/fnb/clb/archive/5_optimise/passed_phase1";
-libname APN_Pass "/data/fnb/clb/prod_data/5_optimise/passed_phase1";
-libname Drop6    "/data/fnb/clb/archive/5_optimise/dropped_phase1";
-libname APN_Drop "/data/fnb/clb/prod_data/5_optimise/dropped_phase1";
-libname APNS     "/data/fnb/clb/prod_data/7_tracking_views/Reporting_views";
-
-
-/* SECTION 5: CLEAR STALE WORK TABLES */
-
-proc datasets library=work nolist;
-    delete _tabpass_:      _tabdrop_:
-           pass_tables_arch     pass_tables_live
-           drop_tables_arch     drop_tables_live
-           pass_tables_combined drop_tables_combined
-           monthly_pass_list    monthly_drop_list
-           adobe_final_new      adobe_final_table_clients
-           adobe_to_clients_step  adobe_to_clients_step2
-           adobe_to_clients_final adobe_delivery_test
-           adobe_recent_drops     apns_sends_campaigns
-           campaigns_to_adobe     campaigns_to_adobe_step
-           campaigns_to_adobe_renamed joining
-           apn_pot_step1
-           cust_adobe_flag      cust_loaded_summary
-           apn_pot_summary_final;
-quit;
-
-
-/* SECTION 6: CAMPAIGN TABLE DISCOVERY */
-
-%macro build_campaign_filter(libref=, outds=);
-    proc sql;
-        create table &outds as
-        select *
-        from dictionary.tables
-        where libname = "%upcase(&libref)"
-          and (
-            %do i = 1 %to &camp_count;
-                %if &i > 1 %then or;
-                memname like "&&camp_&i..%"
-            %end;
-          );
-    quit;
-%mend;
-
-%build_campaign_filter(libref=PASS6,    outds=pass_tables_arch)
-%build_campaign_filter(libref=APN_PASS, outds=pass_tables_live)
-%build_campaign_filter(libref=DROP6,    outds=drop_tables_arch)
-%build_campaign_filter(libref=APN_DROP, outds=drop_tables_live)
-
-data pass_tables_combined;
-    set pass_tables_arch (in=a)
-        pass_tables_live (in=b);
-    Source = ifc(b, 'Live', 'Archive');
-run;
-
-proc sort data=pass_tables_combined; by memname descending Source; run;
-proc sort data=pass_tables_combined nodupkey; by memname; run;
-
-data drop_tables_combined;
-    set drop_tables_arch (in=a)
-        drop_tables_live (in=b);
-    Source = ifc(b, 'Live', 'Archive');
-run;
-
-proc sort data=drop_tables_combined; by memname descending Source; run;
-proc sort data=drop_tables_combined nodupkey; by memname; run;
-
-proc sql noprint;
-    create table monthly_pass_list as
-    select distinct memname, crdate, Source
-    from pass_tables_combined
-    order by memname;
-
-    select count(*) into :monthly_pass_count trimmed
-    from monthly_pass_list;
-quit;
-
-proc sql noprint;
-    create table monthly_drop_list as
-    select distinct memname, crdate, Source
-    from drop_tables_combined
-    order by memname;
-
-    select count(*) into :monthly_drop_count trimmed
-    from monthly_drop_list;
-quit;
-
-%put Pass tables found: &monthly_pass_count;
-%put Drop tables found: &monthly_drop_count;
-
-title "DEBUG 1 - Pass Tables Discovered";
-proc print data=monthly_pass_list noobs; run;
-title "DEBUG 1 - Drop Tables Discovered";
-proc print data=monthly_drop_list noobs; run;
-title;
-
-
-/* SECTION 7: READ ALL PASSED RECORDS */
-
-%macro iterate_pass;
-    proc datasets library=work nolist;
-        delete _tabpass_:;
-    quit;
-
-    %local i tname tdate tsource libref;
-    %do i = 1 %to &monthly_pass_count;
-
-        proc sql noprint;
-            select memname, crdate, Source
-            into   :tname trimmed, :tdate trimmed, :tsource trimmed
-            from   monthly_pass_list
-            where  monotonic() = &i;
-        quit;
-
-        %put Processing pass &i of &monthly_pass_count: &tname (&tsource);
-
-        %if %upcase(&tsource) = LIVE %then %let libref = APN_Pass;
-        %else                              %let libref = Pass6;
-
-        data _tabpass_&i;
-            set &libref..&tname
-                (keep=CUST_NO Product_Code Drop_Reason sub_segment
-                      Campaign_Name Brand MUCN);
-            length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
-            _memname_ = "&tname";
-            if index(_memname_,'_') > 0 then do;
-                _date_raw_ = scan(_memname_, -2, '_');
-                _time_raw_ = scan(_memname_, -1, '_');
-                if length(strip(_time_raw_)) = 3 then
-                    _time_raw_ = cats('0', strip(_time_raw_));
-                Date_to_adobe         = input(_date_raw_, YYMMDD8.);
-                Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
-                                                   substr(_time_raw_,3,2),':00'),
-                                              HHMMSS8.);
-            end;
-            else do;
-                _date_raw_            = substr(_memname_, 16, 8);
-                Date_to_adobe         = input(_date_raw_, YYMMDD10.);
-                Time_created_to_adobe = input(substr("&tdate",9,8), HHMMSS.);
-            end;
-            format Date_to_adobe date9.;
-            format Time_created_to_adobe time9.;
-            rename CUST_NO = cust_no
-                   MUCN    = mucn
-                   Brand   = brand;
-            drop _memname_ _date_raw_ _time_raw_;
-        run;
-    %end;
-%mend;
-%iterate_pass;
-
-
-/* SECTION 8: READ ALL DROPPED RECORDS */
-
-%macro iterate_drop;
-    proc datasets library=work nolist;
-        delete _tabdrop_:;
-    quit;
-
-    %local i tname tdate tsource libref;
-    %do i = 1 %to &monthly_drop_count;
-
-        proc sql noprint;
-            select memname, crdate, Source
-            into   :tname trimmed, :tdate trimmed, :tsource trimmed
-            from   monthly_drop_list
-            where  monotonic() = &i;
-        quit;
-
-        %put Processing drop &i of &monthly_drop_count: &tname (&tsource);
-
-        %if %upcase(&tsource) = LIVE %then %let libref = APN_Drop;
-        %else                              %let libref = Drop6;
-
-        data _tabdrop_&i;
-            set &libref..&tname
-                (keep=CUST_NO Product_Code Drop_Reason sub_segment
-                      Campaign_Name Brand MUCN);
-            length _memname_ $50 _date_raw_ $8 _time_raw_ $4;
-            _memname_ = "&tname";
-            if index(_memname_,'_') > 0 then do;
-                _date_raw_ = scan(_memname_, -2, '_');
-                _time_raw_ = scan(_memname_, -1, '_');
-                if length(strip(_time_raw_)) = 3 then
-                    _time_raw_ = cats('0', strip(_time_raw_));
-                Date_to_adobe         = input(_date_raw_, YYMMDD8.);
-                Time_created_to_adobe = input(cats(substr(_time_raw_,1,2),':',
-                                                   substr(_time_raw_,3,2),':00'),
-                                              HHMMSS8.);
-            end;
-            else do;
-                _date_raw_            = substr(_memname_, 16, 8);
-                Date_to_adobe         = input(_date_raw_, YYMMDD10.);
-                Time_created_to_adobe = input(substr("&tdate",9,8), HHMMSS.);
-            end;
-            format Date_to_adobe date9.;
-            format Time_created_to_adobe time9.;
-            rename CUST_NO = cust_no
-                   MUCN    = mucn
-                   Brand   = brand;
-            drop _memname_ _date_raw_ _time_raw_;
-        run;
-    %end;
-%mend;
-%iterate_drop;
-
-
-/* SECTION 9: COMBINE ALL CAMPAIGN DATA */
-
-data CAMPAIGNS_TO_ADOBE;
-    set _tabpass_:
-        _tabdrop_:;
-run;
-
-proc sql noprint;
-    select count(*) into :camp_rows trimmed
-    from CAMPAIGNS_TO_ADOBE;
-quit;
-
-%put CAMPAIGNS_TO_ADOBE rows: &camp_rows;
-
-title "DEBUG 2 - CAMPAIGNS_TO_ADOBE: Rows by Campaign and Product Code";
-proc sql;
-    select Campaign_Name,
-           product_code,
-           count(*)                         as Row_Count,
-           sum(case when drop_reason = ''
-                    then 1 else 0 end)      as Passed,
-           sum(case when drop_reason ne ''
-                    then 1 else 0 end)      as Dropped,
-           min(Date_to_adobe) format=date9. as First_Batch,
-           max(Date_to_adobe) format=date9. as Last_Batch
-    from CAMPAIGNS_TO_ADOBE
-    group by Campaign_Name, product_code
-    order by Campaign_Name, product_code;
-quit;
-title;
-
-proc sql noprint;
-    select min(Date_to_adobe) format date9.
-    into   :min_date trimmed
-    from   CAMPAIGNS_TO_ADOBE;
-quit;
-
-%put Min date: &min_date;
-
-
-/* SECTION 10: ADOBE SENDS - includes answer column for open tracking */
-
-data APNS_sends_campaigns
-    (keep=cust_no mucn product_code Date_loaded Time
-          Drop_reason brand Delivery_code distribution_status answer);
-    set APNS.apn_sends_and_feedback;
-    where product_code in (&product_list.)
-      and datepart(Distribution_date) >= "&min_date."d;
-    Brand         = substr(mucn, 1, 3);
-    Drop_reason   = "";
-    Date_loaded   = datepart(Distribution_date);
-    format Date_loaded date9.;
-    Time          = timepart(Distribution_date);
-    format Time time9.;
-    Delivery_code = UPCASE(Delivery_code);
-run;
-
-proc sort data=APNS_sends_campaigns nodupkey;
-    by cust_no product_code date_loaded;
-run;
-
-proc sql noprint;
-    select count(*) into :sends_rows trimmed
-    from APNS_sends_campaigns;
-quit;
-
-%put Adobe sends after dedup: &sends_rows;
-
-title "DEBUG 3 - Adobe Sends by Product Code";
-proc sql;
-    select product_code,
-           count(*)                         as Row_Count,
-           min(Date_loaded) format=date9.   as First_Send,
-           max(Date_loaded) format=date9.   as Last_Send
-    from APNS_sends_campaigns
-    group by product_code
-    order by product_code;
-quit;
-title;
-
-
-/* SECTION 11: ADOBE DROP-OFFS */
-
-data Adobe_recent_drops;
-    set APNS.adobe_drop_offs_data;
-    where product_code in (&product_list.)
-      and datepart(Date_loaded) >= "&min_date."d;
-    cust_no       = ucn;
-    Date_loaded   = datepart(Date_loaded);
-    format Date_loaded date9.;
-    Time          = timepart(Date_loaded);
-    format Time time9.;
-    Brand         = substr(mucn, 1, 3);
-    Delivery_code = "";
-run;
-
-proc sql noprint;
-    select count(*) into :drops_rows trimmed
-    from Adobe_recent_drops;
-quit;
-
-%put Adobe drop-offs: &drops_rows;
-
-title "DEBUG 4 - Adobe Drop-offs by Product Code";
-proc sql;
-    select product_code,
-           count(*)                         as Row_Count,
-           min(Date_loaded) format=date9.   as First_Drop,
-           max(Date_loaded) format=date9.   as Last_Drop
-    from Adobe_recent_drops
-    group by product_code
-    order by product_code;
-quit;
-title;
-
-
-/* SECTION 12: COMBINE ADOBE DATA - answer carried through for open tracking */
-
-data adobe_to_clients_step;
-    length mucn                $28
-           product_code        $29
-           drop_reason         $50
-           distribution_status $43
-           answer              $815;
-    set Adobe_recent_drops
-        APNS_sends_campaigns;
-run;
-
-data adobe_to_clients_final (drop=etl_source_data etl_date daymonth);
-    set adobe_to_clients_step;
-    if drop_reason  = "" then success = 1; else success = 0;
-    if drop_reason ne "" then drop    = 1; else drop    = 0;
-run;
-
-
-/* SECTION 13: OPTIMISE STEP */
-
-data campaigns_to_adobe_step
-    (keep=Optimize sub_segment Drop_reason product_code
-          cust_no Date_to_adobe Time_created_to_adobe
-          Campaign_Name mucn success_to_adobe drop_to_adobe);
-    set CAMPAIGNS_TO_ADOBE;
-    if drop_reason ne "" then optimize = drop_reason; else optimize = "Sent";
-    if drop_reason  = "" then success_to_adobe = 1;   else success_to_adobe = 0;
-    if drop_reason ne "" then drop_to_adobe    = 1;   else drop_to_adobe    = 0;
-run;
-
-data campaigns_to_adobe_renamed;
-    set campaigns_to_adobe_step;
-    rename Drop_Reason   = Drop_reason_to_adobe;
-    rename mucn          = mucn_to_adobe;
-    rename product_code  = product_code_to_adobe;
-    rename Campaign_Name = Campaign_Name_to_adobe;
-run;
-
-
-/* SECTION 14: ADOBE CLASSIFICATION */
-
-data adobe_to_clients_step2 (drop=success drop);
-    length Adobe         $50
-           Client        $50
-           testindicator $6;
-    set adobe_to_clients_final;
-    if upcase(delivery_code) = "TEST"
-        then Adobe = "TEST";
-    else if delivery_code ne ""
-        then Adobe = "Loaded";
-    else
-        Adobe = drop_reason;
-
-    if upcase(delivery_code) = "TEST"
-        then Client = "TEST";
-    else if upcase(distribution_status) = "SENT"
-        then Client = "Sent to Client";
-    else if upcase(distribution_status) = "SENT TO THE SERVICE PROVIDER"
-        then Client = "Sent to Provider";
-    else if upcase(distribution_status) = "PENDING"
-        then Client = "Pending";
-    else if upcase(distribution_status) = "DELIVERY CANCELED"
-        then Client = "Delivery Canceled";
-    else
-        Client = drop_reason;
-run;
-
-proc sql;
-    create table adobe_delivery_test as
-    select distinct cust_no, date_loaded, product_code,
-                    "TEST" as testindicator
-    from adobe_to_clients_step2
-    where upcase(delivery_code) = "TEST";
-quit;
-
-proc sql;
-    create table adobe_final_new as
-    select a.*, b.testindicator
-    from adobe_to_clients_step2 a
-    left join adobe_delivery_test b
-        on  a.cust_no      = b.cust_no
-        and a.date_loaded  = b.date_loaded
-        and a.product_code = b.product_code;
-quit;
-
-data adobe_final_table_clients;
-    length testindicator $6;
-    set adobe_final_new;
-    if strip(testindicator) = "TEST" then do;
-        testindicator = "TEST";
-        Adobe         = "TEST";
-        Client        = "TEST";
-    end;
-    else testindicator = "Actual";
-    rename cust_no = cust_no2;
-run;
-
-proc sql noprint;
-    select count(*) into :final_rows trimmed
-    from adobe_final_table_clients;
-quit;
-
-%put Adobe final table rows: &final_rows;
-
-
-/* SECTION 15: FINAL JOIN - OPTIMISE + ADOBE */
-
-proc sql;
-    create table joining as
-    select *
-    from campaigns_to_adobe_renamed a
-    left join adobe_final_table_clients b
-        on  a.cust_no               = b.cust_no2
-        and a.product_code_to_adobe  = b.product_code
-        and (b.date_loaded between a.date_to_adobe and a.date_to_adobe + 60);
-quit;
-
-data APN_POT_Step1
-    (drop=Time product_code mucn mucn_to_adobe
-          success_to_adobe drop_to_adobe);
-    length Adobe  $50
-           Client $50;
-    set joining;
-
-    if missing(cust_no2) and Optimize = "Sent"
-        then Adobe = "Not loaded into Adobe within 60 days";
-    if missing(cust_no2) and Optimize = "Sent"
-        and intck('day', date_to_adobe, today()) <= 60
-        and missing(Date_loaded)
-        then Adobe = "Sending to Adobe";
-
-    date_Diff = intck('day', date_to_adobe, date_loaded);
-run;
-
-proc sort data=APN_POT_Step1;
-    by cust_no product_code_to_adobe date_to_adobe descending date_loaded;
-run;
-
-proc sort data=APN_POT_Step1 nodupkey
-    out=APN_POT_Final;
-    by cust_no product_code_to_adobe date_to_adobe;
-run;
-
-data APN_POT;
-    set APN_POT_Final;
-run;
-
-proc sql noprint;
-    select count(*) into :pot_rows trimmed
-    from APN_POT;
-quit;
-
-%put APN_POT rows: &pot_rows;
-
-title "DEBUG 5 - APN_POT: Distribution by Campaign and Status";
-proc sql;
-    select Campaign_Name_to_adobe   as Campaign,
-           Optimize,
-           Adobe,
-           Client,
-           count(*) as Row_Count
-    from APN_POT
-    group by Campaign_Name_to_adobe, Optimize, Adobe, Client
-    order by Campaign_Name_to_adobe, Optimize, Row_Count desc;
-quit;
-title;
-
-
-/* SECTION 15B: DISTINCT CUSTOMERS LOADED INTO ADOBE */
-
-proc sql;
-    create table cust_loaded_summary as
-    select
-        Campaign_Name_to_adobe,
-        product_code_to_adobe,
-        date_to_adobe                                       as Batch_Date,
-        count(distinct cust_no) as Loaded_Adobe
-                                label = "Distinct Customers Loaded into Adobe"
-    from APN_POT_Final
-    where Adobe = "Loaded"
-    group by Campaign_Name_to_adobe, product_code_to_adobe, date_to_adobe;
-quit;
-
-
-/* SECTION 16: SUMMARY TABLE FOR POWER BI */
-
-proc sql;
-    create table APN_POT_SUMMARY as
-    select
-        Campaign_Name_to_adobe                              as Campaign_Name
-                                                            length = 100
-                                                            label  = "Campaign Name",
-        product_code_to_adobe                               as Product_Code
-                                                            length = 29
-                                                            label  = "Product Code",
-        date_to_adobe                                       as Batch_Date
-                                                            format = date9.
-                                                            label  = "Batch Date",
-        Optimize,
-        Adobe,
-        Client,
-        testindicator,
-
-        count(*)                                            as Record_Count
-                                                            label = "Record Count",
-
-        sum(case when Optimize  = "Sent"
-                 then 1 else 0 end)                         as Passed_Optimise
-                                                            label = "Passed Optimise",
-        sum(case when Optimize ne "Sent"
-                 then 1 else 0 end)                         as Dropped_Optimise
-                                                            label = "Dropped Optimise",
-
-        sum(case when Adobe in ("ADB_NoConsent","ADB_NoChannel",
-                                "ADB_NotInSegment","ADB_NoBrand",
-                                "NO CHANNEL","INCORRECT SEGMENT")
-                 then 1 else 0 end)                         as Dropped_Adobe
-                                                            label = "Dropped by Adobe",
-        sum(case when Adobe = "Sending to Adobe"
-                 then 1 else 0 end)                         as Sending_to_Adobe
-                                                            label = "Sending to Adobe",
-        sum(case when Adobe contains "Not loaded"
-                 then 1 else 0 end)                         as Not_Loaded
-                                                            label = "Not Loaded (60d)",
-
-        sum(case when Client = "Sent to Client"
-                 then 1 else 0 end)                         as Sent_to_Client
-                                                            label = "Sent to Client",
-        sum(case when Client = "Sent to Provider"
-                 then 1 else 0 end)                         as Sent_to_Provider
-                                                            label = "Sent to Provider",
-        sum(case when Client = "Pending"
-                 then 1 else 0 end)                         as Pending_Client
-                                                            label = "Pending",
-        sum(case when Client = "Delivery Canceled"
-                 then 1 else 0 end)                         as Delivery_Canceled
-                                                            label = "Delivery Canceled",
-
-        sum(case when Client = "Sent to Client"
-                 and answer is not null
-                 and strip(answer) ne ""
-                 then 1 else 0 end)                         as Total_Opened
-                                                            label = "Opened",
-
-        sum(case when Client = "Sent to Client"
-                 then 1 else 0 end)                         as Sent_to_Client_Count
-                                                            label = "Sent to Client Count",
-
-        min(date_loaded)                                    as First_Date_Loaded
-                                                            format = date9.
-                                                            label  = "First Date Loaded",
-        max(date_loaded)                                    as Last_Date_Loaded
-                                                            format = date9.
-                                                            label  = "Last Date Loaded",
-        min(date_Diff)                                      as Min_Days_to_Adobe
-                                                            label  = "Min Days to Adobe",
-        max(date_Diff)                                      as Max_Days_to_Adobe
-                                                            label  = "Max Days to Adobe",
-        mean(date_Diff)                                     as Avg_Days_to_Adobe
-                                                            format = 8.1
-                                                            label  = "Avg Days to Adobe"
-
-    from APN_POT
-    group by
-        Campaign_Name_to_adobe,
-        product_code_to_adobe,
-        date_to_adobe,
-        Optimize,
-        Adobe,
-        Client,
-        testindicator
-    order by
-        Campaign_Name_to_adobe,
-        product_code_to_adobe,
-        date_to_adobe;
-quit;
-
-/* Calculate Open Rate */
-data APN_POT_SUMMARY;
-    set APN_POT_SUMMARY;
-    if Sent_to_Client_Count > 0
-        then Open_Rate = (Total_Opened / Sent_to_Client_Count) * 100;
-    else Open_Rate = .;
-    format Open_Rate 8.2;
-    label  Open_Rate = "Open Rate (%)";
-run;
-
-/* Join distinct customer counts - replaces Loaded_Adobe case-when */
-proc sql;
-    create table APN_POT_SUMMARY_FINAL as
-    select
-        a.*,
-        coalesce(b.Loaded_Adobe, 0) as Loaded_Adobe
-                 label = "Distinct Customers Loaded into Adobe"
-    from APN_POT_SUMMARY a
-    left join cust_loaded_summary b
-        on  a.Campaign_Name = b.Campaign_Name_to_adobe
-        and a.Product_Code  = b.product_code_to_adobe
-        and a.Batch_Date    = b.Batch_Date;
-quit;
-
-proc sql noprint;
-    select count(*) into :summary_rows trimmed
-    from APN_POT_SUMMARY_FINAL;
-quit;
-
-%put APN_POT_SUMMARY_FINAL rows: &summary_rows;
-
-
-/* SECTION 17: LOAD TO PRODUCTION */
-
-%macro LoadTable(Table=, Target=);
-    %if %sysfunc(exist(&Table.)) %then %do;
-
-        proc sql noprint;
-            select count(*) into :row_count trimmed
-            from &Table.;
-        quit;
-
-        %if &row_count = 0 %then %do;
-            %put ERROR: &Table. has ZERO rows. Load ABORTED.;
-            %abort cancel;
-        %end;
-        %else %do;
-            %put NOTE: &Table. has &row_count rows. Loading to STI_PBI.&Target.;
-            proc sql;
-                drop table STI_PBI.&Target.;
-                create table STI_PBI.&Target. as
-                select * from &Table.;
-            quit;
-            %put NOTE: STI_PBI.&Target. loaded successfully.;
-        %end;
-
-    %end;
-    %else %do;
-        %put ERROR: Work table &Table. does not exist. Cannot load.;
-        %abort cancel;
-    %end;
-%mend;
-
-%LoadTable(Table=APN_POT,               Target=APN_POT);
-%LoadTable(Table=APN_POT_SUMMARY_FINAL, Target=APN_POT_SUMMARY);
-
-
-/* SECTION 18: CAPTURE POST-RUN STATE */
-
-proc sql noprint;
-    select max(date_to_adobe) format date9.
-    into   :New_date trimmed
-    from   APN_POT;
-quit;
-
-proc sql noprint;
-    select max(time_created_to_adobe) format time9.
-    into   :New_time trimmed
-    from   APN_POT
-    where  date_to_adobe = "&New_date."d;
-quit;
-
-proc sql noprint;
-    select count(cust_no)
-    into   :New_records trimmed
-    from   APN_POT;
-quit;
-
-%put Post-run state: &New_date &New_time  Records: &New_records;
-
-%let Diff_Records = %sysevalf(&New_records - &Old_records);
-%put Records added this run: &Diff_Records;
-
-
-/* SECTION 19: EMAIL NOTIFICATION */
-
-%macro EMAIL;
-
-    %if &Old_date = &New_date and &Old_time = &New_time %then %do;
-
-        FILENAME EML EMAIL
-            to   = "Morris.Nkomo@fnb.co.za"
-            cc   = "dlfnbstioperationalanalytics@fnb.co.za"
-            from = 'dlfnbstioperationalanalytics@fnb.co.za';
-        DATA _NULL_;
-            FILE EML;
-            PUT "Hi,";
-            PUT " ";
-            PUT "The APN POT script ran with no table update,";
-            PUT "please check log for any possible failure(s)";
-            PUT " ";
-            PUT "Max Date in table before run: &Old_date";
-            PUT "Max Time in table before run: &Old_time";
-            PUT "Max Date in table after run:  &New_date";
-            PUT "Max Time in table after run:  &New_time";
-            PUT " ";
-            PUT "The APN Dashboard does not require refreshing";
-            PUT " ";
-            PUT "Kind Regards";
-            PUT "Morris";
-        RUN;
-
-    %end;
-
-    %else %if &Old_date ne &New_date or &Old_time ne &New_time %then %do;
-
-        FILENAME EML EMAIL
-            to   = "Morris.Nkomo@fnb.co.za"
-            cc   = "dlfnbstioperationalanalytics@fnb.co.za"
-            from = 'dlfnbstioperationalanalytics@fnb.co.za';
-        DATA _NULL_;
-            FILE EML;
-            PUT "Hi,";
-            PUT "APN POT script ran with a table update.";
-            PUT "Max Date in table before run: &Old_date";
-            PUT "Max Time in table before run: &Old_time";
-            PUT "Max Date in table after run:  &New_date";
-            PUT "Max Time in table after run:  &New_time";
-            PUT "Records added this run:       &Diff_Records";
-            PUT " ";
-            PUT "The APN Dashboard can be refreshed";
-            PUT " ";
-            PUT "Kind Regards";
-            PUT "Morris";
-        RUN;
-
-    %end;
-
-    %else %if %sysfunc(exist(STI_PBI.APN_POT)) = 0 %then %do;
-
-        FILENAME EML EMAIL
-            to      = "Morris.Nkomo@fnb.co.za"
-            cc      = "dlfnbstioperationalanalytics@fnb.co.za"
-            from    = 'dlfnbstioperationalanalytics@fnb.co.za'
-            subject = "Table Missing";
-        DATA _NULL_;
-            FILE EML;
-            PUT "Good Day,";
-            PUT " ";
-            PUT "Kindly note that the APN_POT table is missing, currently investigating.";
-            PUT " ";
-            PUT "Kind Regards,";
-            PUT "Morris";
-        RUN;
-
-    %end;
-
-%mend email;
-%email;
+/*=====================================================================
+  OBR VIEW GENERATION PIPELINE
+  ------------------------------------------------------------
+  Generates three deliverables from RET.AgentEarn / TLEarn /
+  ManagementEarn tables:
+
+    1. Agent_OBR_Pack_<month>.xlsx    - per-agent reflection sheets
+    2. TL_Coaching_Pack_<month>.xlsx  - team roster + coaching priorities
+    3. Manager_Overview_Pack_<month>.xlsx - team-of-teams + payout summary
+
+  Author: Morris | Growth Analytics
+  Depends on: RET libname pointing to RetentionsOBR folder
+=====================================================================*/
+
+%LET RPT_MONTH  = '30JUN2026'D;
+%LET RPT_LABEL  = Jun2026;
+%LET OUT_PATH   = /home/f8884560/OBR_Views;
+
+LIBNAME RET '/data/fnbins/fnbinsurance/Collections/Data/ST Retentions/RetentionsOBR/';
+
+/*---------------------------------------------------------------------
+  STEP 1 - STACK + STANDARDISE THE THREE TABLES
+---------------------------------------------------------------------*/
+DATA AgentEarn_all;
+    SET RET.AgentEarn_: INDSNAME=src;
+    LENGTH source_ds $41;
+    source_ds = src;
+    IF Desk = 'Emails' THEN Desk = 'Email';
+RUN;
+
+DATA TLEarn_all;
+    SET RET.TLEarn_: INDSNAME=src;
+    source_ds = src;
+RUN;
+
+DATA MgmtEarn_all;
+    SET RET.ManagementEarn_: INDSNAME=src;
+    WHERE _N_ IS NOT MISSING AND Name IS NOT MISSING;
+    source_ds = src;
+RUN;
+
+/*---------------------------------------------------------------------
+  STEP 2 - COMPUTE DERIVED FIELDS
+  Rating band and next-tier thresholds, plus contribution per component.
+---------------------------------------------------------------------*/
+PROC FORMAT;
+    VALUE ratingband
+        LOW  - < 2.0  = 'SIR'
+        2.0  - < 3.0  = 'IR'
+        3.0  - < 4.0  = 'ME'
+        4.0  - < 4.7  = 'EE'
+        4.7  - HIGH   = 'Exceptional';
+
+    VALUE ratingfull
+        LOW  - < 2.0  = 'Significant Improvement Required'
+        2.0  - < 3.0  = 'Improvement Required'
+        3.0  - < 4.0  = 'Meets Expectation'
+        4.0  - < 4.7  = 'Exceeds Expectation'
+        4.7  - HIGH   = 'Exceptional';
+RUN;
+
+DATA AgentEarn_scored;
+    SET AgentEarn_all;
+
+    /* Standard weightings */
+    Effe_MaxContrib = 5 * 0.15 * 0.8;   /* 0.60 */
+    Save_MaxContrib = 5 * 0.30 * 0.8;   /* 1.20 */
+    FC_MaxContrib   = 5 * 0.30 * 0.8;   /* 1.20 */
+    GWP_MaxContrib  = 5 * 0.25 * 0.8;   /* 1.00 */
+    Comp_MaxContrib = 5 * 0.10 * 0.2;   /* 0.10 */
+    Effo_MaxContrib = 5 * 0.45 * 0.2;   /* 0.45 */
+    QA_MaxContrib   = 5 * 0.45 * 0.2;   /* 0.45 */
+
+    /* Actual contribution = points * weight */
+    Effe_Contrib = EffeScore * 0.15 * 0.8;
+    Save_Contrib = SaveScore * 0.30 * 0.8;
+    FC_Contrib   = FCScore   * 0.30 * 0.8;
+    GWP_Contrib  = GWPScore  * 0.25 * 0.8;
+    Comp_Contrib = CompScore * 0.10 * 0.2;
+    Effo_Contrib = EffoScore * 0.45 * 0.2;
+    QA_Contrib   = QAScore   * 0.45 * 0.2;
+
+    /* Points lost per component - the coaching lens */
+    Effe_Lost = Effe_MaxContrib - Effe_Contrib;
+    Save_Lost = Save_MaxContrib - Save_Contrib;
+    FC_Lost   = FC_MaxContrib   - FC_Contrib;
+    GWP_Lost  = GWP_MaxContrib  - GWP_Contrib;
+    Comp_Lost = Comp_MaxContrib - Comp_Contrib;
+    Effo_Lost = Effo_MaxContrib - Effo_Contrib;
+    QA_Lost   = QA_MaxContrib   - QA_Contrib;
+
+    /* Rating labels */
+    LENGTH Rating $12 RatingFull $32;
+    Rating     = PUT(OverallScore, ratingband.);
+    RatingFull = PUT(OverallScore, ratingfull.);
+
+    /* Next-tier threshold */
+    IF      OverallScore < 2.0 THEN NextThresh = 2.0;
+    ELSE IF OverallScore < 3.0 THEN NextThresh = 3.0;
+    ELSE IF OverallScore < 4.0 THEN NextThresh = 4.0;
+    ELSE IF OverallScore < 4.7 THEN NextThresh = 4.7;
+    ELSE                            NextThresh = .;
+    IF NOT MISSING(NextThresh) THEN GapToNext = NextThresh - OverallScore;
+
+    /* Desk grouping for earn rate rules */
+    LENGTH DeskGroup $10;
+    IF Desk IN ('Commercial - I','Commercial - O') THEN DeskGroup = 'Commercial';
+    ELSE DeskGroup = Desk;
+
+    /* Next-tier earn rate */
+    IF NOT MISSING(NextThresh) THEN DO;
+        IF NextThresh < 3.0 THEN NextRate = 0;
+        ELSE IF NextThresh < 4.0 THEN DO;
+            IF DeskGroup = 'Inbound' THEN NextRate = 0.05;
+            ELSE NextRate = 0.08;
+        END;
+        ELSE IF NextThresh < 4.7 THEN DO;
+            IF DeskGroup = 'Inbound' THEN NextRate = 0.06;
+            ELSE NextRate = 0.09;
+        END;
+        ELSE DO;
+            IF DeskGroup = 'Inbound' THEN NextRate = 0.08;
+            ELSE NextRate = 0.10;
+        END;
+
+        PotentialUplift = (NextRate - EarnRate) * CollectedGWP;
+    END;
+RUN;
+
+/*---------------------------------------------------------------------
+  STEP 3 - BUILD THE THREE DELIVERABLES
+---------------------------------------------------------------------*/
+
+/* Filter to reporting month */
+DATA AgentEarn_now;
+    SET AgentEarn_scored;
+    WHERE CampaignMonth = &RPT_MONTH;
+RUN;
+
+/*--- 3a. AGENT PACK - one sheet per agent -----------------*/
+PROC SORT DATA=AgentEarn_now OUT=AgentEarn_srt;
+    BY Name Product Desk;
+RUN;
+
+/* Summary table for cover sheet */
+PROC SQL;
+    CREATE TABLE AgentSummary AS
+    SELECT Name AS Agent,
+           Agent AS Fnumber,
+           COUNT(*) AS Rows,
+           MAX(OverallScore) AS BestScore,
+           MAX(Rating) AS Rating,
+           SUM(Earn) AS TotalEarn FORMAT=NLMNY16.2
+    FROM AgentEarn_now
+    GROUP BY Name, Agent
+    ORDER BY BestScore DESC;
+QUIT;
+
+ODS EXCEL FILE="&OUT_PATH/Agent_OBR_Pack_&RPT_LABEL..xlsx"
+    OPTIONS(SHEET_INTERVAL='NONE'
+            EMBEDDED_TITLES='YES'
+            FLOW='TABLES');
+
+/* Cover sheet */
+ODS EXCEL OPTIONS(SHEET_NAME='Summary');
+TITLE1 "AGENT OBR PACK - %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.))";
+TITLE2 "One reflection pack per agent - see individual sheets";
+PROC PRINT DATA=AgentSummary NOOBS LABEL
+    STYLE(HEADER)=[BACKGROUND=#B85042 COLOR=WHITE FONTWEIGHT=BOLD];
+    VAR Agent Fnumber Rows BestScore Rating TotalEarn;
+RUN;
+TITLE;
+
+/* Per-agent scorecard grid */
+%MACRO agent_sheet(agent_fnum, agent_name);
+    ODS EXCEL OPTIONS(SHEET_NAME="%SUBSTR(&agent_name,1,%SYSFUNC(MIN(28,%LENGTH(&agent_name))))");
+
+    TITLE1 "OBR RECEIPT - &agent_name";
+    TITLE2 "Employee ID: &agent_fnum   |   Period: %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.))";
+
+    /* This month summary */
+    PROC PRINT DATA=AgentEarn_now NOOBS LABEL
+        STYLE(HEADER)=[BACKGROUND=#B85042 COLOR=WHITE FONTWEIGHT=BOLD];
+        WHERE Agent = "&agent_fnum";
+        VAR Product Desk OverallScore RatingFull EarnRate CollectedGWP Earn;
+        FORMAT OverallScore 5.2 EarnRate PERCENT8.0
+               CollectedGWP Earn NLMNY16.2;
+        LABEL OverallScore = 'Overall Score'
+              RatingFull   = 'Rating'
+              EarnRate     = 'Earn Rate'
+              CollectedGWP = 'Collected GWP'
+              Earn         = 'Earn (share)';
+    RUN;
+
+    /* Scorecard breakdown - top row */
+    PROC SQL NOPRINT;
+        SELECT Product, Desk INTO :top_prod, :top_desk
+        FROM AgentEarn_now
+        WHERE Agent = "&agent_fnum"
+        ORDER BY OverallScore DESC;
+    QUIT;
+
+    /* Scorecard grid */
+    DATA scorecard_&agent_fnum.;
+        SET AgentEarn_now;
+        WHERE Agent = "&agent_fnum" AND Product = "&top_prod" AND Desk = "&top_desk";
+        LENGTH RowLabel $22;
+        RowLabel = 'Target';
+        c_Effe = '100%'; c_Save = '50%/32%'; c_FC = '80%'; c_GWP = 'R160k/R120k';
+        c_Comp = '0'; c_Effo = '90%'; c_QA = '90%'; c_Score = ''; c_Rating = '';
+        OUTPUT;
+        RowLabel = 'Weighting';
+        c_Effe = '15%'; c_Save = '30%'; c_FC = '30%'; c_GWP = '25%';
+        c_Comp = '10%'; c_Effo = '45%'; c_QA = '45%'; c_Score = ''; c_Rating = '';
+        OUTPUT;
+        RowLabel = 'Actual Result';
+        c_Effe = PUT(Effectiveness, PERCENT9.2);
+        c_Save = PUT(SaveRatio, PERCENT9.2);
+        c_FC   = PUT(FirstCollPerc, PERCENT9.2);
+        c_GWP  = CATS('R ', PUT(RetainedGWP, COMMA14.2));
+        c_Comp = PUT(Complaints, BEST.);
+        c_Effo = PUT(EffortScore, PERCENT9.2);
+        c_QA   = PUT(QA, PERCENT9.2);
+        c_Score = ''; c_Rating = '';
+        OUTPUT;
+        RowLabel = 'Points (1-5)';
+        c_Effe = PUT(EffeScore, 1.);
+        c_Save = PUT(SaveScore, 1.);
+        c_FC   = PUT(FCScore,   1.);
+        c_GWP  = PUT(GWPScore,  1.);
+        c_Comp = PUT(CompScore, 1.);
+        c_Effo = PUT(EffoScore, 1.);
+        c_QA   = PUT(QAScore,   1.);
+        c_Score = PUT(OverallScore, 5.2);
+        c_Rating = RatingFull;
+        OUTPUT;
+        RowLabel = 'Contribution to Score';
+        c_Effe = PUT(Effe_Contrib, 4.2);
+        c_Save = PUT(Save_Contrib, 4.2);
+        c_FC   = PUT(FC_Contrib,   4.2);
+        c_GWP  = PUT(GWP_Contrib,  4.2);
+        c_Comp = PUT(Comp_Contrib, 4.2);
+        c_Effo = PUT(Effo_Contrib, 4.2);
+        c_QA   = PUT(QA_Contrib,   4.2);
+        c_Score = PUT(OverallScore, 5.2);
+        c_Rating = '';
+        OUTPUT;
+        KEEP RowLabel c_:;
+    RUN;
+
+    TITLE3 "SCORECARD - &top_prod / &top_desk";
+    PROC REPORT DATA=scorecard_&agent_fnum. NOWD
+        STYLE(HEADER)=[BACKGROUND=#B85042 COLOR=WHITE FONTWEIGHT=BOLD];
+        COLUMN RowLabel c_Effe c_Save c_FC c_GWP c_Comp c_Effo c_QA c_Score c_Rating;
+        DEFINE RowLabel / DISPLAY ' ' STYLE=[FONTWEIGHT=BOLD BACKGROUND=#F5E6DC];
+        DEFINE c_Effe   / DISPLAY 'Effectiveness';
+        DEFINE c_Save   / DISPLAY 'Save Ratio';
+        DEFINE c_FC     / DISPLAY '1st Coll %';
+        DEFINE c_GWP    / DISPLAY 'GWP Retained';
+        DEFINE c_Comp   / DISPLAY 'Complaints';
+        DEFINE c_Effo   / DISPLAY 'Effort Score';
+        DEFINE c_QA     / DISPLAY 'QA';
+        DEFINE c_Score  / DISPLAY 'Score';
+        DEFINE c_Rating / DISPLAY 'Rating';
+    RUN;
+
+    /* Where you lost points - sorted by biggest gap */
+    DATA reflect_&agent_fnum.;
+        SET AgentEarn_now;
+        WHERE Agent = "&agent_fnum" AND Product = "&top_prod" AND Desk = "&top_desk";
+        LENGTH Component $18 CoachingNote $40;
+        Component = 'Effectiveness'; Points = EffeScore; Earned = Effe_Contrib;
+        MaxPossible = Effe_MaxContrib; Gap = Effe_Lost; OUTPUT;
+        Component = 'Save Ratio';    Points = SaveScore; Earned = Save_Contrib;
+        MaxPossible = Save_MaxContrib; Gap = Save_Lost; OUTPUT;
+        Component = '1st Collection';Points = FCScore;   Earned = FC_Contrib;
+        MaxPossible = FC_MaxContrib;   Gap = FC_Lost;   OUTPUT;
+        Component = 'GWP Retained';  Points = GWPScore;  Earned = GWP_Contrib;
+        MaxPossible = GWP_MaxContrib;  Gap = GWP_Lost;  OUTPUT;
+        Component = 'Complaints';    Points = CompScore; Earned = Comp_Contrib;
+        MaxPossible = Comp_MaxContrib; Gap = Comp_Lost; OUTPUT;
+        Component = 'Effort Score';  Points = EffoScore; Earned = Effo_Contrib;
+        MaxPossible = Effo_MaxContrib; Gap = Effo_Lost; OUTPUT;
+        Component = 'QA';            Points = QAScore;   Earned = QA_Contrib;
+        MaxPossible = QA_MaxContrib;   Gap = QA_Lost;   OUTPUT;
+        KEEP Component Points Earned MaxPossible Gap;
+    RUN;
+
+    DATA reflect_&agent_fnum.;
+        SET reflect_&agent_fnum.;
+        LENGTH CoachingNote $40;
+        IF Points >= 5      THEN CoachingNote = 'Maxed. Hold this.';
+        ELSE IF Points >= 4 THEN CoachingNote = 'Strong. One more push for max.';
+        ELSE IF Points >= 3 THEN CoachingNote = 'On target. Room to improve.';
+        ELSE IF Points >= 2 THEN CoachingNote = 'Below target. Focus area.';
+        ELSE                     CoachingNote = 'Critical. Address first.';
+    RUN;
+
+    PROC SORT DATA=reflect_&agent_fnum.; BY DESCENDING Gap; RUN;
+
+    TITLE3 'WHERE YOU STAND';
+    PROC PRINT DATA=reflect_&agent_fnum. NOOBS LABEL
+        STYLE(HEADER)=[BACKGROUND=#B85042 COLOR=WHITE FONTWEIGHT=BOLD];
+        VAR Component Points Earned MaxPossible Gap CoachingNote;
+        FORMAT Earned MaxPossible Gap 4.2;
+        LABEL Component='Component' Points='Your Points'
+              Earned='You Earned' MaxPossible='Max Possible'
+              Gap='Gap' CoachingNote='Coaching Note';
+    RUN;
+
+    /* Trend view */
+    PROC SQL;
+        CREATE TABLE trend_&agent_fnum. AS
+        SELECT CampaignMonth FORMAT=MONYY7. AS Month,
+               MAX(OverallScore) AS BestScore FORMAT=5.2,
+               PUT(MAX(OverallScore), ratingband.) AS Rating LENGTH=12,
+               SUM(CollectedGWP) AS TotalGWP FORMAT=NLMNY16.2,
+               SUM(Earn)         AS TotalEarn FORMAT=NLMNY16.2
+        FROM AgentEarn_scored
+        WHERE Agent = "&agent_fnum"
+        GROUP BY CampaignMonth
+        ORDER BY CampaignMonth;
+    QUIT;
+
+    TITLE3 'YOUR TREND (4 MONTHS)';
+    PROC PRINT DATA=trend_&agent_fnum. NOOBS LABEL
+        STYLE(HEADER)=[BACKGROUND=#B85042 COLOR=WHITE FONTWEIGHT=BOLD];
+    RUN;
+
+    TITLE;
+%MEND;
+
+/* Loop over agents */
+PROC SQL NOPRINT;
+    SELECT DISTINCT CATS("%NRSTR(%agent_sheet)","(",Agent,",",Name,")")
+    INTO :AgentSheetCalls SEPARATED BY ';'
+    FROM AgentEarn_now;
+QUIT;
+&AgentSheetCalls.;
+
+ODS EXCEL CLOSE;
+
+/*---------------------------------------------------------------------
+  3b. TL COACHING PACK
+---------------------------------------------------------------------*/
+ODS EXCEL FILE="&OUT_PATH/TL_Coaching_Pack_&RPT_LABEL..xlsx"
+    OPTIONS(SHEET_INTERVAL='NONE' EMBEDDED_TITLES='YES');
+
+/* TL scorecard */
+ODS EXCEL OPTIONS(SHEET_NAME='My Scorecard');
+PROC SQL NOPRINT;
+    SELECT Name INTO :tl_name FROM TLEarn_all
+    WHERE CampaignMonth = &RPT_MONTH;
+QUIT;
+
+TITLE1 "TL SCORECARD - &tl_name";
+TITLE2 "%SYSFUNC(PUTN(&RPT_MONTH,MONYY7.))";
+
+PROC PRINT DATA=TLEarn_all NOOBS LABEL
+    STYLE(HEADER)=[BACKGROUND=#2C3E50 COLOR=WHITE FONTWEIGHT=BOLD];
+    WHERE CampaignMonth = &RPT_MONTH;
+    VAR SLRetail SLCommercial TAT EffortScore QA TeamEngagement
+        RetailSR RetailPA CommSR CommPA GWP_AVG FC_AVG Comp_AVG
+        OpsScore CustScore OverallScore EarnRate Earn;
+    FORMAT SLRetail SLCommercial EffortScore QA TeamEngagement
+           RetailSR RetailPA CommSR CommPA FC_AVG PERCENT9.2
+           GWP_AVG Earn NLMNY16.2
+           OpsScore CustScore OverallScore 5.2
+           EarnRate PERCENT8.0;
+RUN;
+
+/* Team roster - worst first */
+ODS EXCEL OPTIONS(SHEET_NAME='Team Roster');
+
+PROC SQL;
+    CREATE TABLE roster AS
+    SELECT Name,
+           Desk,
+           MAX(EffeScore)    AS Effe,
+           MAX(SaveScore)    AS Save,
+           MAX(FCScore)      AS FC,
+           MAX(GWPScore)     AS GWP,
+           MAX(CompScore)    AS Comp,
+           MAX(EffoScore)    AS Effort,
+           MAX(QAScore)      AS QA,
+           MAX(OverallScore) AS Score FORMAT=5.2,
+           PUT(MAX(OverallScore),ratingband.) AS Rating LENGTH=12,
+           SUM(Earn)         AS TotalEarn FORMAT=NLMNY16.2
+    FROM AgentEarn_now
+    GROUP BY Name, Desk
+    ORDER BY Score;   /* worst first */
+QUIT;
+
+TITLE1 "TEAM ROSTER - %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.))";
+TITLE2 'Ranked worst-first by Overall Score';
+PROC PRINT DATA=roster NOOBS LABEL
+    STYLE(HEADER)=[BACKGROUND=#2C3E50 COLOR=WHITE FONTWEIGHT=BOLD];
+RUN;
+
+/* Component health */
+ODS EXCEL OPTIONS(SHEET_NAME='Component Health');
+
+PROC SQL;
+    CREATE TABLE comp_health AS
+    SELECT 'Effectiveness' AS Component LENGTH=16,
+           MEAN(EffeScore) AS AvgPts FORMAT=4.2,
+           SUM(5 - EffeScore) AS TotalLost FORMAT=6.2,
+           SUM(EffeScore <= 2) / COUNT(*) AS PctLow FORMAT=PERCENT8.0
+    FROM (SELECT Agent, MAX(EffeScore) AS EffeScore FROM AgentEarn_now GROUP BY Agent)
+    UNION
+    SELECT 'Save Ratio', MEAN(SaveScore), SUM(5-SaveScore), SUM(SaveScore<=2)/COUNT(*)
+    FROM (SELECT Agent, MAX(SaveScore) AS SaveScore FROM AgentEarn_now GROUP BY Agent)
+    UNION
+    SELECT '1st Collection', MEAN(FCScore), SUM(5-FCScore), SUM(FCScore<=2)/COUNT(*)
+    FROM (SELECT Agent, MAX(FCScore) AS FCScore FROM AgentEarn_now GROUP BY Agent)
+    UNION
+    SELECT 'GWP Retained', MEAN(GWPScore), SUM(5-GWPScore), SUM(GWPScore<=2)/COUNT(*)
+    FROM (SELECT Agent, MAX(GWPScore) AS GWPScore FROM AgentEarn_now GROUP BY Agent)
+    UNION
+    SELECT 'Complaints', MEAN(CompScore), SUM(5-CompScore), SUM(CompScore<=2)/COUNT(*)
+    FROM (SELECT Agent, MAX(CompScore) AS CompScore FROM AgentEarn_now GROUP BY Agent)
+    UNION
+    SELECT 'Effort Score', MEAN(EffoScore), SUM(5-EffoScore), SUM(EffoScore<=2)/COUNT(*)
+    FROM (SELECT Agent, MAX(EffoScore) AS EffoScore FROM AgentEarn_now GROUP BY Agent)
+    UNION
+    SELECT 'QA', MEAN(QAScore), SUM(5-QAScore), SUM(QAScore<=2)/COUNT(*)
+    FROM (SELECT Agent, MAX(QAScore) AS QAScore FROM AgentEarn_now GROUP BY Agent)
+    ORDER BY AvgPts;
+QUIT;
+
+TITLE1 'COMPONENT HEALTH - Points lost by component';
+TITLE2 'Lower avg = broader issue';
+PROC PRINT DATA=comp_health NOOBS LABEL
+    STYLE(HEADER)=[BACKGROUND=#2C3E50 COLOR=WHITE FONTWEIGHT=BOLD];
+RUN;
+
+/* Coaching priorities: below 3.0 and close-to-next-tier */
+ODS EXCEL OPTIONS(SHEET_NAME='Coaching Priorities');
+
+PROC SQL;
+    CREATE TABLE below_threshold AS
+    SELECT Name, Desk, OverallScore FORMAT=5.2,
+           Rating,
+           3.0 - OverallScore AS GapToME FORMAT=5.2,
+           CASE WHEN DeskGroup = 'Inbound' THEN 0.05 ELSE 0.08 END * CollectedGWP AS EstUplift FORMAT=NLMNY16.2
+    FROM AgentEarn_now
+    WHERE OverallScore < 3
+    ORDER BY OverallScore;
+QUIT;
+
+TITLE1 'AGENTS BELOW EARN THRESHOLD (Score < 3.0)';
+PROC PRINT DATA=below_threshold NOOBS LABEL
+    STYLE(HEADER)=[BACKGROUND=#2C3E50 COLOR=WHITE FONTWEIGHT=BOLD];
+RUN;
+
+PROC SQL;
+    CREATE TABLE close_to_next AS
+    SELECT Name, Desk, OverallScore FORMAT=5.2,
+           NextThresh, GapToNext FORMAT=5.2,
+           EarnRate, NextRate,
+           EarnRate * CollectedGWP AS CurrentEarn FORMAT=NLMNY16.2,
+           NextRate * CollectedGWP AS PotentialEarn FORMAT=NLMNY16.2,
+           PotentialUplift FORMAT=NLMNY16.2
+    FROM AgentEarn_now
+    WHERE GapToNext < 0.5 AND NOT MISSING(NextThresh)
+    ORDER BY GapToNext;
+QUIT;
+
+TITLE1 'CLOSE TO NEXT TIER (worth pushing)';
+PROC PRINT DATA=close_to_next NOOBS LABEL
+    STYLE(HEADER)=[BACKGROUND=#2C3E50 COLOR=WHITE FONTWEIGHT=BOLD];
+RUN;
+
+ODS EXCEL CLOSE;
+
+/*---------------------------------------------------------------------
+  3c. MANAGER OVERVIEW PACK
+---------------------------------------------------------------------*/
+ODS EXCEL FILE="&OUT_PATH/Manager_Overview_Pack_&RPT_LABEL..xlsx"
+    OPTIONS(SHEET_INTERVAL='NONE' EMBEDDED_TITLES='YES');
+
+/* Manager scorecard */
+ODS EXCEL OPTIONS(SHEET_NAME='My Scorecard');
+PROC SQL NOPRINT;
+    SELECT Name INTO :mgr_name FROM MgmtEarn_all
+    WHERE CampaignMonth = &RPT_MONTH;
+QUIT;
+
+TITLE1 "MANAGER SCORECARD - &mgr_name";
+TITLE2 "%SYSFUNC(PUTN(&RPT_MONTH,MONYY7.))";
+PROC PRINT DATA=MgmtEarn_all NOOBS LABEL
+    STYLE(HEADER)=[BACKGROUND=#1A2E4A COLOR=WHITE FONTWEIGHT=BOLD];
+    WHERE CampaignMonth = &RPT_MONTH;
+    VAR CollPerc_12m GWP_AVG FC_AVG SCA_AVG SCT_AVG Comp_AVG QACoaching
+        OpScore CustScore OverallScore EarnRate GWP_COLL Earn;
+    FORMAT CollPerc_12m FC_AVG QACoaching PERCENT9.2
+           GWP_AVG GWP_COLL Earn NLMNY16.2
+           OpScore CustScore OverallScore SCA_AVG SCT_AVG Comp_AVG 5.2
+           EarnRate PERCENT8.2;
+RUN;
+
+/* Team of teams */
+ODS EXCEL OPTIONS(SHEET_NAME='Team of Teams');
+TITLE1 "TEAM OF TEAMS - %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.))";
+PROC PRINT DATA=roster NOOBS LABEL
+    STYLE(HEADER)=[BACKGROUND=#1A2E4A COLOR=WHITE FONTWEIGHT=BOLD];
+RUN;
+
+/* Payout summary */
+ODS EXCEL OPTIONS(SHEET_NAME='Payout Summary');
+
+PROC SQL;
+    CREATE TABLE payout_desk AS
+    SELECT Desk,
+           COUNT(DISTINCT Agent) AS Agents,
+           SUM(CollectedGWP) AS TotalGWP FORMAT=NLMNY16.2,
+           SUM(Earn) AS TotalEarn FORMAT=NLMNY16.2
+    FROM AgentEarn_now
+    GROUP BY Desk
+    ORDER BY TotalEarn DESC;
+QUIT;
+
+TITLE1 'PAYOUT BY DESK';
+PROC PRINT DATA=payout_desk NOOBS LABEL
+    STYLE(HEADER)=[BACKGROUND=#1A2E4A COLOR=WHITE FONTWEIGHT=BOLD];
+RUN;
+
+PROC SQL;
+    CREATE TABLE payout_rating AS
+    SELECT Rating,
+           COUNT(DISTINCT Agent) AS People,
+           SUM(CollectedGWP) AS TotalGWP FORMAT=NLMNY16.2,
+           SUM(Earn) AS TotalEarn FORMAT=NLMNY16.2
+    FROM AgentEarn_now
+    GROUP BY Rating
+    ORDER BY CASE Rating
+        WHEN 'SIR' THEN 0
+        WHEN 'IR'  THEN 1
+        WHEN 'ME'  THEN 2
+        WHEN 'EE'  THEN 3
+        WHEN 'Exceptional' THEN 4 END;
+QUIT;
+
+TITLE1 'PAYOUT BY RATING';
+PROC PRINT DATA=payout_rating NOOBS LABEL
+    STYLE(HEADER)=[BACKGROUND=#1A2E4A COLOR=WHITE FONTWEIGHT=BOLD];
+RUN;
+
+/* Trend (4 months) */
+ODS EXCEL OPTIONS(SHEET_NAME='Trend (4 months)');
+
+PROC SQL;
+    CREATE TABLE monthly_trend AS
+    SELECT CampaignMonth FORMAT=MONYY7. AS Month,
+           COUNT(DISTINCT Agent) AS Agents,
+           MEAN(OverallScore) AS AvgScore FORMAT=5.2,
+           SUM(CollectedGWP) AS TotalGWP FORMAT=NLMNY16.2,
+           SUM(Earn) AS TotalEarn FORMAT=NLMNY16.2
+    FROM AgentEarn_scored
+    GROUP BY CampaignMonth
+    ORDER BY CampaignMonth;
+QUIT;
+
+TITLE1 'MONTHLY BOOK ROLL-UP';
+PROC PRINT DATA=monthly_trend NOOBS LABEL
+    STYLE(HEADER)=[BACKGROUND=#1A2E4A COLOR=WHITE FONTWEIGHT=BOLD];
+RUN;
+
+/* Agent score matrix across months */
+PROC TRANSPOSE DATA=AgentEarn_scored OUT=agent_matrix (DROP=_NAME_)
+    PREFIX=M_;
+    BY Name;
+    ID CampaignMonth;
+    VAR OverallScore;
+RUN;
+
+TITLE1 'AGENT SCORE TREND';
+PROC PRINT DATA=agent_matrix NOOBS LABEL
+    STYLE(HEADER)=[BACKGROUND=#1A2E4A COLOR=WHITE FONTWEIGHT=BOLD];
+RUN;
+
+ODS EXCEL CLOSE;
+
+/*=====================================================================
+  END OF PIPELINE
+=====================================================================*/
