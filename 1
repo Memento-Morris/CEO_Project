@@ -1,299 +1,410 @@
-%put TAG:JobName1=STI_CA_W_COMP_ITEMS_EMAILS; /* 1st Level of the Job Name --> Max 64 Chars */
-%put TAG:JobName2=Daily; /* Optional Second Level of the Job Name (used for sub dividing Jobs if needed) --> Max 64 Chars */
-%put TAG:JobCategory=Campaigns; /* ETL, Reporting, Model, Leads, Campaigns --> Max 16 Chars */
-%put TAG:JobPurpose= Operational; 
-%put TAG:JobPriority=Medium; /* Low, Medium, High, Critical --> Max 8 Chars */
-%put TAG:JobStatus=Prod; /* AdHoc, Lab, Dev, QA, Prod --> Max 8 Chars */
+/*=====================================================================
+  OBR EMAIL DISTRIBUTION - TESTING PHASE
+  ------------------------------------------------------------
+  Sends 3 emails, ALL routed to Morris only while testing:
+
+    1. Agent email   - one xlsx attached PER AGENT (their pack only,
+                        so nobody's file shows anyone else's numbers)
+    2. TL email      - TL coaching pack attached, roster run-down in body
+    3. Manager email - manager overview pack attached, book run-down in body
+
+  Each body is built from the data (top/bottom performer, averages,
+  payout splits, weak component) via macro variables - not static text.
+
+  DEPENDS ON: this must run in the same session AFTER
+  OBR_View_Generation.sas, since it reuses AgentEarn_now, roster,
+  comp_health, payout_desk, payout_rating, monthly_trend, TLEarn_all
+  and MgmtEarn_all without recomputing them.
+
+  TEST MODE: every %macro below sends only to &TEST_TO. When ready to
+  go live, replace the TO= line inside each macro with the real
+  distribution logic (search "TEST MODE" markers below).
+
+  Author: Morris | Growth Analytics
+=====================================================================*/
+
+%LET TEST_TO   = Morris.Nkomo@fnb.co.za;
+%LET AGENT_OUT = &OUT_PATH/Agents;
+
+/* Make sure the per-agent output folder exists */
+options dlcreatedir;
+libname _mkdir "&AGENT_OUT";
+libname _mkdir clear;
+
+/*=====================================================================
+  STEP 1 - ONE WORKBOOK PER AGENT (real file-level segregation)
+=====================================================================*/
+
+%MACRO agent_file(agent_fnum, agent_name);
+
+    %GLOBAL agent_file_&agent_fnum;
+    %LET agent_file_&agent_fnum = &AGENT_OUT/Agent_OBR_&agent_fnum._&RPT_LABEL..xlsx;
+
+    ODS EXCEL FILE="&&agent_file_&agent_fnum"
+        OPTIONS(SHEET_INTERVAL='NONE' EMBEDDED_TITLES='YES' FLOW='TABLES');
+
+    /* --- This month summary --- */
+    ODS EXCEL OPTIONS(SHEET_NAME='OBR Receipt');
+    TITLE1 "OBR RECEIPT - &agent_name";
+    TITLE2 "Employee ID: &agent_fnum   |   Period: %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.))";
+
+    PROC PRINT DATA=AgentEarn_now NOOBS LABEL
+        STYLE(HEADER)=[BACKGROUND=#B85042 COLOR=WHITE FONTWEIGHT=BOLD];
+        WHERE Agent = "&agent_fnum";
+        VAR Product Desk OverallScore RatingFull EarnRate CollectedGWP Earn;
+        FORMAT OverallScore 5.2 EarnRate PERCENT8.0
+               CollectedGWP Earn NLMNY16.2;
+        LABEL OverallScore = 'Overall Score'
+              RatingFull   = 'Rating'
+              EarnRate     = 'Earn Rate'
+              CollectedGWP = 'Collected GWP'
+              Earn         = 'Earn (share)';
+    RUN;
+
+    /* --- Top row for the scorecard grid --- */
+    PROC SQL NOPRINT;
+        SELECT Product, Desk INTO :top_prod, :top_desk
+        FROM AgentEarn_now
+        WHERE Agent = "&agent_fnum"
+        ORDER BY OverallScore DESC;
+    QUIT;
+
+    DATA scorecard_&agent_fnum.;
+        SET AgentEarn_now;
+        WHERE Agent = "&agent_fnum" AND Product = "&top_prod" AND Desk = "&top_desk";
+        LENGTH RowLabel $22;
+        RowLabel = 'Target';
+        c_Effe = '100%'; c_Save = '50%/32%'; c_FC = '80%'; c_GWP = 'R160k/R120k';
+        c_Comp = '0'; c_Effo = '90%'; c_QA = '90%'; c_Score = ''; c_Rating = '';
+        OUTPUT;
+        RowLabel = 'Weighting';
+        c_Effe = '15%'; c_Save = '30%'; c_FC = '30%'; c_GWP = '25%';
+        c_Comp = '10%'; c_Effo = '45%'; c_QA = '45%'; c_Score = ''; c_Rating = '';
+        OUTPUT;
+        RowLabel = 'Actual Result';
+        c_Effe = PUT(Effectiveness, PERCENT9.2);
+        c_Save = PUT(SaveRatio, PERCENT9.2);
+        c_FC   = PUT(FirstCollPerc, PERCENT9.2);
+        c_GWP  = CATS('R ', PUT(RetainedGWP, COMMA14.2));
+        c_Comp = PUT(Complaints, BEST.);
+        c_Effo = PUT(EffortScore, PERCENT9.2);
+        c_QA   = PUT(QA, PERCENT9.2);
+        c_Score = ''; c_Rating = '';
+        OUTPUT;
+        RowLabel = 'Points (1-5)';
+        c_Effe = PUT(EffeScore, 1.);
+        c_Save = PUT(SaveScore, 1.);
+        c_FC   = PUT(FCScore,   1.);
+        c_GWP  = PUT(GWPScore,  1.);
+        c_Comp = PUT(CompScore, 1.);
+        c_Effo = PUT(EffoScore, 1.);
+        c_QA   = PUT(QAScore,   1.);
+        c_Score = PUT(OverallScore, 5.2);
+        c_Rating = RatingFull;
+        OUTPUT;
+        RowLabel = 'Contribution to Score';
+        c_Effe = PUT(Effe_Contrib, 4.2);
+        c_Save = PUT(Save_Contrib, 4.2);
+        c_FC   = PUT(FC_Contrib,   4.2);
+        c_GWP  = PUT(GWP_Contrib,  4.2);
+        c_Comp = PUT(Comp_Contrib, 4.2);
+        c_Effo = PUT(Effo_Contrib, 4.2);
+        c_QA   = PUT(QA_Contrib,   4.2);
+        c_Score = PUT(OverallScore, 5.2);
+        c_Rating = '';
+        OUTPUT;
+        KEEP RowLabel c_:;
+    RUN;
+
+    TITLE3 "SCORECARD - &top_prod / &top_desk";
+    PROC REPORT DATA=scorecard_&agent_fnum. NOWD
+        STYLE(HEADER)=[BACKGROUND=#B85042 COLOR=WHITE FONTWEIGHT=BOLD];
+        COLUMN RowLabel c_Effe c_Save c_FC c_GWP c_Comp c_Effo c_QA c_Score c_Rating;
+        DEFINE RowLabel / DISPLAY ' ' STYLE=[FONTWEIGHT=BOLD BACKGROUND=#F5E6DC];
+        DEFINE c_Effe   / DISPLAY 'Effectiveness';
+        DEFINE c_Save   / DISPLAY 'Save Ratio';
+        DEFINE c_FC     / DISPLAY '1st Coll %';
+        DEFINE c_GWP    / DISPLAY 'GWP Retained';
+        DEFINE c_Comp   / DISPLAY 'Complaints';
+        DEFINE c_Effo   / DISPLAY 'Effort Score';
+        DEFINE c_QA     / DISPLAY 'QA';
+        DEFINE c_Score  / DISPLAY 'Score';
+        DEFINE c_Rating / DISPLAY 'Rating';
+    RUN;
+
+    /* --- Where you lost points --- */
+    DATA reflect_&agent_fnum.;
+        SET AgentEarn_now;
+        WHERE Agent = "&agent_fnum" AND Product = "&top_prod" AND Desk = "&top_desk";
+        LENGTH Component $18;
+        Component = 'Effectiveness'; Points = EffeScore; Earned = Effe_Contrib;
+        MaxPossible = Effe_MaxContrib; Gap = Effe_Lost; OUTPUT;
+        Component = 'Save Ratio';    Points = SaveScore; Earned = Save_Contrib;
+        MaxPossible = Save_MaxContrib; Gap = Save_Lost; OUTPUT;
+        Component = '1st Collection';Points = FCScore;   Earned = FC_Contrib;
+        MaxPossible = FC_MaxContrib;   Gap = FC_Lost;   OUTPUT;
+        Component = 'GWP Retained';  Points = GWPScore;  Earned = GWP_Contrib;
+        MaxPossible = GWP_MaxContrib;  Gap = GWP_Lost;  OUTPUT;
+        Component = 'Complaints';    Points = CompScore; Earned = Comp_Contrib;
+        MaxPossible = Comp_MaxContrib; Gap = Comp_Lost; OUTPUT;
+        Component = 'Effort Score';  Points = EffoScore; Earned = Effo_Contrib;
+        MaxPossible = Effo_MaxContrib; Gap = Effo_Lost; OUTPUT;
+        Component = 'QA';            Points = QAScore;   Earned = QA_Contrib;
+        MaxPossible = QA_MaxContrib;   Gap = QA_Lost;   OUTPUT;
+        KEEP Component Points Earned MaxPossible Gap;
+    RUN;
+
+    DATA reflect_&agent_fnum.;
+        SET reflect_&agent_fnum.;
+        LENGTH CoachingNote $40;
+        IF Points >= 5      THEN CoachingNote = 'Maxed. Hold this.';
+        ELSE IF Points >= 4 THEN CoachingNote = 'Strong. One more push for max.';
+        ELSE IF Points >= 3 THEN CoachingNote = 'On target. Room to improve.';
+        ELSE IF Points >= 2 THEN CoachingNote = 'Below target. Focus area.';
+        ELSE                     CoachingNote = 'Critical. Address first.';
+    RUN;
+
+    PROC SORT DATA=reflect_&agent_fnum.; BY DESCENDING Gap; RUN;
+
+    TITLE3 'WHERE YOU STAND';
+    PROC PRINT DATA=reflect_&agent_fnum. NOOBS LABEL
+        STYLE(HEADER)=[BACKGROUND=#B85042 COLOR=WHITE FONTWEIGHT=BOLD];
+        VAR Component Points Earned MaxPossible Gap CoachingNote;
+        FORMAT Earned MaxPossible Gap 4.2;
+        LABEL Component='Component' Points='Your Points'
+              Earned='You Earned' MaxPossible='Max Possible'
+              Gap='Gap' CoachingNote='Coaching Note';
+    RUN;
+
+    /* --- Trend --- */
+    PROC SQL;
+        CREATE TABLE trend_&agent_fnum. AS
+        SELECT CampaignMonth FORMAT=MONYY7. AS Month,
+               MAX(OverallScore) AS BestScore FORMAT=5.2,
+               PUT(MAX(OverallScore), ratingband.) AS Rating LENGTH=12,
+               SUM(CollectedGWP) AS TotalGWP FORMAT=NLMNY16.2,
+               SUM(Earn)         AS TotalEarn FORMAT=NLMNY16.2
+        FROM AgentEarn_scored
+        WHERE Agent = "&agent_fnum"
+        GROUP BY CampaignMonth
+        ORDER BY CampaignMonth;
+    QUIT;
+
+    TITLE3 'YOUR TREND (4 MONTHS)';
+    PROC PRINT DATA=trend_&agent_fnum. NOOBS LABEL
+        STYLE(HEADER)=[BACKGROUND=#B85042 COLOR=WHITE FONTWEIGHT=BOLD];
+    RUN;
+
+    TITLE;
+    ODS EXCEL CLOSE;
+%MEND;
+
+/* Build the per-agent file list, same pattern as the sheet loop in
+   OBR_View_Generation.sas, but now each call opens/closes its own file */
+PROC SQL NOPRINT;
+    SELECT DISTINCT CATS("%NRSTR(%agent_file)","(",Agent,",",Name,")")
+    INTO :AgentFileCalls SEPARATED BY ';'
+    FROM AgentEarn_now;
+QUIT;
+&AgentFileCalls.;
+
+/* Collect the generated file paths into one space-separated, quoted
+   list for the ATTACH= option, e.g. ("path1" "path2" "path3" ...) */
+PROC SQL NOPRINT;
+    SELECT DISTINCT CATS('"', "&AGENT_OUT", '/Agent_OBR_', Agent, '_', "&RPT_LABEL", '.xlsx"')
+    INTO :AgentAttachList SEPARATED BY ' '
+    FROM AgentEarn_now;
+QUIT;
+%LET AgentAttachList = (&AgentAttachList);
 
 
+/*=====================================================================
+  STEP 2 - RUN-DOWN STATS FOR EACH EMAIL BODY
+=====================================================================*/
 
-/*set the required information*/
-%include "/data/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Servicing_Flow_Creds.sas";
-/*libname workflow odbc user=&Us_FNBHA datasrc="FNBHA" pass=&Pwd_FNBHA schema=WORKFLOW connection=unique;*/
-/**/
-/*proc import */
-/*datafile="/data/fnbinsurance/Corporate_Actuarial/Short_Term/Servicing/Servicing.xlsx"*/
-/*/*datafile="/data/fnbinsurance/Collections/Ops/Excel/LOC_Claims_MINT_22APR2021.xlsx"*/*/
-/*dbms=xlsx replace*/
-/*out=Servicing;*/
-/*quit;*/
-/**/
-/*proc sql;*/
-/*select quote(employeenumber) */
-/*into*/
-/*:agents seperated by ","*/
-/*from Servicing*/
-/*where active = 1*/
-/*;*/
-/**/
-/**/
-/*%let agents = */
-/**/
-/*(*/
-/*'F2988763',*/
-/*'F3446921',*/
-/*'F4650085',*/
-/*'F4841239',*/
-/*'F4903773',*/
-/*'F4961935',*/
-/*'F5107695',*/
-/*'F5192145',*/
-/*'F5216893',*/
-/*'F5282004',*/
-/*'F5324823',*/
-/*'F5330246',*/
-/*'F5369665',*/
-/*'F5485428',*/
-/*'F5493552',*/
-/*'F5493919',*/
-/*'F5502764',*/
-/*'F5518598',*/
-/*'F5530563',*/
-/*'F5554020',*/
-/*'F7527373',*/
-/*'F8872892',*/
-/*'F8872449',*/
-/*'F5584817',*/
-/*'F5663393',*/
-/*'F5663547',*/
-/*'F5073502',*/
-/*'F8877187',*/
-/*'F8877177'*/
-/*);*/
-/*%PUT &AGENTS;*/;
+/* --- Agent-pack run-down --- */
+PROC SQL NOPRINT;
+    SELECT COUNT(DISTINCT Agent) INTO :n_agents FROM AgentEarn_now;
 
-/* ---------------------------------------------------------------------------
-   @AL adding new agent list 
---------------------------------------------------------------------------- */
+    SELECT Name, OverallScore FORMAT=5.2
+        INTO :top_agent_name, :top_agent_score
+        FROM AgentEarn_now ORDER BY OverallScore DESC;
 
-%include "/data/fnbins/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Libnames.sas";
+    SELECT Name, OverallScore FORMAT=5.2
+        INTO :low_agent_name, :low_agent_score
+        FROM AgentEarn_now ORDER BY OverallScore;
 
-/*** Build &agents from new source table ***/
-Data Servicing;
-Set  STI_PBI.STI_Servicing_Agents;
-Run;
+    SELECT COUNT(DISTINCT Agent) INTO :n_below3
+        FROM AgentEarn_now WHERE OverallScore < 3;
 
-proc sql noprint;
-    select distinct
-           cats("'", strip(EmployeeNumber), "'")
-    into :agents_list separated by ','
-    from STI_PBI.STI_Servicing_Agents
-    ;
-quit;
+    SELECT PUT(MEAN(OverallScore),5.2) INTO :avg_score
+        FROM (SELECT Agent, MAX(OverallScore) AS OverallScore
+              FROM AgentEarn_now GROUP BY Agent);
 
-/* Wrap in parentheses for IN() usage */
-%let agents = (&agents_list);
-%put NOTE: &=agents;
+    SELECT PUT(SUM(Earn),NLMNY16.2) INTO :total_agent_earn
+        FROM AgentEarn_now;
+QUIT;
 
-;
-;/******/
+/* --- TL-pack run-down (built off the roster/comp_health tables that
+       already exist from OBR_View_Generation.sas) --- */
+PROC SQL NOPRINT;
+    SELECT CATX(', ', Name, PUT(Score,5.2))
+        INTO :top3_agents SEPARATED BY ' | '
+        FROM (SELECT * FROM roster ORDER BY Score DESC) (OBS=3);
 
-/* ---------------------------------------------------------------------------*/
+    SELECT CATX(', ', Name, PUT(Score,5.2))
+        INTO :bottom3_agents SEPARATED BY ' | '
+        FROM (SELECT * FROM roster ORDER BY Score) (OBS=3);
+
+    SELECT PUT(MEAN(Score),5.2) INTO :team_avg_score FROM roster;
+
+    SELECT Component INTO :weakest_component
+        FROM comp_health ORDER BY AvgPts;
+
+    SELECT PUT(SUM(TotalEarn),NLMNY16.2) INTO :team_total_earn FROM roster;
+QUIT;
+
+/* --- Manager-pack run-down (payout_desk / payout_rating / monthly_trend
+       already exist from OBR_View_Generation.sas) --- */
+PROC SQL NOPRINT;
+    SELECT Desk, PUT(TotalEarn,NLMNY16.2)
+        INTO :top_desk_name, :top_desk_earn
+        FROM payout_desk ORDER BY TotalEarn DESC;
+
+    SELECT PUT(SUM(TotalEarn),NLMNY16.2) INTO :book_total_earn FROM payout_desk;
+
+    SELECT CATX(': ', Rating, PUT(People,BEST.))
+        INTO :rating_breakdown SEPARATED BY ' | '
+        FROM payout_rating;
+QUIT;
+
+/* Month-on-month direction, off monthly_trend */
+PROC SQL NOPRINT;
+    SELECT COUNT(*) INTO :n_months FROM monthly_trend;
+QUIT;
+%IF &n_months >= 2 %THEN %DO;
+    PROC SQL NOPRINT;
+        SELECT AvgScore INTO :score_this_month
+            FROM (SELECT * FROM monthly_trend ORDER BY Month DESC) (OBS=1);
+        SELECT AvgScore INTO :score_last_month
+            FROM (SELECT * FROM monthly_trend ORDER BY Month DESC) (OBS=1 FIRSTOBS=2);
+    QUIT;
+    %LET score_move = %SYSEVALF(&score_this_month - &score_last_month);
+    %IF %SYSEVALF(&score_move >= 0) %THEN %LET trend_word = up;
+    %ELSE %LET trend_word = down;
+%END;
+%ELSE %DO;
+    %LET score_move  = 0;
+    %LET trend_word  = flat (only one month of data so far);
+%END;
 
 
-%include "/data/fnbinsurance/Growth_Analytics/SASCODE/DEPLOYED/Automation/STI_CA_2/Servicing_Flow_Creds.sas";
+/*=====================================================================
+  STEP 3 - THREE TEST EMAILS, ALL TO MORRIS
+=====================================================================*/
+
+/*--- 3a. AGENT EMAIL - one xlsx per agent attached, ~&n_agents files ---*/
+%MACRO email_agents;
+    /* TEST MODE: sends to &TEST_TO only. Go-live: loop this macro per
+       agent, TO=<agent's own email>, ATTACH=(their one file only). */
+    filename myemail email
+        from    = "asher.levin@fnb.co.za"
+        to      = "&TEST_TO"
+        subject = "TEST - Agent OBR Packs - %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.))"
+        attach  = &AgentAttachList
+        ;
+
+    data _null_;
+        file myemail;
+        put "Hi Morris,";
+        put " ";
+        put "TEST RUN - agent OBR packs for %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.)).";
+        put "This is a dry run: all &n_agents agent files are attached to this";
+        put "one email so you can review them together. In production each";
+        put "agent gets only their own file.";
+        put " ";
+        put "Quick run-down:";
+        put "  - Top performer: &top_agent_name (&top_agent_score)";
+        put "  - Needs the most support: &low_agent_name (&low_agent_score)";
+        put "  - Team average score: &avg_score";
+        put "  - Agents below the 3.0 earn threshold: &n_below3 of &n_agents";
+        put "  - Total agent payout this month: &total_agent_earn";
+        put " ";
+        put "Kind Regards";
+        put "Orris";
+    run;
+
+    filename myemail email;
+%MEND;
+%email_agents;
 
 
-%LET Us_FNBHA2=FNBLFELDA;
-%LET Pwd_FNBHA2='@n8lf3lda';
+/*--- 3b. TL EMAIL - TL coaching pack attached ---*/
+%MACRO email_tl;
+    filename myemail email
+        from    = "asher.levin@fnb.co.za"
+        to      = "&TEST_TO"
+        subject = "TEST - TL Coaching Pack - %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.))"
+        attach  = "&OUT_PATH/TL_Coaching_Pack_&RPT_LABEL..xlsx"
+        ;
+
+    data _null_;
+        file myemail;
+        put "Hi Morris,";
+        put " ";
+        put "TEST RUN - TL coaching pack for %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.)).";
+        put " ";
+        put "Quick run-down:";
+        put "  - Team average score: &team_avg_score";
+        put "  - Top 3 this month: &top3_agents";
+        put "  - Needing coaching attention: &bottom3_agents";
+        put "  - Weakest component across the team: &weakest_component";
+        put "  - Total team payout: &team_total_earn";
+        put " ";
+        put "Full roster, component health and coaching priority sheets";
+        put "are in the attached pack.";
+        put " ";
+        put "Kind Regards";
+        put "Orris";
+    run;
+
+    filename myemail email;
+%MEND;
+%email_tl;
 
 
-/*get and combine the data from workflow*/
+/*--- 3c. MANAGER EMAIL - manager overview pack attached ---*/
+%MACRO email_manager;
+    filename myemail email
+        from    = "asher.levin@fnb.co.za"
+        to      = "&TEST_TO"
+        subject = "TEST - Manager Overview Pack - %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.))"
+        attach  = "&OUT_PATH/Manager_Overview_Pack_&RPT_LABEL..xlsx"
+        ;
 
-PROC SQL ;
-     CONNECT TO ODBC as WORKFLOW_ (DATASRC="FNBHA" USER=FNBLFELDA PASS='@n8lf3lda' );
+    data _null_;
+        file myemail;
+        put "Hi Morris,";
+        put " ";
+        put "TEST RUN - manager overview pack for %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.)).";
+        put " ";
+        put "Quick run-down:";
+        put "  - Total book payout: &book_total_earn";
+        put "  - Top-earning desk: &top_desk_name (&top_desk_earn)";
+        put "  - Rating split (people): &rating_breakdown";
+        put "  - Average score is trending &trend_word vs last month";
+        put " ";
+        put "Team-of-teams, payout-by-desk, payout-by-rating and the";
+        put "4-month roll-up are all in the attached pack.";
+        put " ";
+        put "Kind Regards";
+        put "Orris";
+    run;
 
+    filename myemail email;
+%MEND;
+%email_manager;
 
-     create table FNB400_AYH_Workflow as 
-     select * 
-     from connection to WORKFLOW_
-                ( 
-
-	select a.*,b.name as Status_Name,c.name as Queue_Name,d.name as Worktype_Name,
-     f.Created_Date as Comments_Created_Date, f.id as COMMENTS_ID,f.COMMENT,
-     f.BEGIN_DATE as Comments_Begin_Date, f.END_DATE as Comments_End_Date, 
-     g.name as Comments_Status_Name,h.name as Comments_Queue_Name,i.name as Comments_Worktype_Name
-     from workflow.Workflow_Item a
-     left join workflow.Status b on
-     a.status_id = b.id
-     left join workflow.Queue c on
-     a.queue_id = c.id
-     left join workflow.Worktype d on
-     a.worktype_id = d.id
-     left join workflow.WORKFLOW_ITEM_WORKFLOW_COMMENT e on
-     a.id = e.WORKFLOW_ITEM_ID
-     left join workflow.workflow_comment f on
-     e.COMMENTS_ID = f.id
-     left join workflow.Status g on
-     f.status_id = g.id
-     left join workflow.Queue h on
-     f.queue_id = h.id
-     left join workflow.Worktype i on
-     f.worktype_id = i.id
-/*where upper(Queue_Name) in ('SHORT TERM SERVICING','PRE-QA','END') */
-where a.ASSIGNED_TO in &Agents
-and upper(c.name) in ('LOCSERVICING','LOCPERSERVICING','LOCBUSSERVICING','SHORT TERM SERVICING','PRE-QA','END')
-
-);
-disconnect from WORKFLOW_;
-quit;
-
-
-
-proc sql;
-Create Table FNB400_AYH_Workflow2 as select
-ID,CREATED_DATE,intnx('month',datepart(CREATED_DATE),0,'E') format date9. as Month,
-ASSIGNED_TO,POLICY_NUMBER,BEGIN_DATE,END_DATE,QUEUE_ID,Queue_Name,
-WORKTYPE_ID,Worktype_Name,STATUS_ID,Status_Name,REFERENCE_NUMBER,
-Comments_Created_Date,COMMENTS_ID,COMMENT,Comments_Begin_Date,Comments_End_Date,Comments_Status_Name,
-Comments_Queue_Name,Comments_Worktype_Name
-from FNB400_AYH_Workflow;
-quit;
-
- 
-
-proc sql;
-Create Table Workflow_Yest as select * from 
-FNB400_AYH_Workflow2
-where Status_Name = ('INDEXED');
-quit;
-
-/*proc sql;*/
-/*create table test as*/
-/*select distinct Status_Name*/
-/*from FNB400_AYH_Workflow2*/
-/*;Quit;*/
-
-%let date = date()-1;
-
-/*proc sql;*/
-/*select **/
-/*from LOC_Workflow_Yest*/
-/*where ASSIGNED_TO IN ("F2407000");*/
-/*QUIT;*/
-
-proc sql;
-Create Table OLDEST_ITEM_STEP as 
-select distinct id,intnx("month",&date,0,"end") as Month format date9.
-,ASSIGNED_TO,max(datepart(Comments_Begin_Date)) as Oldest_Item format date9.,&date-max(datepart(Comments_Begin_Date)) as No_Days format 8.,
-count(distinct ID) as number_of_items_in_queue
-from Workflow_Yest
-group by ID,ASSIGNED_TO;
-quit;
-
-proc sql;
-create table SERVICE_OLDEST_ITEM_FINAL as
-select distinct Month, ASSIGNED_TO, min(Oldest_Item) as Oldest_Item format date9., max(No_Days) as No_Days, sum(number_of_items_in_queue) as number_of_items_in_queue
-from OLDEST_ITEM_STEP
-group by ASSIGNED_TO;
-quit;
-
-
-
-/*SLA*/
-proc sql;
-create table Items as
-select distinct ID, Created_Date, Assigned_To, Policy_Number, upcase(Status_Name) as Status_Name, min(Comments_Created_Date) format datetime20. as min_Comments_Created_Date, 
-max(Comments_Created_Date) format datetime20. as max_Comments_Created_Date
-from FNB400_AYH_WORKFLOW2
-group by ID, Assigned_To, Policy_Number
-;quit;
-
-PROC sql;
-create table Items_step as
-select * 
-,CASE WHEN Status_Name in ("DONE","DUPLICATE","RETAINED","UNCONTACTABLE","NO ACTION REQUIRED") THEN "CLOSED"
-ELSE "OPEN"
-END AS Indicator
-from Items
-;quit;
-
-%let date = today();
-
-
-
-data SERVICE_ITEMS_FINAL;
-set Items_step;
-min_Created_Day_of_Week = weekday(datepart(min_comments_created_date));
-max_Created_Day_of_Week = weekday(datepart(max_comments_created_date));
-if min_Created_Day_of_Week in (2,3,4) then close_Target = min_Comments_Created_Date + 48*60*60;
-else if min_Created_Day_of_Week in (5,6) then close_Target = min_Comments_Created_Date + 96*60*60;
-else if min_Created_Day_of_Week = 7 then close_Target = dhms(datepart(min_Comments_Created_Date)+2,8,0,0) + 48*60*60;
-else if min_Created_Day_of_Week = 1 then close_Target = dhms(datepart(min_Comments_Created_Date)+1,8,0,0) + 48*60*60;
-format close_Target datetime20.;
-
-if Indicator = "CLOSED" and max_Comments_Created_Date > close_Target then SLA = 'Outside SLA';
-else if Indicator = "OPEN" and &date > datepart(close_Target) then SLA = 'Outside SLA';
-else SLA = 'In SLA';
-
-Duration = &date - datepart(close_Target);
-
-if Indicator = "CLOSED" then Assigned_Date = datepart(max_comments_created_date);
-else if Indicator = "OPEN" then Assigned_Date = &date-1;
-format Assigned_Date date10.;
-
-run;
-
-proc sql;
-
-create table Out_of_SLA_File as
-select *
-from SERVICE_ITEMS_FINAL
-where Indicator = "OPEN" 
-and SLA = "Outside SLA"
-;quit;
-
-
-/* importing active employees*/
-
-proc sql;
-create table Open_Items_Out_of_SLA as
-select  b.*,a.* 
-from Out_of_SLA_File a
-left join Servicing b
-on a.ASSIGNED_TO = b.EmployeeNumber
-where b.active = 1;
-run;
-
-
-
-/* Send email */
-
-proc export data=Open_Items_Out_of_SLA
-    outfile="/data/fnbinsurance/Corporate_Actuarial/Short_Term/Servicing/Open_items_out_of_SLA.csv"
-    dbms = csv
-    replace;
-run;
-
-%macro email(name);
-filename myemail email
-from = "asher.levin@fnb.co.za"
-to = "&name"
-cc=("asher.levin@fnb.co.za" "Morris.Nkomo@fnb.co.za")
-subject= "Open Items Out of SLA - Servicing"
-attach ="/data/fnbinsurance/Corporate_Actuarial/Short_Term/Servicing/Open_items_out_of_SLA.csv"
-;
-
-
-data _null_;
-file myemail;
-put "Hi everyone,";
-put "														";
-put "Attached is the Open items out of SLA document as of &today0_yymmdd10.";
-put "														";
-put "Please do remember to cc us when communicating with IT helpdesk on items which are not valid.";
-put "																							";
-put "Please note this is an automated email.";
-put "																		   ";
-put "Kind Regards";
-put "Orris";
-run;
-
-filename myemail email;
-%mend email;
-%email(asher.levin@fnb.co.za)
-%email(Cleoreece.Joseph@fnb.co.za)
-%email(ajay.jayalall@fnb.co.za)
-%email(Jenise.Connies@fnb.co.za)
-%email(lyzette.ferris@fnb.co.za)
-%email(leilani.debod@fnb.co.za)
+/*=====================================================================
+  END OF EMAIL DISTRIBUTION - TESTING PHASE
+=====================================================================*/
