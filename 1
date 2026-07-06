@@ -26,9 +26,14 @@
 %LET TEST_TO   = Morris.Nkomo@fnb.co.za;
 %LET AGENT_OUT = &OUT_PATH/Agents;
 
-/* Make sure the per-agent output folder exists */
+/* Make sure the per-agent output folder exists - and PROVE it, rather
+   than assuming dlcreatedir silently worked */
 options dlcreatedir;
 libname _mkdir "&AGENT_OUT";
+%IF &SYSLIBRC ne 0 %THEN
+    %PUT WARNING: Could not create/assign &AGENT_OUT - check that &OUT_PATH exists and is writable. All agent file writes below will fail if this folder is missing.;
+%ELSE
+    %PUT NOTE: &AGENT_OUT confirmed - libref _mkdir assigned successfully.;
 libname _mkdir clear;
 
 /*=====================================================================
@@ -216,6 +221,35 @@ PROC SQL NOPRINT;
     FROM AgentEarn_now;
 QUIT;
 %LET AgentAttachList = (&AgentAttachList);
+
+/* --- VERIFY: did the files actually get written? Log every path and
+   flag any that are missing, instead of silently attaching a broken
+   list. If ANY are missing, that's very likely why the agent email
+   fails while the attachment-free TL/manager emails go through. --- */
+PROC SQL NOPRINT;
+    SELECT DISTINCT Agent, CATS("&AGENT_OUT", '/Agent_OBR_', Agent, '_', "&RPT_LABEL", '.xlsx')
+    INTO :chk_agent_1 - :chk_agent_999, :chk_path_1 - :chk_path_999
+    FROM AgentEarn_now;
+    SELECT COUNT(DISTINCT Agent) INTO :chk_n FROM AgentEarn_now;
+QUIT;
+
+%LET n_missing = 0;
+%MACRO verify_agent_files;
+    %DO i = 1 %TO &chk_n;
+        %IF %SYSFUNC(FILEEXIST(&&chk_path_&i)) = 0 %THEN %DO;
+            %PUT WARNING: Missing agent file for &&chk_agent_&i : &&chk_path_&i;
+            %LET n_missing = %EVAL(&n_missing + 1);
+        %END;
+        %ELSE %PUT NOTE: OK - &&chk_agent_&i : &&chk_path_&i;
+    %END;
+    %IF &n_missing > 0 %THEN
+        %PUT WARNING: &n_missing of &chk_n agent file(s) missing - the agent email attach step will likely fail or attach an incomplete set.;
+    %ELSE
+        %PUT NOTE: All &chk_n agent files confirmed on disk before attaching.;
+%MEND;
+%verify_agent_files;
+
+%PUT NOTE: AgentAttachList = &AgentAttachList;
 
 
 /*=====================================================================
