@@ -347,11 +347,14 @@ QUIT;
 
 /*--- 3b. TL EMAIL - TL coaching pack attached ---*/
 %MACRO email_tl;
+    /* TEMP: attach= stripped out to isolate whether attach + HTML is the
+       problem. Once bare HTML confirms sending, uncomment the attach=
+       line below to bring the pack back. */
     filename myemail email
         from         = "Morris.Nkomo@fnb.co.za"
         to           = "Morris.Nkomo@fnb.co.za"
         subject      = "TEST - TL Coaching Pack - %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.))"
-        attach       = "&OUT_PATH/TL_Coaching_Pack_&RPT_LABEL..xlsx"
+        /* attach       = "&OUT_PATH/TL_Coaching_Pack_&RPT_LABEL..xlsx" */
         content_type = "text/html";
 
     data _null_;
@@ -381,11 +384,14 @@ QUIT;
 
 /*--- 3c. MANAGER EMAIL - manager overview pack attached ---*/
 %MACRO email_manager;
+    /* TEMP: attach= stripped out to isolate whether attach + HTML is the
+       problem. Once bare HTML confirms sending, uncomment the attach=
+       line below to bring the pack back. */
     filename myemail email
         from         = "Morris.Nkomo@fnb.co.za"
         to           = "Morris.Nkomo@fnb.co.za"
         subject      = "TEST - Manager Overview Pack - %SYSFUNC(PUTN(&RPT_MONTH,MONYY7.))"
-        attach       = "&OUT_PATH/Manager_Overview_Pack_&RPT_LABEL..xlsx"
+        /* attach       = "&OUT_PATH/Manager_Overview_Pack_&RPT_LABEL..xlsx" */
         content_type = "text/html";
 
     data _null_;
