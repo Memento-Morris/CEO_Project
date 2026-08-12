@@ -1,0 +1,8 @@
+{
+  "bundle": "t005_build_campaign_filter_macro",
+  "source_file": "2",
+  "source_blob_sha": "e2a354b137daa98cf030991de809b1075dd09d20",
+  "source_commit": "fec999b3059cfb14c990dde44a840b910172f797",
+  "tier": "real_data",
+  "notes": "Section 6: %build_campaign_filter dynamic OR-filter over dictionary.tables. Macro body unchanged; library scanned is WORK (seeded) instead of production PASS6."
+}

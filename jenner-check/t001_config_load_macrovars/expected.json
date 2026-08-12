@@ -1,0 +1,20 @@
+{
+  "_captured_at": "2026-06-11T22:11:32Z",
+  "_captured_run_id": "r_019eb8b4b9347c62ba24480688b74561",
+  "status": "ok",
+  "exit_code": 0,
+  "log_contains": [
+    "Campaign_Config_Raw imported with 6 rows",
+    "4 active product codes loaded from config",
+    "3 distinct campaign codes found",
+    "Macro variable PRODUCT_LIST = 'FNR001','FNR002','LIF010','MOT050'"
+  ],
+  "log_does_not_contain": [
+    "ERROR:",
+    "[JENNER-ERROR"
+  ],
+  "diagnostics": {
+    "parse_warnings": [],
+    "runtime_warnings": []
+  }
+}

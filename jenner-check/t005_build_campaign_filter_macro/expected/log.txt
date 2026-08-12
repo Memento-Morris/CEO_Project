@@ -1,0 +1,56 @@
+Jenner 0.1.0 (Unlicensed - limited to 100 observations)
+Get a license at https://jenneranalytics.com/license
+
+NOTE: Option OBS changed to 100.
+NOTE: DATA work.APN_FUNERAL_20260101_0800
+
+
+NOTE: Wrote work.APN_FUNERAL_20260101_0800 (1 rows, 1 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: DATA work.APN_FUNERAL_20260102_0900
+
+
+NOTE: Wrote work.APN_FUNERAL_20260102_0900 (1 rows, 1 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: DATA work.APN_LIFE_20260103_1000
+
+
+NOTE: Wrote work.APN_LIFE_20260103_1000 (1 rows, 1 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: DATA work.SOME_OTHER_TABLE
+
+
+NOTE: Wrote work.SOME_OTHER_TABLE (1 rows, 1 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+MPRINT(BUILD_CAMPAIGN_FILTER):   proc sql;
+MPRINT(BUILD_CAMPAIGN_FILTER):   create table campaign_tables as
+MPRINT(BUILD_CAMPAIGN_FILTER):   select *
+MPRINT(BUILD_CAMPAIGN_FILTER):   from dictionary.tables
+MPRINT(BUILD_CAMPAIGN_FILTER):   where libname = "WORK"
+MPRINT(BUILD_CAMPAIGN_FILTER):   and (
+MPRINT(BUILD_CAMPAIGN_FILTER):   memname like "APN_FUNERAL%"
+MPRINT(BUILD_CAMPAIGN_FILTER):   or
+MPRINT(BUILD_CAMPAIGN_FILTER):   memname like "APN_LIFE%"
+MPRINT(BUILD_CAMPAIGN_FILTER):   );
+MPRINT(BUILD_CAMPAIGN_FILTER):   quit;
+NOTE: PROC SQL 
+
+NOTE: Table campaign_tables created.
+NOTE: PROC SQL statement used.
+NOTE: PROC SQL 
+
+NOTE: Macro variable FOUND = 3
+NOTE: PROC SQL statement used.
+Campaign tables discovered: 3
+NOTE: Option TITLE changed to Tables matched by %build_campaign_filter.
+NOTE: PROC SQL 
+
+NOTE: PROC SQL statement used.

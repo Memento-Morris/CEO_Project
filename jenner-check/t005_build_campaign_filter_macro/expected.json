@@ -1,0 +1,18 @@
+{
+  "_captured_at": "2026-06-11T22:11:32Z",
+  "_captured_run_id": "r_019eb8b4c99a7b13a852d809656be2f0",
+  "status": "ok",
+  "exit_code": 0,
+  "log_contains": [
+    "Campaign tables discovered: 3",
+    "PROC SQL statement used"
+  ],
+  "log_does_not_contain": [
+    "ERROR:",
+    "[JENNER-ERROR"
+  ],
+  "diagnostics": {
+    "parse_warnings": [],
+    "runtime_warnings": []
+  }
+}

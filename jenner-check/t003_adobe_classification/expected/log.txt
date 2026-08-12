@@ -1,0 +1,46 @@
+Jenner 0.1.0 (Unlicensed - limited to 100 observations)
+Get a license at https://jenneranalytics.com/license
+
+NOTE: Option OBS changed to 100.
+NOTE: DATA adobe_to_clients_final
+
+NOTE: Processing inline DATALINES (6 lines)
+
+NOTE: Read 6 rows from DATALINES.
+NOTE: Wrote adobe_to_clients_final (6 rows, 6 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: DATA adobe_to_clients_step2
+
+
+NOTE: Read 6 rows from adobe_to_clients_final.
+NOTE: Wrote adobe_to_clients_step2 (6 rows, 9 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: PROC SQL 
+
+NOTE: Table adobe_delivery_test created.
+NOTE: PROC SQL statement used.
+NOTE: PROC SQL 
+
+NOTE: Table adobe_final_new created.
+NOTE: PROC SQL statement used.
+NOTE: DATA adobe_final_table_clients
+
+
+NOTE: Read 6 rows from adobe_final_new.
+NOTE: Wrote adobe_final_table_clients (6 rows, 9 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: PROC SQL 
+
+NOTE: Macro variable FINAL_ROWS = 6
+NOTE: PROC SQL statement used.
+Adobe final table rows: 6
+NOTE: Option TITLE changed to Adobe / Client classification result.
+NOTE: PROC PRINT data=adobe_final_table_clients
+
+NOTE: PROC PRINT completed: 6 observations printed, 9 variables

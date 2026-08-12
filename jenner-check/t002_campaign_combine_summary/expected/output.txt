@@ -1,0 +1,7 @@
+                            DEBUG 2 - CAMPAIGNS_TO_ADOBE: Rows by Campaign and Product Code                             
+
+Campaign_Name  Product_Code  Row_Count  Passed  Dropped  First_Batch  Last_Batch
+-------------  ------------  ---------  ------  -------  -----------  ----------
+  APN_FUNERAL        FNR001          3       0        1    01JAN2026   01JAN2026
+  APN_FUNERAL        FNR002          1       0        0    02JAN2026   02JAN2026
+     APN_LIFE        LIF010          3       0        2    03JAN2026   04JAN2026

@@ -1,0 +1,7 @@
+                                        Tables matched by %build_campaign_filter                                        
+
+libname                    memname
+-------  -------------------------
+   WORK  APN_FUNERAL_20260101_0800
+   WORK  APN_FUNERAL_20260102_0900
+   WORK     APN_LIFE_20260103_1000

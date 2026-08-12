@@ -1,0 +1,45 @@
+Jenner 0.1.0 (Unlicensed - limited to 100 observations)
+Get a license at https://jenneranalytics.com/license
+
+NOTE: Option OBS changed to 100.
+NOTE: DATA _tabpass_1
+
+NOTE: Processing inline DATALINES (4 lines)
+
+NOTE: Read 4 rows from DATALINES.
+NOTE: Wrote _tabpass_1 (4 rows, 8 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: DATA _tabdrop_1
+
+NOTE: Processing inline DATALINES (3 lines)
+
+NOTE: Read 3 rows from DATALINES.
+NOTE: Wrote _tabdrop_1 (3 rows, 8 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: DATA CAMPAIGNS_TO_ADOBE
+
+
+NOTE: Read 4 rows from _tabpass_1.
+NOTE: Read 7 rows from _tabdrop_1.
+NOTE: Wrote CAMPAIGNS_TO_ADOBE (7 rows, 8 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: PROC SQL 
+
+NOTE: Macro variable CAMP_ROWS = 7
+NOTE: PROC SQL statement used.
+CAMPAIGNS_TO_ADOBE rows: 7
+NOTE: Option TITLE changed to DEBUG 2 - CAMPAIGNS_TO_ADOBE: Rows by Campaign and Product Code.
+NOTE: PROC SQL 
+
+NOTE: PROC SQL statement used.
+NOTE: PROC SQL 
+
+NOTE: Macro variable MIN_DATE = 01JAN2026
+NOTE: PROC SQL statement used.
+Min date: 01JAN2026

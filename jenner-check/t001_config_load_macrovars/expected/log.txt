@@ -1,0 +1,53 @@
+Jenner 0.1.0 (Unlicensed - limited to 100 observations)
+Get a license at https://jenneranalytics.com/license
+
+TAG:JobName1=STI_CA_D_APNS_DATA_REBUILD
+TAG:JobName2=Daily
+TAG:JobCategory=Campaigns
+NOTE: Option OBS changed to 100.
+NOTE: DATA Campaign_Config_Raw
+
+NOTE: Processing inline DATALINES (6 lines)
+
+NOTE: Read 6 rows from DATALINES.
+NOTE: Wrote Campaign_Config_Raw (6 rows, 7 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: PROC SQL 
+
+NOTE: Macro variable CONFIG_RAW_COUNT = 6
+NOTE: PROC SQL statement used.
+SYMBOLGEN:  Macro variable CONFIG_RAW_COUNT resolves to 6
+NOTE: Campaign_Config_Raw imported with 6 rows. Proceeding.
+NOTE: DATA Campaign_Config
+
+
+NOTE: Read 6 rows from Campaign_Config_Raw.
+NOTE: Wrote Campaign_Config (4 rows, 9 columns).
+NOTE: DATA elapsed:
+  wall  0.00 seconds
+  cpu   0.00 seconds
+NOTE: PROC SQL 
+
+NOTE: Macro variable CONFIG_COUNT = 4
+NOTE: PROC SQL statement used.
+SYMBOLGEN:  Macro variable CONFIG_COUNT resolves to 4
+SYMBOLGEN:  Macro variable CONFIG_COUNT resolves to 4
+NOTE: 4 active product codes loaded from config.
+NOTE: Option TITLE changed to CONFIG - Active Campaigns Loaded from Excel.
+NOTE: PROC PRINT data=Campaign_Config
+
+NOTE: PROC PRINT completed: 4 observations printed, 9 variables
+NOTE: PROC SQL 
+
+NOTE: Macro variable CAMP_COUNT = 3
+NOTE: Macro variable CAMP_3 = APN_MOTOR
+NOTE: Macro variable CAMP_2 = APN_LIFE
+NOTE: Macro variable CAMP_1 = APN_FUNERAL
+NOTE: Macro variable PRODUCT_LIST = 'FNR001','FNR002','LIF010','MOT050'
+NOTE: PROC SQL statement used.
+SYMBOLGEN:  Macro variable CAMP_COUNT resolves to 3
+SYMBOLGEN:  Macro variable PRODUCT_LIST resolves to 'FNR001','FNR002','LIF010','MOT050'
+NOTE: 3 distinct campaign codes found.
+NOTE: Product list: 'FNR001','FNR002','LIF010','MOT050'
